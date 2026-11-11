@@ -12,6 +12,7 @@ import (
 	"rex-tg/internal/daemon"
 	"rex-tg/internal/rex/rextest"
 	"rex-tg/internal/store"
+	"rex-tg/internal/telegram"
 	"rex-tg/internal/telegram/tgtest"
 )
 
@@ -345,11 +346,23 @@ func TestDoctor(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// The command menu: an older list for all private chats hides the
+	// default list until the daemon sets one for the owner's chat.
+	st, _ = store.Open(filepath.Join(te.stateDir(), "rex-tg.db"))
+	_ = st.Set(ctx, "owner_chat_id", "42")
+	st.Close()
+	srv.SetCommandsFor(telegram.BotCommandScope{Type: "all_private_chats"}, []telegram.BotCommand{{Command: "sessions", Description: "old"}})
+	te.run("doctor")
+	if !strings.Contains(te.stdout.String(), "! command menu shows 1 other commands (list for all private chats: /sessions)") {
+		t.Fatalf("menu line missing:\n%s", te.stdout)
+	}
+	srv.SetCommandsFor(telegram.BotCommandScope{Type: "chat", ChatID: 42}, daemon.BotCommands())
+
 	if code := te.run("doctor"); code != 0 {
 		t.Fatalf("exit %d\n%s", code, te.stdout)
 	}
 	out := te.stdout.String()
-	for _, w := range []string{"✓ Rex CLI works", "✓ bot token", "Threaded Mode is on", "✓ owner is paired", "✓ Claude hooks installed", "✓ Codex hooks installed", "✓ pi extension is current", "✓ launchd agent local.rex-tg is loaded", "✓ database opens", "mode 0700", "! no daemon is running"} {
+	for _, w := range []string{"✓ command menu has the", "✓ Rex CLI works", "✓ bot token", "Threaded Mode is on", "✓ owner is paired", "✓ Claude hooks installed", "✓ Codex hooks installed", "✓ pi extension is current", "✓ launchd agent local.rex-tg is loaded", "✓ database opens", "mode 0700", "! no daemon is running"} {
 		if !strings.Contains(out, w) {
 			t.Errorf("missing %q in\n%s", w, out)
 		}

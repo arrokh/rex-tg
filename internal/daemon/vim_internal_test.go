@@ -6,7 +6,7 @@ import (
 )
 
 // The pi-vim screen below is shaped like a real capture of a pi pane: the
-// input box border carries the mode, and status lines follow it.
+// input box's bottom border carries the mode, and status lines follow it.
 const piVimScreen = ` Operation aborted                                                     ┃
 
 ────────────────────────────────────────────────────────────────────────
@@ -18,27 +18,30 @@ herdr 0.9.5`
 
 func piVim(label string) string { return strings.Replace(piVimScreen, "%s", label, 1) }
 
-func TestPiVimMode(t *testing.T) {
+func TestPiVimState(t *testing.T) {
 	cases := []struct {
 		name   string
 		screen string
-		want   vimMode
+		want   vimState
 	}{
-		{"pi-vim normal", piVim("NORMAL"), vimNormal},
-		{"pi-vim insert", piVim("INSERT"), vimInsert},
-		{"pi-vim pending command", piVim("NORMAL 3d_"), vimBusy},
-		{"pi-vim ex", piVim("EX :w"), vimBusy},
-		{"pi-vim visual", piVim("VISUAL"), vimVisual},
-		{"pi-vim visual line", piVim("V-LINE"), vimVisual},
-		{"no vim editor", "╭─────╮\n│ > hello │\n╰─────╯\n  ? for shortcuts\n", vimNone},
-		{"a Claude Code label is not read", "╭─────╮\n│ >   │\n╰─────╯\n  -- INSERT --\n", vimNone},
-		{"the word in output is not a label", "The NORMAL mode is described here.\n> \n", vimNone},
-		{"a border without a label", "────────────────\n> \n", vimNone},
+		{"normal", piVim("NORMAL "), vimState{vimNormal, "NORMAL"}},
+		{"insert", piVim("INSERT "), vimState{vimInsert, "INSERT"}},
+		{"pending command", piVim("NORMAL 3d_ "), vimState{vimBusy, "NORMAL 3d_"}},
+		{"pending replace", piVim("NORMAL r_ "), vimState{vimBusy, "NORMAL r_"}},
+		{"ex line", piVim("EX w_ "), vimState{vimBusy, "EX w_"}},
+		{"visual", piVim("VISUAL "), vimState{vimVisual, "VISUAL"}},
+		{"visual with a count", piVim("VISUAL 3_ "), vimState{vimVisual, "VISUAL 3_"}},
+		{"visual line", piVim("V-LINE "), vimState{vimVisual, "V-LINE"}},
+		{"a label cut to fit", piVim("NORMAL …d2w_"), vimState{vimBusy, "NORMAL …d2w_"}},
+		{"no vim editor", "╭─────╮\n│ > hello │\n╰─────╯\n  ? for shortcuts\n", vimState{}},
+		{"a Claude Code label is not read", "╭─────╮\n│ >   │\n╰─────╯\n  -- INSERT --\n", vimState{}},
+		{"the word in output is not a label", "The NORMAL mode is described here.\n> \n", vimState{}},
+		{"a border without a label", "────────────────\n> \n", vimState{}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			if got := piVimMode(c.screen); got != c.want {
-				t.Fatalf("piVimMode = %d, want %d", got, c.want)
+			if got := piVimState(c.screen); got != c.want {
+				t.Fatalf("piVimState = %+v, want %+v", got, c.want)
 			}
 		})
 	}
@@ -46,28 +49,65 @@ func TestPiVimMode(t *testing.T) {
 
 func TestVimLabelFarUpIsIgnored(t *testing.T) {
 	screen := piVim("NORMAL") + strings.Repeat("\nlater output", vimLines)
-	if got := piVimMode(screen); got != vimNone {
-		t.Fatalf("piVimMode = %d, want vimNone for a label above the last %d lines", got, vimLines)
+	if got := piVimState(screen); got != (vimState{}) {
+		t.Fatalf("piVimState = %+v, want none for a label above the last %d lines", got, vimLines)
 	}
 }
 
-func TestEnterInsertKeys(t *testing.T) {
+// Each mode has one next key, and an Escape is never chosen in plain NORMAL
+// mode, where it would reach pi and stop the agent.
+func TestNextVimKey(t *testing.T) {
 	cases := []struct {
-		mode vimMode
-		keys string
-		ok   bool
+		mode, want vimMode
+		key        string
 	}{
-		{vimNone, "", true},
-		{vimInsert, "", true},
-		{vimNormal, "i", true},
-		{vimVisual, "escape i", true},
-		{vimBusy, "", false},
+		{vimNone, vimInsert, ""},
+		{vimInsert, vimInsert, ""},
+		{vimNormal, vimInsert, "i"},
+		{vimVisual, vimInsert, "escape"},
+		{vimBusy, vimInsert, "escape"},
+		{vimNone, vimNormal, ""},
+		{vimNormal, vimNormal, ""},
+		{vimInsert, vimNormal, "escape"},
+		{vimVisual, vimNormal, "escape"},
+		{vimBusy, vimNormal, "escape"},
 	}
 	for _, c := range cases {
-		keys, ok := enterInsertKeys(c.mode)
-		if strings.Join(keys, " ") != c.keys || ok != c.ok {
-			t.Errorf("enterInsertKeys(%d) = %q, %v; want %q, %v", c.mode, keys, ok, c.keys, c.ok)
+		if got := nextVimKey(c.mode, c.want); got != c.key {
+			t.Errorf("nextVimKey(%d, %d) = %q, want %q", c.mode, c.want, got, c.key)
 		}
+	}
+}
+
+func TestTopicName(t *testing.T) {
+	const title = "[resume.md][fix] Update the likely follow ups in the remote people study plan"
+	cases := []struct {
+		name, pane, cwd, title, want string
+	}{
+		{"the pane's own name first", "rhasia-scret migrate api to go", "/w/infra", title, "rhasia-scret migrate api to go"},
+		{"a default pane name is skipped", "shell", "/w/resume.md", title, "[resume.md][fix] Update the…"},
+		{"then the folder", "shell", "/w/resume.md", "", "resume.md"},
+		{"then the runtime", "", "", "", "pi"},
+		{"spaces are folded", "  my   pane ", "", "", "my pane"},
+		{"a long pane name is cut", "a very long pane name that keeps going and going", "", "", "a very long pane name that…"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := topicName(c.pane, "pi", c.cwd, c.title)
+			if got != c.want {
+				t.Fatalf("topicName = %q, want %q", got, c.want)
+			}
+			if n := len([]rune(got)); n > maxTopicName {
+				t.Fatalf("topicName has %d characters, more than %d", n, maxTopicName)
+			}
+		})
+	}
+}
+
+func TestShortNameCutsAWordlessName(t *testing.T) {
+	s := strings.Repeat("x", 40)
+	if got := shortName(s, 10); got != strings.Repeat("x", 9)+"…" {
+		t.Fatalf("shortName = %q", got)
 	}
 }
 

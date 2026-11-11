@@ -8,13 +8,16 @@ import (
 	"os"
 	"os/exec"
 	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 
+	"rex-tg/internal/daemon"
 	"rex-tg/internal/install"
 	"rex-tg/internal/keychain"
 	"rex-tg/internal/rex"
 	"rex-tg/internal/store"
+	"rex-tg/internal/telegram"
 )
 
 type doctorOut struct {
@@ -53,6 +56,7 @@ func doctorCmd(ctx context.Context, args []string, env Env) int {
 	}
 
 	// Token, getMe, topics.
+	var tg *telegram.Client
 	token, err := env.keychain().Get(ctx, tokenService, tokenAccount)
 	switch {
 	case errors.Is(err, keychain.ErrNotFound):
@@ -69,6 +73,7 @@ func doctorCmd(ctx context.Context, args []string, env Env) int {
 			d.bad("@%s: Threaded Mode is off (BotFather > your bot > Bot Settings > Threaded Mode)", me.Username)
 		default:
 			d.ok("@%s answers, Threaded Mode is on", me.Username)
+			tg = env.telegram(cfg, token)
 		}
 	}
 
@@ -83,6 +88,11 @@ func doctorCmd(ctx context.Context, args []string, env Env) int {
 			d.ok("owner is paired")
 		} else {
 			d.bad("no owner paired (run `rex-tg pair`)")
+		}
+		if v, ok, err := st.Get(ctx, "owner_chat_id"); err == nil && ok && tg != nil {
+			if chat, err := strconv.ParseInt(v, 10, 64); err == nil && chat != 0 {
+				menuLine(ctx, d, tg, chat)
+			}
 		}
 		unknownTypesLines(ctx, d, st)
 		_ = st.Close()
@@ -215,4 +225,53 @@ func unknownTypesLines(ctx context.Context, d *doctorOut, st *store.Store) {
 	if !found {
 		d.ok("transcript formats: no unknown line types")
 	}
+}
+
+// menuLine reports the command menu that the owner sees. Telegram shows the
+// first list that is set: the chat's own, then all private chats, then the
+// default. Lists for one language are not checked.
+func menuLine(ctx context.Context, d *doctorOut, tg *telegram.Client, owner int64) {
+	want := daemon.BotCommands()
+	scopes := []struct {
+		name  string
+		scope *telegram.BotCommandScope
+	}{
+		{"your chat", &telegram.BotCommandScope{Type: "chat", ChatID: owner}},
+		{"all private chats", &telegram.BotCommandScope{Type: "all_private_chats"}},
+		{"the default scope", nil},
+	}
+	for _, sc := range scopes {
+		got, err := tg.GetMyCommands(ctx, sc.scope)
+		if err != nil {
+			d.warn("command menu: getMyCommands failed: %v", err)
+			return
+		}
+		if len(got) == 0 {
+			continue
+		}
+		if sameCommands(got, want) {
+			d.ok("command menu has the %d rex-tg commands (list for %s)", len(got), sc.name)
+		} else {
+			names := make([]string, 0, len(got))
+			for _, c := range got {
+				names = append(names, "/"+c.Command)
+			}
+			d.warn("command menu shows %d other commands (list for %s: %s); restart the daemon to replace it",
+				len(got), sc.name, strings.Join(names, " "))
+		}
+		return
+	}
+	d.warn("command menu is empty; restart the daemon to set it")
+}
+
+func sameCommands(a, b []telegram.BotCommand) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i].Command != b[i].Command {
+			return false
+		}
+	}
+	return true
 }

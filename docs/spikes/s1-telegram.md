@@ -27,14 +27,22 @@ Setup: a real bot made with @BotFather, Threaded Mode turned on, rex-tg installe
 - `/agents` in a topic listed the three running pi agents. **Open** created the topic with `createForumTopic`, and the intro card and the last three answers arrived in it (step 3, first part).
 - Once, `createForumTopic` did not answer in time during a network burst. The second tap worked. Before the fix, the alert said "Is Threaded Mode on for the bot?", which was wrong for a timeout, and the answer to the button press may already have been too old to show.
 - Change made: when Telegram's answer is unknown, the chat gets "Telegram did not answer in time. If no new topic appeared, tap Open again." Other errors keep the Threaded Mode hint (tests `TestTopicCreateWithoutAnAnswerSaysToTapAgain`, `TestTopicCreateRefusedMentionsThreadedMode`).
-- Telegram turned the folder name `resume.md` into a web link. Change made: folder names are shown in `<code>`, and session titles get a zero-width space after such a dot (`noAutoLink` in `internal/daemon/vim.go`).
+- Telegram turned the folder name `resume.md` into a web link. Change made: folder names are shown in `<code>`, and session titles get a zero-width space after such a dot (`noAutoLink` in `internal/daemon/names.go`).
 
 ### Typing into a vim-style editor
 
 - A message sent in the topic got 👀 (delivered) but never reached pi: no `user` line appeared in the transcript. The pane's input box showed `──── NORMAL` at the right end of its top border. The pi-vim package (a modal editor for pi) was in NORMAL mode, and it dropped the paste.
-- Change made: before the paste, rex-tg reads the mode label from the screen and presses `i` (or `escape i` in VISUAL mode). A pending vim command is refused with a reason. `/interrupt` presses one more `escape` in INSERT mode, because pi-vim takes the first one to leave INSERT (design section 9.5; tests `TestVimNormalModeEntersInsertBeforeThePaste`, `TestVimPendingCommandIsRefused`, `TestInterruptInVimInsertModePressesEscapeTwice`).
+- Change made: before the paste, rex-tg reads the mode label from the screen and presses one key at a time until pi-vim shows INSERT (design section 9.5; tests `TestPiVimReachesInsertBeforeThePaste`, `TestPiVimThatDoesNotReactGetsNoMoreKeys`, `TestInterruptInPiVimLeavesInsertModeFirst`).
 - The message that was dropped stays `delivered`. rex-tg does not type it again (at most once).
 - Claude Code's `/vim` mode was checked in its source (version 2.1.322), not live: a paste goes in whatever the mode, so Claude Code gets no extra keys.
+
+### Deleted topics, names, and the menu
+
+- The user deleted a topic in Telegram, and later tapped the agent's `↗` button in `/agents`. Telegram said "Message doesn't exist": the button was a link to the deleted topic, and Telegram does not tell the bot about a deleted topic.
+- Change made: the button now reports the tap. rex-tg sets the topic's name with `editForumTopic`, which fails with "message thread not found" for a deleted topic, and then makes a new topic for the same session (test `TestDeletedTopicIsMadeAgainFromAgents`). The exact error text from Telegram in a private chat is still to be seen live; `TOPIC_ID_INVALID` and `TOPIC_DELETED` are handled too.
+- Topic names were too long (`pi · resume.md · [resume.md][fix] Update the likely follow ups…`). Change made: a short name from the Rex pane's own name or the session name (design section 7).
+- The menu did not show the rex-tg commands. `rex-tg doctor` found a list for the owner's chat, left by another program: `/commands /sessions /sync /upgrade`. Telegram shows that list before the default one. Change made: rex-tg also registers its menu for the owner's chat.
+- The pi-vim fix now also cancels a pending vim command or an EX line with Escape, instead of refusing the message.
 
 ### Network
 

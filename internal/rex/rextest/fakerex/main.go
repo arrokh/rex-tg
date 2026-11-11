@@ -22,11 +22,21 @@ type rule struct {
 }
 
 type scenario struct {
-	Rules          []rule   `json:"rules"`
-	Events         []string `json:"events"`
-	EventsExit     bool     `json:"events_exit"`
-	EventsExitCode int      `json:"events_exit_code"`
-	EventsStderr   string   `json:"events_stderr"`
+	Rules          []rule         `json:"rules"`
+	Events         []string       `json:"events"`
+	EventsExit     bool           `json:"events_exit"`
+	EventsExitCode int            `json:"events_exit_code"`
+	EventsStderr   string         `json:"events_stderr"`
+	Machine        *screenMachine `json:"machine"`
+}
+
+// screenMachine makes `capture` print a screen that changes when keys are
+// pressed: Moves[screen][key] names the next screen. The current screen's
+// name is kept in the file screen.state next to the scenario.
+type screenMachine struct {
+	Screens map[string]string            `json:"screens"`
+	Start   string                       `json:"start"`
+	Moves   map[string]map[string]string `json:"moves"`
 }
 
 type call struct {
@@ -59,6 +69,23 @@ func main() {
 		runEvents(dir, sc)
 		return
 	}
+	if m := sc.Machine; m != nil && len(stripped) > 0 {
+		switch stripped[0] {
+		case "capture":
+			fmt.Fprint(os.Stdout, m.Screens[currentScreen(dir, m)])
+			os.Exit(0)
+		case "send-key":
+			if len(stripped) > 5 {
+				cur := currentScreen(dir, m)
+				for _, k := range stripped[5:] {
+					if next, ok := m.Moves[cur][k]; ok {
+						cur = next
+					}
+				}
+				_ = writeAtomic(filepath.Join(dir, "screen.state"), []byte(cur))
+			}
+		}
+	}
 
 	best := -1
 	bestLen := -1
@@ -81,6 +108,21 @@ func main() {
 		fmt.Fprint(os.Stderr, string(stdin))
 	}
 	os.Exit(r.Exit)
+}
+
+func currentScreen(dir string, m *screenMachine) string {
+	if b, err := os.ReadFile(filepath.Join(dir, "screen.state")); err == nil && len(b) > 0 {
+		return string(b)
+	}
+	return m.Start
+}
+
+func writeAtomic(path string, b []byte) error {
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, b, 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
 }
 
 func runEvents(dir string, sc scenario) {

@@ -479,12 +479,9 @@ func (e *env) hookPi(p *piLog, reason string) {
 
 // openTopic lists the agents, presses the open button, and returns the new
 // topic's thread ID. The pane must have a session already.
-func (e *env) openTopic() int64 {
+// agentsList sends /agents in the main chat and returns the new list.
+func (e *env) agentsList() tgtest.Message {
 	e.t.Helper()
-	e.waitFor("a resolved pane", func() bool {
-		p, ok, err := e.peek().PaneByBlock(context.Background(), "local", rexBlock)
-		return err == nil && ok && p.ConversationID != 0
-	})
 	before := len(e.botMessages(0))
 	e.say(0, "/agents")
 	var list tgtest.Message
@@ -496,6 +493,16 @@ func (e *env) openTopic() int64 {
 		}
 		return false
 	})
+	return list
+}
+
+func (e *env) openTopic() int64 {
+	e.t.Helper()
+	e.waitFor("a resolved pane", func() bool {
+		p, ok, err := e.peek().PaneByBlock(context.Background(), "local", rexBlock)
+		return err == nil && ok && p.ConversationID != 0
+	})
+	list := e.agentsList()
 	data := buttonData(list, "Open")
 	if data == "" {
 		e.t.Fatalf("no open button in the agents list: %+v", list.Markup)

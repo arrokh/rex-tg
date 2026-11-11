@@ -141,6 +141,14 @@ type BotCommand struct {
 	Description string `json:"description"`
 }
 
+// BotCommandScope says whose command menu a command list is for. Type is
+// "default", "all_private_chats", or "chat" (with ChatID). Telegram shows a
+// user the first list it finds: chat, then all_private_chats, then default.
+type BotCommandScope struct {
+	Type   string `json:"type"`
+	ChatID int64  `json:"chat_id,omitempty"`
+}
+
 // SendMessageParams are the arguments of SendMessage.
 // Link previews are always disabled.
 type SendMessageParams struct {

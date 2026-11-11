@@ -112,7 +112,8 @@ Doctor prints one line for each check. `✓` means the check passed. `!` is a wa
 
 ### Main chat
 
-- `/agents` lists the agents in Rex panes. Tap one to open its topic. If the session already has a topic, the button opens that topic.
+- `/agents` lists the agents in Rex panes. Tap one to open its topic. If the session already has a topic, you get a link to it. If you deleted that topic, a new one is made for the same session.
+- A topic is named after its Rex pane when you gave the pane a name, else after the agent's session name. The name follows changes of both.
 - `/topics` lists the topics and their states.
 - `/status` shows the health of the daemon.
 - `/pause` and `/unpause` stop and allow all typing into panes. Use `/pause` if you lose your phone. (optional)

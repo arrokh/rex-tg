@@ -180,11 +180,27 @@ func TestChatActionAndCallbackAndCommands(t *testing.T) {
 		t.Fatalf("params = %v", p)
 	}
 	cmds := []telegram.BotCommand{{Command: "status", Description: "Show status"}}
-	if err := c.SetMyCommands(ctx, cmds); err != nil {
+	if err := c.SetMyCommands(ctx, cmds, nil); err != nil {
 		t.Fatal(err)
 	}
 	if got := s.Commands(); len(got) != 1 || got[0] != cmds[0] {
 		t.Fatalf("commands = %v", got)
+	}
+	// A list for one chat is separate from the default list.
+	mine := &telegram.BotCommandScope{Type: "chat", ChatID: chat}
+	both := append(cmds, telegram.BotCommand{Command: "help", Description: "Help"})
+	if err := c.SetMyCommands(ctx, both, mine); err != nil {
+		t.Fatal(err)
+	}
+	if p := s.Calls("setMyCommands")[1].Params; fmt.Sprint(p["scope"]) != fmt.Sprintf("map[chat_id:%d type:chat]", chat) {
+		t.Fatalf("scope sent = %v", p["scope"])
+	}
+	got, err := c.GetMyCommands(ctx, mine)
+	if err != nil || len(got) != 2 {
+		t.Fatalf("chat commands = %v, %v", got, err)
+	}
+	if got, err := c.GetMyCommands(ctx, nil); err != nil || len(got) != 1 {
+		t.Fatalf("default commands = %v, %v", got, err)
 	}
 }
 
@@ -275,6 +291,8 @@ func TestClassify(t *testing.T) {
 		{"delete gone", api(400, "Bad Request: message to delete not found"), telegram.ClassDeleteTargetGone},
 		{"cannot delete", api(400, "Bad Request: message can't be deleted"), telegram.ClassDeleteTargetGone},
 		{"thread", api(400, "Bad Request: message thread not found"), telegram.ClassThreadNotFound},
+		{"topic id", api(400, "Bad Request: TOPIC_ID_INVALID"), telegram.ClassThreadNotFound},
+		{"topic same name", api(400, "Bad Request: TOPIC_NOT_MODIFIED"), telegram.ClassNotModified},
 		{"topic deleted", api(400, "Bad Request: TOPIC_DELETED"), telegram.ClassThreadNotFound},
 		{"thread not found", api(400, "Bad Request: thread not found"), telegram.ClassThreadNotFound},
 		{"blocked", api(403, "Forbidden: bot was blocked by the user"), telegram.ClassBlocked},

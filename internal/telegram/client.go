@@ -360,15 +360,30 @@ func (c *Client) AnswerCallbackQuery(ctx context.Context, id, text string, showA
 	return c.callJSON(ctx, "answerCallbackQuery", c.timeout, body, nil)
 }
 
-// SetMyCommands sets the bot's command list.
-func (c *Client) SetMyCommands(ctx context.Context, cmds []BotCommand) error {
+// SetMyCommands sets the bot's command list for a scope. A nil scope is the
+// default scope.
+func (c *Client) SetMyCommands(ctx context.Context, cmds []BotCommand, scope *BotCommandScope) error {
 	if cmds == nil {
 		cmds = []BotCommand{}
 	}
 	body := struct {
-		Commands []BotCommand `json:"commands"`
-	}{cmds}
+		Commands []BotCommand     `json:"commands"`
+		Scope    *BotCommandScope `json:"scope,omitempty"`
+	}{cmds, scope}
 	return c.callJSON(ctx, "setMyCommands", c.timeout, body, nil)
+}
+
+// GetMyCommands returns the bot's command list for a scope. A nil scope is
+// the default scope.
+func (c *Client) GetMyCommands(ctx context.Context, scope *BotCommandScope) ([]BotCommand, error) {
+	body := struct {
+		Scope *BotCommandScope `json:"scope,omitempty"`
+	}{scope}
+	var out []BotCommand
+	if err := c.callJSON(ctx, "getMyCommands", c.timeout, body, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // SendDocument uploads data as a document (multipart/form-data).

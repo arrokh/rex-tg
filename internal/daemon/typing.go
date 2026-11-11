@@ -363,34 +363,7 @@ var (
 	errStoppedAfter = errors.New("the text was pasted but Enter was not pressed")
 	errPaste        = errors.New("the paste failed")
 	errSubmit       = errors.New("pressing the submit key failed")
-	errVimBusy      = errors.New("the prompt editor is in the middle of a vim command")
 )
-
-// enterPiVimInsert puts the pi-vim editor in INSERT mode before a paste,
-// because pi-vim drops a paste in NORMAL mode. It reads the mode from the
-// screen and does not guess at a pending vim command. Without a readable
-// screen or a pi-vim label, it does nothing. Pressing the keys again after a
-// failure is safe: the next try reads the screen again.
-func (d *daemon) enterPiVimInsert(ctx context.Context, pane store.Pane) error {
-	screen, err := d.rx.Capture(ctx, pane.Session, pane.Block)
-	if err != nil {
-		return nil
-	}
-	keys, ok := enterInsertKeys(piVimMode(screen))
-	switch {
-	case !ok:
-		return errVimBusy
-	case len(keys) == 0:
-		return nil
-	}
-	if err := d.rx.SendKeys(ctx, pane.Session, pane.Block, keys...); err != nil {
-		return errRetryBefore
-	}
-	if !sleepCtx(ctx, vimModeSwitchWait) {
-		return ctx.Err()
-	}
-	return nil
-}
 
 // safeNow re-checks, right before a key goes out, that typing is not paused
 // and that the prepared agent process is still in front of the pane.
@@ -419,9 +392,16 @@ func (d *daemon) typeInto(pane store.Pane, text string, delay time.Duration, sub
 	case !front:
 		return errGoneBefore
 	}
+	// pi-vim drops a paste unless it is in INSERT mode. A pending vim command
+	// or an EX line is cancelled on the way there.
 	if piVim {
-		if err := d.enterPiVimInsert(ctx, pane); err != nil {
-			return err
+		switch err := d.settlePiVim(ctx, pane, vimInsert); {
+		case errors.Is(err, errVimStuck):
+			return errVimStuck
+		case ctx.Err() != nil:
+			return ctx.Err()
+		case err != nil:
+			return errRetryBefore // nothing was pasted; the next try reads the screen again
 		}
 	}
 	if err := d.rx.Paste(ctx, pane.Session, pane.Block, text); err != nil {
@@ -461,9 +441,16 @@ func (d *daemon) onTyped(e evTyped) {
 			d.refuse(th, e.in, inbound.ReasonAgentNotFront)
 		}
 		return
-	case errors.Is(e.err, errVimBusy):
-		if th, err := d.st.Thread(d.ctx, e.thread); err == nil {
-			d.refuse(th, e.in, reasonVimBusy)
+	case errors.Is(e.err, errVimStuck):
+		// Nothing was pasted. The message waits; the next try comes after a
+		// pause, and presses no key while the editor shows the same label.
+		if err := d.st.SetInboundState(d.ctx, e.in.UpdateID, store.InboundQueued, e.in.Reason, now); err != nil {
+			d.log.Warn("typing: state", "err", err)
+		}
+		d.nextPrep[e.thread] = now.Add(vimRetryWait)
+		if !d.vimNoticed[e.in.UpdateID] {
+			d.vimNoticed[e.in.UpdateID] = true
+			d.notice(e.thread, fmt.Sprintf("vim-stuck:%d", e.in.UpdateID), vimStuckNote)
 		}
 		return
 	}
@@ -476,6 +463,7 @@ func (d *daemon) onTyped(e evTyped) {
 		d.notice(e.thread, fmt.Sprintf("typing-unknown:%d", e.in.UpdateID), typingUnknownNotice)
 		return
 	}
+	delete(d.vimNoticed, e.in.UpdateID)
 	if err := d.st.SetInboundState(d.ctx, e.in.UpdateID, store.InboundDelivered, "", now); err != nil {
 		d.log.Warn("typing: state", "err", err)
 	}

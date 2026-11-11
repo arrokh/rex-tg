@@ -67,11 +67,21 @@ type rule struct {
 }
 
 type scenario struct {
-	Rules          []rule   `json:"rules"`
-	Events         []string `json:"events"`
-	EventsExit     bool     `json:"events_exit"`
-	EventsExitCode int      `json:"events_exit_code"`
-	EventsStderr   string   `json:"events_stderr"`
+	Rules          []rule         `json:"rules"`
+	Events         []string       `json:"events"`
+	EventsExit     bool           `json:"events_exit"`
+	EventsExitCode int            `json:"events_exit_code"`
+	EventsStderr   string         `json:"events_stderr"`
+	Machine        *screenMachine `json:"machine"`
+}
+
+// screenMachine makes `capture` print a screen that changes when keys are
+// pressed: Moves[screen][key] names the next screen. The current screen's
+// name is kept in the file screen.state next to the scenario.
+type screenMachine struct {
+	Screens map[string]string            `json:"screens"`
+	Start   string                       `json:"start"`
+	Moves   map[string]map[string]string `json:"moves"`
 }
 
 // Call is one recorded invocation of the fake.
@@ -125,6 +135,46 @@ func (f *Fake) save() {
 	if err := os.Rename(tmp, filepath.Join(f.dir, "scenario.json")); err != nil {
 		f.t.Fatal(err)
 	}
+}
+
+// SetScreenMachine makes `capture` print screens[start] until keys move it:
+// a `send-key` call applies moves[current screen][key] for each key, in order.
+// A key without a move leaves the screen as it is. It replaces any earlier
+// machine and starts again at start. Rules for `capture` are ignored while a
+// machine is set; `send-key` calls still need a rule for their answer.
+func (f *Fake) SetScreenMachine(start string, screens map[string]string, moves map[string]map[string]string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.sc.Machine = &screenMachine{Screens: screens, Start: start, Moves: moves}
+	_ = os.Remove(filepath.Join(f.dir, "screen.state"))
+	f.save()
+}
+
+// SetScreenState moves the screen machine to a screen, as if the program had
+// changed it without a key.
+func (f *Fake) SetScreenState(name string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	tmp := filepath.Join(f.dir, "screen.state.tmp")
+	if err := os.WriteFile(tmp, []byte(name), 0o600); err != nil {
+		f.t.Fatal(err)
+	}
+	if err := os.Rename(tmp, filepath.Join(f.dir, "screen.state")); err != nil {
+		f.t.Fatal(err)
+	}
+}
+
+// ScreenState returns the name of the screen machine's current screen.
+func (f *Fake) ScreenState() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if b, err := os.ReadFile(filepath.Join(f.dir, "screen.state")); err == nil && len(b) > 0 {
+		return string(b)
+	}
+	if f.sc.Machine != nil {
+		return f.sc.Machine.Start
+	}
+	return ""
 }
 
 func (f *Fake) add(r rule) {

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"rex-tg/internal/inbound"
+	"rex-tg/internal/sender"
 	"rex-tg/internal/store"
 	"rex-tg/internal/telegram"
 )
@@ -103,4 +104,13 @@ func (d *daemon) tryPair(m *telegram.Message) {
 	d.ownerUser, d.ownerChat = m.From.ID, m.Chat.ID
 	d.log.Info("paired", "owner", m.From.ID)
 	d.say(m.Chat.ID, m.MessageThreadID, "✅ Paired. Use /agents to list the agents in your Rex panes. /help lists the commands.", nil)
+	owner := m.Chat.ID
+	d.spawn(func() {
+		err := d.snd.Call(sender.PriorityEdit, func(ctx context.Context, tg *telegram.Client) error {
+			return tg.SetMyCommands(ctx, botCommands, &telegram.BotCommandScope{Type: "chat", ChatID: owner})
+		})
+		if err != nil && d.ctx.Err() == nil {
+			d.log.Warn("setMyCommands for the owner's chat", "err", err)
+		}
+	})
 }

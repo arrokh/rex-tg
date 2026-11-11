@@ -32,7 +32,9 @@ func (r *Registry) syncPane(ctx context.Context, rexSession, block, label string
 	if !exists && !isAgent {
 		return nil, nil
 	}
-	if !exists || !pane.GoneAt.IsZero() || pane.Session != rexSession {
+	// A pane's name can change in Rex at any time, and a pane that a hook
+	// reported first has no name yet. Topic names follow it.
+	if !exists || !pane.GoneAt.IsZero() || pane.Session != rexSession || (label != "" && label != pane.Label) {
 		if pane, err = r.st.UpsertPane(ctx, r.opt.Host, block, rexSession, label, now); err != nil {
 			return nil, fmt.Errorf("registry: upsert pane: %w", err)
 		}

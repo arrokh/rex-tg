@@ -103,6 +103,7 @@ type daemon struct {
 
 	paused    atomic.Bool
 	answering sync.Map // alert ids whose answer is being sent
+	vimStuck  sync.Map // pane id -> the pi-vim label that showed no reaction to a key
 	botUser   string   // set before the workers start
 	scanQueue atomic.Bool
 
@@ -121,10 +122,12 @@ type daemon struct {
 	nextPrep             map[int64]time.Time
 	delivering           map[int64]*delivery
 	waitNoticed          map[int64]bool
+	vimNoticed           map[int64]bool // inbound rows told that pi-vim did not react
 	alertBusy            map[int64]bool
 	opening              map[int64]bool // panes whose topic is being created
 	lastThread           int64
 	lastScan, lastHouse  time.Time
+	lastNames            time.Time // the last check of topic names, see syncNames
 	gen                  int
 	unknown              unknownCounts
 	fatal                error
@@ -152,6 +155,7 @@ func newDaemon(cfg config.Config, home string, log *slog.Logger, now func() time
 		nextPrep:    map[int64]time.Time{},
 		delivering:  map[int64]*delivery{},
 		waitNoticed: map[int64]bool{},
+		vimNoticed:  map[int64]bool{},
 		alertBusy:   map[int64]bool{},
 		opening:     map[int64]bool{},
 	}
@@ -307,6 +311,10 @@ func (d *daemon) tick() {
 		d.lastHouse = now
 		d.spawn(func() { d.housekeeping(now) })
 	}
+	if now.Sub(d.lastNames) >= nameSyncInterval {
+		d.lastNames = now
+		d.syncNames()
+	}
 }
 
 func (d *daemon) onSenderEvent(e sender.Event) {
@@ -368,6 +376,7 @@ func (d *daemon) closeThread(threadID int64) {
 			}
 			delete(d.actions, q.UpdateID)
 			delete(d.waitNoticed, q.UpdateID)
+			delete(d.vimNoticed, q.UpdateID)
 			delete(d.extra, q.UpdateID)
 		}
 	}

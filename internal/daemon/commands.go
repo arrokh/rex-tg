@@ -2,8 +2,8 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -101,14 +101,10 @@ func stateEmoji(state string) (string, string) {
 	return "⚪", "state unknown"
 }
 
-func folderOf(v registry.AgentView) string {
-	if v.Conversation != nil && v.Conversation.CWD != "" {
-		return filepath.Base(v.Conversation.CWD)
-	}
-	return v.Pane.Label
-}
-
-// renderAgents builds the /agents text and buttons (design section 8.7).
+// renderAgents builds the /agents text and buttons (design section 8.7). Each
+// button reports the tap to the daemon, also for an agent that has a topic:
+// Telegram does not report a topic that the user deleted, so openTopic checks
+// it first and makes a new one when it is gone.
 func (d *daemon) renderAgents(views []registry.AgentView) (string, *telegram.InlineKeyboardMarkup) {
 	var b strings.Builder
 	if len(views) == 0 {
@@ -116,51 +112,31 @@ func (d *daemon) renderAgents(views []registry.AgentView) (string, *telegram.Inl
 	} else {
 		fmt.Fprintf(&b, "<b>Active agents (%d)</b>", len(views))
 	}
-	var buttons []telegram.InlineKeyboardButton
+	var rows [][]telegram.InlineKeyboardButton
 	for _, v := range views {
-		emoji, label := stateEmoji(v.Pane.State)
-		folder := folderOf(v)
-		name := string(v.Runtime)
-		shown := esc(name) // the folder in <code>: Telegram links names such as "resume.md"
-		if folder != "" {
-			name += " · " + folder
-			shown += " · <code>" + esc(folder) + "</code>"
+		emoji, state := stateEmoji(v.Pane.State)
+		var cwd, title string
+		if v.Conversation != nil {
+			cwd, title = v.Conversation.CWD, v.Conversation.Title
 		}
 		switch {
 		case v.Conversation == nil:
-			fmt.Fprintf(&b, "\n%s %s · (waiting for session)", emoji, shown)
-		default:
-			guess := ""
-			if v.Resolution == store.SourceGuess {
-				guess = " (guess)"
-			}
-			fmt.Fprintf(&b, "\n%s %s · %s%s", emoji, shown, label, guess)
+			state = "waiting for session"
+		case v.Resolution == store.SourceGuess:
+			state += " (guess)"
 		}
-		var detail []string
-		if v.Conversation != nil && v.Conversation.Title != "" {
-			detail = append(detail, "\""+format.Truncate(v.Conversation.Title, 60)+"\"")
+		name := topicName(v.Pane.Label, v.Runtime, cwd, title)
+		fmt.Fprintf(&b, "\n%s <b>%s</b> · %s\n   %s", emoji, esc(noAutoLink(name)), state, agentHTML(v.Runtime, cwd))
+		if paneName(v.Pane.Label) != "" && title != "" {
+			fmt.Fprintf(&b, " · \"%s\"", esc(noAutoLink(format.Truncate(title, 50))))
 		}
-		if v.Pane.Label != "" {
-			detail = append(detail, "Rex: "+v.Pane.Label)
-		}
-		if len(detail) > 0 {
-			fmt.Fprintf(&b, "\n   %s", esc(noAutoLink(strings.Join(detail, "   "))))
-		}
-		btn := telegram.InlineKeyboardButton{Text: "Open " + name, CallbackData: fmt.Sprintf("o:%d", v.Pane.ID)}
+		text := "Open " + name
 		if v.Thread != nil && v.Thread.Status != store.ThreadClosed {
-			btn = telegram.InlineKeyboardButton{Text: "↗ " + name, URL: d.topicLink(v.Thread.MessageThreadID)}
+			text = "↗ " + name
 		}
-		buttons = append(buttons, btn)
+		rows = append(rows, []telegram.InlineKeyboardButton{{Text: text, CallbackData: fmt.Sprintf("o:%d", v.Pane.ID)}})
 	}
-	buttons = append(buttons, telegram.InlineKeyboardButton{Text: "↻ Refresh", CallbackData: "ag:r"})
-	var rows [][]telegram.InlineKeyboardButton
-	for i := 0; i < len(buttons); i += 2 {
-		end := i + 2
-		if end > len(buttons) {
-			end = len(buttons)
-		}
-		rows = append(rows, buttons[i:end])
-	}
+	rows = append(rows, []telegram.InlineKeyboardButton{{Text: "↻ Refresh", CallbackData: "ag:r"}})
 	return b.String(), &telegram.InlineKeyboardMarkup{InlineKeyboard: rows}
 }
 
@@ -229,7 +205,7 @@ func (d *daemon) topicsText() string {
 		if th.Muted {
 			mute = " 🔕"
 		}
-		fmt.Fprintf(&b, "\n%s %s · %s%s", emoji, esc(th.Name), th.Status, mute)
+		fmt.Fprintf(&b, "\n%s %s · %s%s", emoji, esc(noAutoLink(th.Name)), th.Status, mute)
 	}
 	if n == 0 {
 		return "No topics yet. Use /agents to open one."
@@ -413,8 +389,9 @@ func (d *daemon) screenCommand(th store.Thread, upd int64, args string) {
 }
 
 // keysCommand presses keys in the pane after the checks of design section 9.5.
-// With piVim (an /interrupt in a pi pane), one more Escape is pressed when
-// pi-vim is in INSERT or VISUAL mode, because it takes the first Escape.
+// With piVim (an /interrupt in a pi pane), pi-vim is first brought to plain
+// NORMAL mode, where an Escape reaches pi: in the other modes pi-vim keeps
+// the Escape for itself.
 func (d *daemon) keysCommand(th store.Thread, upd int64, keys []string, piVim bool) {
 	d.spawn(func() {
 		tag := fmt.Sprintf("%d:keys", upd)
@@ -428,8 +405,13 @@ func (d *daemon) keysCommand(th store.Thread, upd int64, keys []string, piVim bo
 			return
 		}
 		if piVim {
-			if screen, err := d.rx.Capture(d.ctx, pane.Session, pane.Block); err == nil {
-				keys = interruptKeys(piVimMode(screen), keys)
+			switch err := d.settlePiVim(d.ctx, pane, vimNormal); {
+			case errors.Is(err, errVimStuck):
+				d.replyTopic(th, tag, "⚠️ The pi editor did not react to Escape, so nothing more was pressed. Check with /screen.")
+				return
+			case err != nil:
+				d.replyTopic(th, tag, "Could not press the keys.")
+				return
 			}
 		}
 		if err := d.rx.SendKeys(d.ctx, pane.Session, pane.Block, keys...); err != nil {

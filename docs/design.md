@@ -341,9 +341,9 @@ Rules:
 - **Resume under a new session ID.** If an agent gives a resumed session a new ID, rex-tg cannot link it to the old one. The take-over rule still applies in the same pane, so the topic stays the same.
 - **Rex restart.** After one restart, the block IDs and the session ID stayed the same (spike S5). A new block ID is still possible, because only one restart was tested. A restored pane does not run its creation command again, so the agent must resume in that pane, for example through rexume. That resume was not tested (S5). The topic then follows the session. If the restored pane starts a new session instead, rex-tg has no history for that pane, so the session appears in `/agents` as a new agent.
 - **Agent exits.** The topic becomes `offline`, and rex-tg posts "🔴 agent stopped". Messages that you send there are refused with a reason.
-- **Deleted topic.** If you delete the topic in Telegram, the next send fails with "message thread not found", and the topic becomes `closed`.
+- **Deleted topic.** Telegram does not tell the bot that you deleted a topic. rex-tg finds out in two ways, and then the topic becomes `closed`: a send or a rename fails with "message thread not found", or you tap the agent in `/agents`. That button reports the tap to rex-tg instead of opening a link, and rex-tg first sets the topic's name with `editForumTopic` (Telegram answers `TOPIC_NOT_MODIFIED` when the name is the same). When the topic is gone and the pane and the session still exist, rex-tg makes a new topic for the session, with the intro card and the backfill (found live, spike S1).
 - **Unlink.** `/unlink` closes the topic in rex-tg. The topic stays in Telegram as history.
-- **Topic name.** `<runtime> · <project> · <title>`, at most 128 characters. It is updated with `editForumTopic` after a take-over. Later, a status emoji can lead the name, changed only on state changes.
+- **Topic name.** A short name, at most 32 characters, cut at the end of a word: the name that you gave the Rex pane, else the session name, else the project folder, else the runtime. Rex's default pane name `shell` (and shell or agent program names) do not count. Every 30 seconds, rex-tg compares each live topic's name with its pane and session and renames the topic with `editForumTopic` when it changed. A take-over renames at once.
 
 ## 8. Telegram display
 
@@ -462,17 +462,20 @@ When the prompt ends, by a button or on the Mac, rex-tg removes the buttons from
 /agents
 
 Active agents (3)
-🟢 pi · dotfiles · working
-   "Plan Rex annotation plugin"   Rex: Personal › shell
-🟡 claude · lovina · waiting for you
-   Rex: Work › claude
-⚪ codex · rhasia-scret · idle (guess)
+🟢 [dotfiles][chore] Plan Rex… · working
+   pi · dotfiles
+🟡 api migration · waiting for you
+   claude · lovina · "Move the API to Go"
+⚪ rhasia-scret · idle (guess)
+   codex · rhasia-scret
 
-[ Open pi · dotfiles ]  [ ↗ claude · lovina ]
-[ Open codex · rhasia-scret ]  [ ↻ Refresh ]
+[ Open [dotfiles][chore] Plan Rex… ]
+[ ↗ api migration ]
+[ Open rhasia-scret ]
+[ ↻ Refresh ]
 ```
 
-`↗` marks a session that already has a topic; the button opens that topic.
+The first line is the topic name (section 7). The second line is the runtime and the folder; when the name comes from the pane, the session name follows. `↗` marks a session that already has a topic. Every button reports the tap to rex-tg: for `↗`, rex-tg checks that the topic still exists and posts a link to it, or makes a new topic when it was deleted.
 
 Commands in the main chat: `/agents`, `/topics` (topics and their states), `/status` (daemon health), `/help`.
 
@@ -485,6 +488,8 @@ How a topic routes text that starts with `/` (D15):
 - `//name` sends `/name` to the agent. Use it for an agent command that has the same name as a bot command, such as `//help`.
 
 The topic commands avoid the names that the agents use most, such as `/status`. Telegram cannot show a different command menu per topic, so `setMyCommands` registers the topic commands. In the main chat, a topic command answers "Use this inside a topic."
+
+rex-tg registers the menu twice: for the default scope, and for the owner's chat once paired. Telegram shows a chat's own list first, so the second list also replaces an older list that another program left for that chat (found live: the menu showed `/commands /sessions /sync /upgrade`). `rex-tg doctor` shows which list the owner sees. Lists for one language are not checked.
 
 Intro card when a topic opens:
 
@@ -616,8 +621,9 @@ How text is typed:
 
 - rex-tg sends a paste event to the pane: `rex api call block.event` with type `paste` and payload `{"text": "…"}`. Then it sends Enter. A paste keeps multi-line text together as one prompt, because the terminal uses bracketed paste when the program asks for it.
 - rex-tg waits between the paste and Enter. The wait is 300 ms for all three agents, and it worked in the spikes (S2). Shorter waits were not tested.
-- The pi-vim package (a modal prompt editor for pi) drops a paste in NORMAL mode (found live, spike S1). So before a paste into a pi pane, rex-tg reads the bottom 20 lines of the screen for the mode label that pi-vim draws at the right end of the input box's top border. In NORMAL mode it presses `i`; in VISUAL mode, `escape` and then `i`. When the label shows a pending command (for example `NORMAL 3d_`) or EX mode, it does not guess: the message is refused with 👎 and a reason (`internal/daemon/vim.go`).
-- In a pi pane, `/interrupt` presses one more `escape` when the screen shows INSERT or VISUAL mode, because pi-vim takes the first `escape` to leave that mode. Without the label it adds nothing: pi opens its session tree on a double `escape` by default (`doubleEscapeAction`).
+- The pi-vim package (a modal prompt editor for pi) drops a paste unless it is in INSERT mode (found live, spike S1). So before a paste into a pi pane, rex-tg reads the mode label that pi-vim draws at the right end of the input box's bottom border, in the bottom 20 lines of the screen. It presses one key, reads the screen until the label changes, and repeats, up to 6 keys: `i` in plain NORMAL mode, and `escape` in VISUAL mode, on an EX line, or with a pending command (for example `NORMAL 3d_`). pi-vim keeps those Escapes for itself, and each one goes a step back toward plain NORMAL. In plain NORMAL mode an Escape would reach pi and stop the agent, so rex-tg never presses one there. Without a label, nothing is pressed.
+- If the label does not change within about 600 ms of a key, rex-tg presses no more keys into that pane while the label stays the same, so keys cannot pile up in a pane that does not read them. The message waits (you get one note), and the next try comes after 3 seconds. It is typed once the editor shows INSERT, and it still expires after 30 minutes like any waiting message.
+- In a pi pane, `/interrupt` first brings pi-vim to plain NORMAL mode the same way, then presses the interrupt keys, so the Escape reaches pi. Without the label it adds nothing: pi opens its session tree on a double `escape` by default (`doubleEscapeAction`).
 - Claude Code's `/vim` mode needs no extra keys: its prompt takes a paste in every vim mode, and Enter submits in NORMAL and INSERT mode (read from the Claude Code 2.1.322 bundle). It shows no label in NORMAL mode. Known gap: in VISUAL mode, Enter does not submit, so a message stays in the input box. Codex has no vim mode.
 - The `inbound` row is `typing` from before the paste until after Enter. If the daemon stops in between, the row stays `typing`. On start, rex-tg marks such rows `unknown` and never types them again. It tells you: "Your message may be in the input box without Enter. Check with /screen." This is the "at most once" rule for typing.
 

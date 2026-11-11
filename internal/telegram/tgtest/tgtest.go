@@ -83,8 +83,8 @@ type Server struct {
 	updates       []telegram.Update
 	nextUpdate    int64
 	notify        chan struct{}
-	commands      []telegram.BotCommand
-	files         map[string]*file // by file_id
+	commands      map[string][]telegram.BotCommand // by scope, see scopeKey
+	files         map[string]*file                 // by file_id
 	nextFile      int
 	nextCB        int
 	done          chan struct{}
@@ -100,6 +100,7 @@ func New(t testing.TB) *Server {
 		msgs:          map[int64][]*Message{},
 		nextMsg:       map[int64]int64{},
 		files:         map[string]*file{},
+		commands:      map[string][]telegram.BotCommand{},
 		nextUpdate:    1,
 		notify:        make(chan struct{}),
 		done:          make(chan struct{}),
@@ -195,11 +196,39 @@ func (s *Server) Topics(chatID int64) []Topic {
 	return out
 }
 
-// Commands returns the commands last set by setMyCommands.
+// Commands returns the commands last set by setMyCommands for the default
+// scope.
 func (s *Server) Commands() []telegram.BotCommand {
+	return s.CommandsFor(telegram.BotCommandScope{Type: "default"})
+}
+
+// CommandsFor returns the commands last set by setMyCommands for a scope.
+func (s *Server) CommandsFor(scope telegram.BotCommandScope) []telegram.BotCommand {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return append([]telegram.BotCommand(nil), s.commands...)
+	return append([]telegram.BotCommand(nil), s.commands[scopeKey(scope)]...)
+}
+
+// SetCommandsFor sets a scope's command list, as another program might have.
+func (s *Server) SetCommandsFor(scope telegram.BotCommandScope, cmds []telegram.BotCommand) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.commands[scopeKey(scope)] = append([]telegram.BotCommand(nil), cmds...)
+}
+
+func scopeKey(sc telegram.BotCommandScope) string {
+	switch sc.Type {
+	case "", "default":
+		return "default"
+	case "chat":
+		return fmt.Sprintf("chat:%d", sc.ChatID)
+	}
+	return sc.Type
+}
+
+func scopeOf(p map[string]any) telegram.BotCommandScope {
+	m, _ := p["scope"].(map[string]any)
+	return telegram.BotCommandScope{Type: str(m, "type"), ChatID: num(m, "chat_id")}
 }
 
 // AddFile registers a downloadable file and returns its GetFile result.
@@ -672,6 +701,9 @@ func (s *Server) handle(method string, p map[string]any, docName string, docData
 			}
 			t.Closed = true
 		} else if n := str(p, "name"); n != "" {
+			if n == t.Name {
+				return nil, bad("TOPIC_NOT_MODIFIED")
+			}
 			t.Name = n
 		}
 		return true, nil
@@ -684,8 +716,14 @@ func (s *Server) handle(method string, p map[string]any, docName string, docData
 		raw, _ := json.Marshal(p["commands"])
 		var cmds []telegram.BotCommand
 		_ = json.Unmarshal(raw, &cmds)
-		s.commands = cmds
+		s.commands[scopeKey(scopeOf(p))] = cmds
 		return true, nil
+	case "getMyCommands":
+		out := s.commands[scopeKey(scopeOf(p))]
+		if out == nil {
+			out = []telegram.BotCommand{}
+		}
+		return out, nil
 	case "sendDocument":
 		if chat == 0 {
 			return nil, bad("chat_id is empty")

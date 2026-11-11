@@ -1,59 +1,80 @@
 package daemon
 
 import (
+	"context"
+	"errors"
 	"regexp"
 	"strings"
 	"time"
-	"unicode"
+
+	"rex-tg/internal/store"
 )
 
 // vimMode is the mode that the pi-vim prompt editor (a pi package) shows on
-// screen. pi-vim drops a paste while in NORMAL mode, so rex-tg reads the mode
-// before it types into a pi pane (found live: a message was typed into a
-// pi-vim prompt in NORMAL mode and never arrived).
+// screen. pi-vim drops a paste unless it is in INSERT mode, so rex-tg brings
+// it there before it types into a pi pane (found live: a message was typed
+// into a pi-vim prompt in NORMAL mode and never arrived). Without pi-vim
+// there is no label, and typing works as before.
 //
 // Claude Code's /vim mode needs none of this: its prompt takes a paste in
-// every vim mode, and it shows no label in NORMAL mode (read from the Claude
-// Code 2.1.322 bundle). Codex has no vim mode.
+// every vim mode (read from the Claude Code 2.1.322 bundle). Codex has no
+// vim mode.
 type vimMode int
 
 const (
-	vimNone   vimMode = iota // no vim label: an ordinary editor
-	vimInsert                // INSERT: text goes in as typed
-	vimNormal                // plain NORMAL: "i" enters INSERT
-	vimVisual                // VISUAL or V-LINE: Escape returns to NORMAL without reaching the agent
-	vimBusy                  // NORMAL with a pending command, EX, or unknown: do not guess
+	vimNone   vimMode = iota // no pi-vim label: an ordinary editor
+	vimInsert                // INSERT: a paste goes in
+	vimNormal                // plain NORMAL: an Escape here reaches pi and stops the agent
+	vimVisual                // VISUAL or V-LINE, with or without a pending count
+	vimBusy                  // a pending command (for example NORMAL 3d_) or an EX line
 )
 
-// piVimLabel matches the mode that pi-vim draws at the right end of the input
-// box's top border, for example "──── NORMAL", "──── INSERT", or
-// "──── NORMAL 3d_".
+// vimState is the pi-vim label on a pane's screen.
+type vimState struct {
+	mode  vimMode
+	label string // for example "NORMAL 3d_"; empty without pi-vim
+}
+
+// piVimLabel matches the mode label that pi-vim draws at the right end of the
+// input box's bottom border, for example "──── NORMAL", "──── INSERT", or
+// "──── NORMAL 3d_" (getModeLabel in pi-vim's index.ts).
 var piVimLabel = regexp.MustCompile(`^\s*─[─\s]*─\s+(NORMAL|INSERT|VISUAL|V-LINE|EX)\b(.*)$`)
 
 // vimLines is how many lines at the bottom of the screen are searched: the
 // prompt editor and its status lines sit there.
 const vimLines = 20
 
-// vimModeSwitchWait is the pause after the keys that enter INSERT mode, so the
-// editor has switched before the paste arrives.
-const vimModeSwitchWait = 150 * time.Millisecond
+// pi-vim timing. Each key is one step, and the screen is read after it.
+const (
+	vimMaxKeys   = 6                     // keys in one try
+	vimPolls     = 15                    // screen reads while waiting for a key's effect
+	vimPollEvery = 40 * time.Millisecond // so a key's effect may take about 600 ms to show
+	vimRetryWait = 3 * time.Second       // pause before the next try after errVimStuck
+)
 
-// reasonVimBusy is the refusal reason when the editor is mid-command.
-const reasonVimBusy = "the prompt editor is in the middle of a vim command; finish or cancel it on the Mac, then send again"
+// vimStuckNote is said once per message when pi-vim does not react.
+const vimStuckNote = "⏳ The pi editor did not react to a key, so your message waits. It is typed when the editor reacts again."
 
-// piVimMode reports the pi-vim mode from a pi pane's screen.
-func piVimMode(screen string) vimMode {
+// errVimStuck means pi-vim did not show the effect of a key in time. No more
+// keys go to that pane while its label stays the same, so keys cannot pile
+// up in a pane that does not read them. The message waits and is tried again.
+var errVimStuck = errors.New("pi-vim did not react to a key")
+
+// piVimState reads the pi-vim label from a pi pane's screen.
+func piVimState(screen string) vimState {
 	lines := strings.Split(strings.TrimRight(screen, "\n"), "\n")
 	if len(lines) > vimLines {
 		lines = lines[len(lines)-vimLines:]
 	}
 	for i := len(lines) - 1; i >= 0; i-- {
-		l := strings.TrimRight(lines[i], " ┃│")
-		if m := piVimLabel.FindStringSubmatch(l); m != nil {
-			return vimModeFrom(m[1], strings.TrimSpace(m[2]))
+		m := piVimLabel.FindStringSubmatch(strings.TrimRight(lines[i], " ┃│"))
+		if m == nil {
+			continue
 		}
+		rest := strings.TrimSpace(m[2])
+		return vimState{mode: vimModeFrom(m[1], rest), label: strings.TrimSpace(m[1] + " " + rest)}
 	}
-	return vimNone
+	return vimState{}
 }
 
 func vimModeFrom(label, rest string) vimMode {
@@ -71,44 +92,86 @@ func vimModeFrom(label, rest string) vimMode {
 	return vimBusy
 }
 
-// enterInsertKeys returns the keys that put the editor in INSERT mode before
-// rex-tg pastes, and false when the editor is in a state where pressing keys
-// would be a guess (a pending vim command or EX mode).
-func enterInsertKeys(m vimMode) ([]string, bool) {
+// nextVimKey returns the one key that moves pi-vim a step toward want, or ""
+// when it is there or absent. want is vimInsert before a paste and vimNormal
+// before an interrupt. pi-vim keeps an Escape for itself in INSERT and VISUAL
+// mode, on an EX line, and with a pending command; each such Escape goes one
+// step back toward plain NORMAL (handleEscape in pi-vim's index.ts). In plain
+// NORMAL mode an Escape reaches pi and stops the agent, so it is never chosen
+// there.
+func nextVimKey(m, want vimMode) string {
 	switch m {
-	case vimNone, vimInsert:
-		return nil, true
+	case vimNone:
+		return ""
 	case vimNormal:
-		return []string{"i"}, true
-	case vimVisual:
-		return []string{"escape", "i"}, true
-	}
-	return nil, false
-}
-
-// noAutoLink stops Telegram from turning names such as "resume.md" into web
-// links: it puts a zero-width space after a dot that sits between a letter or
-// digit and a letter. It is for display text only.
-func noAutoLink(s string) string {
-	r := []rune(s)
-	var b strings.Builder
-	for i, c := range r {
-		b.WriteRune(c)
-		if c == '.' && i > 0 && i+1 < len(r) &&
-			(unicode.IsLetter(r[i-1]) || unicode.IsDigit(r[i-1])) && unicode.IsLetter(r[i+1]) {
-			b.WriteRune('\u200b')
+		if want == vimInsert {
+			return "i"
+		}
+		return ""
+	case vimInsert:
+		if want == vimInsert {
+			return ""
 		}
 	}
-	return b.String()
+	return "escape"
 }
 
-// interruptKeys adds one Escape in front of an interrupt that starts with
-// Escape when pi-vim would take that first Escape to leave INSERT or VISUAL
-// mode. Without the label, nothing is added: pi opens its session tree on a
-// double Escape by default (its doubleEscapeAction setting).
-func interruptKeys(m vimMode, keys []string) []string {
-	if (m != vimInsert && m != vimVisual) || len(keys) == 0 || keys[0] != "escape" {
-		return keys
+// settlePiVim brings pi-vim to want, one key at a time, and reads the screen
+// after each key, so no key is pressed on a guess. It returns nil when pi-vim
+// shows want, when the pane has no pi-vim label, or when the screen cannot be
+// read at the start (then typing goes on as without pi-vim). It returns
+// errVimStuck when a key shows no effect, and a Rex or context error when a
+// call fails on the way.
+func (d *daemon) settlePiVim(ctx context.Context, pane store.Pane, want vimMode) error {
+	screen, err := d.rx.Capture(ctx, pane.Session, pane.Block)
+	if err != nil {
+		return nil
 	}
-	return append([]string{"escape"}, keys...)
+	st := piVimState(screen)
+	for range vimMaxKeys {
+		if was, ok := d.vimStuck.Load(pane.ID); ok && was.(string) != st.label {
+			d.vimStuck.Delete(pane.ID) // the label changed since, so the pane reads keys again
+		}
+		key := nextVimKey(st.mode, want)
+		if key == "" {
+			return nil
+		}
+		if _, ok := d.vimStuck.Load(pane.ID); ok {
+			return errVimStuck
+		}
+		if err := d.rx.SendKeys(ctx, pane.Session, pane.Block, key); err != nil {
+			return err
+		}
+		next, err := d.waitVimChange(ctx, pane, st)
+		if err != nil {
+			return err
+		}
+		if next == st {
+			d.vimStuck.Store(pane.ID, st.label)
+			return errVimStuck
+		}
+		st = next
+	}
+	if nextVimKey(st.mode, want) == "" {
+		return nil
+	}
+	return errVimStuck
+}
+
+// waitVimChange reads the screen until the pi-vim label differs from was. It
+// returns was when the label did not change in time.
+func (d *daemon) waitVimChange(ctx context.Context, pane store.Pane, was vimState) (vimState, error) {
+	for range vimPolls {
+		if !sleepCtx(ctx, vimPollEvery) {
+			return was, ctx.Err()
+		}
+		screen, err := d.rx.Capture(ctx, pane.Session, pane.Block)
+		if err != nil {
+			return was, err
+		}
+		if st := piVimState(screen); st != was {
+			return st, nil
+		}
+	}
+	return was, nil
 }

@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -185,8 +186,8 @@ func TestAgentsListsPiPane(t *testing.T) {
 
 	e.say(0, "/agents")
 	m := e.waitText(0, "Active agents (1)")
-	if !strings.Contains(m.Text, "pi · <code>proj</code>") {
-		t.Errorf("agents text = %q, want the runtime and the folder in <code>", m.Text)
+	if !strings.Contains(m.Text, "<b>pane one</b>") || !strings.Contains(m.Text, "pi · <code>proj</code>") {
+		t.Errorf("agents text = %q, want the short name, the runtime, and the folder in <code>", m.Text)
 	}
 	if got := buttonData(m, "Open"); !strings.HasPrefix(got, "o:") {
 		t.Errorf("open button data = %q", got)
@@ -205,8 +206,8 @@ func TestOpenTopicWithIntroAndBackfill(t *testing.T) {
 	e.hookPi(p, "startup")
 	thread := e.openTopic()
 
-	if got := e.tg.Topics(chatID); len(got) != 1 || !strings.HasPrefix(got[0].Name, "pi · proj") {
-		t.Fatalf("topics = %+v", got)
+	if got := e.tg.Topics(chatID); len(got) != 1 || got[0].Name != "pane one" {
+		t.Fatalf("topics = %+v, want one named after the pane", got)
 	}
 	intro := e.waitText(thread, "Linked")
 	if !strings.Contains(intro.Text, "Write here to type into the pane") {
@@ -629,6 +630,8 @@ func TestTakeOverAfterClear(t *testing.T) {
 	oldPath := filepath.Join(dir, "sess-old.jsonl")
 	newPath := filepath.Join(dir, "sess-new.jsonl")
 	write(oldPath, claudeLines("sess-old", "hello", "old session answer")...)
+	// The pane has Rex's default name, so the session title names the topic.
+	e.fake.On([]string{"block", "ls"}, fmt.Sprintf(`{"blocks":[{"block_id":%q,"label":"shell"}]}`, rexBlock), 0)
 	e.start()
 	e.spool("claude", "SessionStart", map[string]any{
 		"hook_event_name": "SessionStart", "source": "startup", "session_id": "sess-old", "transcript_path": oldPath, "cwd": paneCWD,
@@ -870,7 +873,7 @@ func TestMainChatBasics(t *testing.T) {
 	e.say(0, "/status")
 	e.waitText(0, "Topics: 1 live")
 	e.say(0, "/topics")
-	e.waitText(0, "pi · proj")
+	e.waitText(0, "pane one · live")
 	e.say(0, "/info")
 	e.waitText(0, "Use this inside a topic")
 	e.say(0, "/nonsense")
@@ -1338,26 +1341,27 @@ func TestSecretsAreRedactedInAnswers(t *testing.T) {
 	}
 }
 
+// For a topic that still exists, the agent's button posts a link to it. The
+// button reports the tap instead of opening a link itself, so rex-tg can check
+// that the topic still exists.
 func TestOpenTwiceLinksToExistingTopic(t *testing.T) {
-	e, _, _ := piTopic(t, "pi-twice")
-	e.say(0, "/agents")
-	e.waitFor("a list with a topic link", func() bool {
-		for _, m := range e.botMessages(0) {
-			if m.Markup == nil || !strings.Contains(m.Text, "Active agents") {
-				continue
-			}
-			for _, row := range m.Markup.InlineKeyboard {
-				for _, b := range row {
-					if strings.HasPrefix(b.URL, "https://t.me/test_bot/") {
-						return true
-					}
-				}
-			}
-		}
-		return false
-	})
+	e, _, thread := piTopic(t, "pi-twice")
+	list := e.agentsList()
+	if buttonData(list, "↗ pane one") == "" || buttonURL(list, "↗ pane one") != "" {
+		t.Fatalf("the topic button must report the tap: %+v", list.Markup)
+	}
+	before := len(e.botMessages(0))
+	e.pressButton(list, buttonData(list, "↗ pane one"))
+	e.waitFor("the link", func() bool { return len(e.botMessages(0)) > before })
+	m := e.botMessages(0)[before]
+	if !strings.Contains(m.Text, "↗ pane one") {
+		t.Fatalf("reply = %q", m.Text)
+	}
+	if url := buttonURL(m, "Open topic"); url != fmt.Sprintf("https://t.me/test_bot/%d", thread) {
+		t.Errorf("link = %q, want topic %d", url, thread)
+	}
 	if got := len(e.tg.Topics(chatID)); got != 1 {
-		t.Errorf("%d topics", got)
+		t.Errorf("%d topics, want 1", got)
 	}
 }
 
@@ -1821,70 +1825,118 @@ func TestStateFoldersAreRestrictedAtStart(t *testing.T) {
 }
 
 // vimScreen is a pane screen whose prompt editor shows a pi-vim mode label at
-// the right end of the input box's top border.
+// the right end of the input box's bottom border.
 func vimScreen(label string) string {
 	return "some answer text\n\n" + strings.Repeat("─", 60) + " " + label + "\n~/work/project (main)\n"
 }
 
-// callIndex returns the position of the first fake Rex call whose arguments
-// contain want, or -1.
-func callIndex(e *env, want string) int {
-	for i, c := range e.fake.Calls() {
-		if strings.Contains(strings.Join(c.Args, " "), want) {
-			return i
-		}
+// piVimMachine makes the fake pane behave like pi-vim: Escape leaves INSERT,
+// VISUAL, an EX line, or a pending command, and i enters INSERT. Keys that
+// pi-vim would pass to pi do not change the screen.
+func piVimMachine(e *env, start string) {
+	screens := map[string]string{}
+	for _, l := range []string{"NORMAL", "INSERT", "NORMAL 3d_", "EX w_", "VISUAL 3_", "VISUAL"} {
+		screens[l] = vimScreen(l)
 	}
-	return -1
+	e.fake.SetScreenMachine(start, screens, map[string]map[string]string{
+		"NORMAL":     {"i": "INSERT"},
+		"INSERT":     {"escape": "NORMAL"},
+		"NORMAL 3d_": {"escape": "NORMAL"},
+		"EX w_":      {"escape": "NORMAL"},
+		"VISUAL 3_":  {"escape": "VISUAL"},
+		"VISUAL":     {"escape": "NORMAL"},
+	})
 }
 
-func TestVimNormalModeEntersInsertBeforeThePaste(t *testing.T) {
-	e, _, thread := piTopic(t, "pi-vim-normal")
-	e.setScreen(vimScreen("NORMAL"))
-	e.say(thread, "please check the docs")
+// From every pi-vim state, the message is typed: Escape cancels what is
+// pending, i enters INSERT, and only then the text is pasted.
+func TestPiVimReachesInsertBeforeThePaste(t *testing.T) {
+	cases := []struct {
+		start string
+		keys  string
+	}{
+		{"NORMAL", "i enter"},
+		{"INSERT", "enter"},
+		{"NORMAL 3d_", "escape i enter"},
+		{"EX w_", "escape i enter"},
+		{"VISUAL 3_", "escape escape i enter"},
+	}
+	for _, c := range cases {
+		t.Run(c.start, func(t *testing.T) {
+			e, _, thread := piTopic(t, "pi-vim-"+strings.NewReplacer(" ", "-", "_", "").Replace(c.start))
+			piVimMachine(e, c.start)
+			id := e.say(thread, "please check the docs")
+			e.waitFor("the paste", func() bool { return len(e.pastes()) == 1 })
+			want := strings.Fields(c.keys)
+			e.waitFor("Enter", func() bool { return len(e.keys()) == len(want) })
+			if got := strings.Join(e.keys(), " "); got != c.keys {
+				t.Fatalf("keys = %q, want %q", got, c.keys)
+			}
+			if c.start != "INSERT" {
+				var lastVimKey, pasteAt int
+				for i, k := range e.fake.Calls() {
+					args := strings.Join(k.Args, " ")
+					if strings.Contains(args, "send-key") && !strings.HasSuffix(args, " enter") {
+						lastVimKey = i
+					}
+					if strings.Contains(args, "block.event") {
+						pasteAt = i
+					}
+				}
+				if pasteAt < lastVimKey {
+					t.Errorf("the paste (call %d) came before the last vim key (call %d)", pasteAt, lastVimKey)
+				}
+			}
+			if got := e.fake.ScreenState(); got != "INSERT" {
+				t.Errorf("pi-vim ended in %q, want INSERT", got)
+			}
+			e.waitFor("the eyes reaction", func() bool { m, _ := e.message(id); return m.Reaction == "👀" })
+			if e.hasText(thread, "Not sent") {
+				t.Errorf("the message was refused:\n%s", e.dump())
+			}
+		})
+	}
+}
+
+// A pane that does not react to a key gets no second key: keys must not pile
+// up in a pane that does not read them. The message waits, and it is typed
+// once the editor shows INSERT.
+func TestPiVimThatDoesNotReactGetsNoMoreKeys(t *testing.T) {
+	e, _, thread := piTopic(t, "pi-vim-stuck")
+	e.fake.SetScreenMachine("NORMAL", map[string]string{"NORMAL": vimScreen("NORMAL"), "INSERT": vimScreen("INSERT")}, nil)
+	e.say(thread, "hello")
+	e.waitText(thread, "did not react")
+	e.never("a second key", 4*time.Second, func() bool { return len(e.keys()) > 1 })
+	if got := e.keys(); len(got) != 1 || got[0] != "i" {
+		t.Fatalf("keys = %v, want one i", got)
+	}
+	if len(e.pastes()) != 0 {
+		t.Fatalf("pasted into a pane that showed NORMAL: %v", e.pastes())
+	}
+	e.fake.SetScreenState("INSERT") // the editor caught up with the i
 	e.waitFor("the paste", func() bool { return len(e.pastes()) == 1 })
 	e.waitFor("Enter", func() bool { return len(e.keys()) == 2 })
-	if got := e.keys(); got[0] != "i" || got[1] != "enter" {
-		t.Fatalf("keys = %v, want [i enter]", got)
+	if got := e.keys()[1]; got != "enter" {
+		t.Errorf("keys = %v, want i then enter", e.keys())
 	}
-	insertAt, pasteAt := callIndex(e, "send-key"), callIndex(e, "block.event")
-	if insertAt < 0 || pasteAt < insertAt {
-		t.Errorf("the i key is at call %d and the paste at call %d; i must come first", insertAt, pasteAt)
-	}
-}
-
-func TestVimInsertModeTypesWithoutExtraKeys(t *testing.T) {
-	e, _, thread := piTopic(t, "pi-vim-insert")
-	e.setScreen(vimScreen("INSERT"))
-	e.say(thread, "hello")
-	e.waitFor("Enter", func() bool { return len(e.keys()) == 1 })
-	if got := e.keys(); got[0] != "enter" {
-		t.Fatalf("keys = %v, want [enter]", got)
+	if n := e.countText(thread, "did not react"); n != 1 {
+		t.Errorf("the note was posted %d times, want once", n)
 	}
 }
 
-func TestVimPendingCommandIsRefused(t *testing.T) {
-	e, _, thread := piTopic(t, "pi-vim-busy")
-	e.setScreen(vimScreen("NORMAL 3d_"))
-	id := e.say(thread, "hello")
-	e.waitFor("the thumbs down", func() bool { m, _ := e.message(id); return m.Reaction == "👎" })
-	e.waitText(thread, "in the middle of a vim command")
-	if len(e.pastes()) != 0 || len(e.keys()) != 0 {
-		t.Errorf("typed into a busy vim editor: %v %v", e.pastes(), e.keys())
-	}
-}
-
-func TestInterruptInVimInsertModePressesEscapeTwice(t *testing.T) {
+// /interrupt brings pi-vim to plain NORMAL mode first, where an Escape
+// reaches pi. /esc is a plain key press.
+func TestInterruptInPiVimLeavesInsertModeFirst(t *testing.T) {
 	e, _, thread := piTopic(t, "pi-vim-interrupt")
-	e.setScreen(vimScreen("INSERT"))
+	piVimMachine(e, "INSERT")
 	e.say(thread, "/interrupt")
-	e.waitText(thread, "Sent: escape escape")
-	if got := e.keys(); len(got) != 1 || got[0] != "escape escape" {
-		t.Fatalf("keys = %v, want one call with escape escape", got)
+	e.waitText(thread, "Sent: escape")
+	if got := strings.Join(e.keys(), " "); got != "escape escape" {
+		t.Fatalf("keys = %q, want one Escape for pi-vim, then the interrupt", got)
 	}
-	// /esc is a plain key press: no extra Escape.
 	e.say(thread, "/esc")
-	e.waitFor("the second key call", func() bool { return len(e.keys()) == 2 })
-	if got := e.keys()[1]; got != "escape" {
+	e.waitFor("the third key call", func() bool { return len(e.keys()) == 3 })
+	if got := e.keys()[2]; got != "escape" {
 		t.Errorf("/esc pressed %q, want escape", got)
 	}
 }
@@ -1974,5 +2026,114 @@ func TestVimKeysAreOnlyForPi(t *testing.T) {
 	e.waitFor("the interrupt", func() bool { return len(e.keys()) == 2 })
 	if got := e.keys()[1]; got != "escape" {
 		t.Errorf("/interrupt pressed %q, want one escape", got)
+	}
+}
+
+// buttonURL returns the URL of the button whose text contains sub.
+func buttonURL(m tgtest.Message, sub string) string {
+	if m.Markup == nil {
+		return ""
+	}
+	for _, row := range m.Markup.InlineKeyboard {
+		for _, b := range row {
+			if strings.Contains(b.Text, sub) {
+				return b.URL
+			}
+		}
+	}
+	return ""
+}
+
+// Telegram does not tell the bot that the user deleted a topic. The /agents
+// button still works: rex-tg finds the topic gone and makes a new one for the
+// same session.
+func TestDeletedTopicIsMadeAgainFromAgents(t *testing.T) {
+	e, _, thread := piTopic(t, "pi-deleted")
+	e.tg.DeleteTopic(chatID, thread) // the user deletes the topic in Telegram
+
+	list := e.agentsList()
+	data := buttonData(list, "↗ pane one")
+	if data == "" || buttonURL(list, "↗ pane one") != "" {
+		t.Fatalf("the topic button must report the tap, not open a link: %+v", list.Markup)
+	}
+	e.pressButton(list, data)
+	var fresh int64
+	e.waitFor("a new topic", func() bool {
+		for _, tp := range e.tg.Topics(chatID) {
+			if !tp.Deleted && tp.ThreadID != thread {
+				fresh = tp.ThreadID
+			}
+		}
+		return fresh != 0
+	})
+	e.waitFor("the link to the new topic", func() bool {
+		for _, m := range e.botMessages(0) {
+			if strings.Contains(m.Text, "Opened") && strings.HasSuffix(buttonURL(m, "Open topic"), fmt.Sprintf("/%d", fresh)) {
+				return true
+			}
+		}
+		return false
+	})
+	e.waitText(fresh, "Linked")
+	e.waitText(fresh, "ready") // the backfill
+	e.say(fresh, "still there?")
+	e.waitFor("the paste", func() bool { return len(e.pastes()) == 1 })
+}
+
+// A topic is named after its pane when the pane has its own name, else after
+// the session. The name follows changes of both.
+func TestTopicNameFollowsThePaneAndTheSession(t *testing.T) {
+	e := newEnv(t)
+	var skew atomic.Int64
+	opt := e.options()
+	opt.Now = func() time.Time { return time.Now().Add(time.Duration(skew.Load())) }
+	e.seedOwner()
+	p := e.newPi("pi-names")
+	p.User("start")
+	p.Final("ready")
+	e.startWith(opt)
+	e.hookPi(p, "startup")
+	thread := e.openTopic()
+	e.waitText(thread, "ready")
+	name := func() string {
+		for _, tp := range e.tg.Topics(chatID) {
+			if tp.ThreadID == thread {
+				return tp.Name
+			}
+		}
+		return ""
+	}
+	if got := name(); got != "pane one" {
+		t.Fatalf("topic name = %q, want the pane's name", got)
+	}
+
+	// The pane gets Rex's default name, and the session gets a name.
+	e.fake.On([]string{"block", "ls"}, fmt.Sprintf(`{"blocks":[{"block_id":%q,"label":"shell"}]}`, rexBlock), 0)
+	p.write(fmt.Sprintf(`{"type":"session_info","id":"n1","timestamp":%q,"name":"[proj][fix] Repair the flaky login test on CI"}`, now()))
+	e.waitFor("the new pane name and session name", func() bool {
+		pane, ok, _ := e.peek().PaneByBlock(context.Background(), "local", rexBlock)
+		if !ok || pane.Label != "shell" {
+			return false
+		}
+		c, err := e.peek().Conversation(context.Background(), pane.ConversationID)
+		return err == nil && c.Title != ""
+	})
+	skew.Add(int64(31 * time.Second)) // the next name check is due
+	e.waitFor("the rename", func() bool { return name() == "[proj][fix] Repair the flaky…" })
+}
+
+// The command menu is set for the owner's chat too: Telegram shows a chat's
+// own list before the default list, and another program may have left one.
+func TestCommandMenuIsSetForTheOwnersChat(t *testing.T) {
+	e := newEnv(t)
+	e.seedOwner()
+	old := []telegram.BotCommand{{Command: "sessions", Description: "old"}}
+	e.tg.SetCommandsFor(telegram.BotCommandScope{Type: "chat", ChatID: chatID}, old)
+	e.start()
+	e.waitFor("the menu for the owner's chat", func() bool {
+		return len(e.tg.CommandsFor(telegram.BotCommandScope{Type: "chat", ChatID: chatID})) == len(daemon.BotCommands())
+	})
+	if got := e.tg.Commands(); len(got) != len(daemon.BotCommands()) {
+		t.Errorf("default menu = %v", got)
 	}
 }

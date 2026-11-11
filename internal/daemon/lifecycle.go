@@ -46,6 +46,28 @@ var botCommands = []telegram.BotCommand{
 	{Command: "help", Description: "List the commands"},
 }
 
+// setCommands registers the command menu for the default scope and, once
+// paired, for the owner's chat. Telegram shows a chat's own list first, so
+// this also hides an older list that another program set for all private
+// chats (found live: the menu showed old commands).
+func (d *daemon) setCommands(ctx context.Context, tg *telegram.Client) {
+	if err := tg.SetMyCommands(ctx, botCommands, nil); err != nil {
+		d.log.Warn("setMyCommands", "err", err)
+	}
+	if d.ownerChat == 0 {
+		return
+	}
+	scope := &telegram.BotCommandScope{Type: "chat", ChatID: d.ownerChat}
+	if err := tg.SetMyCommands(ctx, botCommands, scope); err != nil {
+		d.log.Warn("setMyCommands for the owner's chat", "err", err)
+	}
+}
+
+// BotCommands returns a copy of the command menu that the daemon registers.
+func BotCommands() []telegram.BotCommand {
+	return append([]telegram.BotCommand(nil), botCommands...)
+}
+
 // startup does the steps of design section 3 that come before the loops.
 func (d *daemon) startup(ctx context.Context) error {
 	d.ownerUser = d.kvInt("owner_user_id")
@@ -70,9 +92,7 @@ func (d *daemon) startup(ctx context.Context) error {
 	if err := d.getMe(ctx); err != nil {
 		return err
 	}
-	if err := d.tg.SetMyCommands(ctx, botCommands); err != nil {
-		d.log.Warn("setMyCommands", "err", err)
-	}
+	d.setCommands(ctx, d.tg)
 
 	threads, err := d.st.Threads(ctx)
 	if err != nil {

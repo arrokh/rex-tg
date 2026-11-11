@@ -84,13 +84,13 @@ func Classify(err error) Class {
 		return ClassUnknownOutcome
 	case has("can't parse entities"):
 		return ClassParseEntities
-	case has("message is not modified"):
+	case has("message is not modified"), has("topic_not_modified"):
 		return ClassNotModified
 	case has("message to edit not found"):
 		return ClassEditTargetGone
 	case has("message to delete not found"), has("message can't be deleted"):
 		return ClassDeleteTargetGone
-	case has("message thread not found"), has("topic_deleted"), has("thread not found"):
+	case has("message thread not found"), has("topic_deleted"), has("topic_id_invalid"), has("thread not found"):
 		return ClassThreadNotFound
 	case api.Code == 429:
 		return ClassRateLimited
