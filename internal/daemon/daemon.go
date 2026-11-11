@@ -93,6 +93,16 @@ func Run(ctx context.Context, opt Options) error {
 	if tg == nil {
 		tg = telegram.New(opt.Token, telegram.WithBaseURL(cfg.Telegram.APIBase))
 	}
+	// Every message number that a call returns goes into the store: the
+	// bot's own messages and those of updates. The sender checks a reply
+	// whose send got no answer against them.
+	tg.OnMessage(func(chatID, messageID int64) {
+		if err := st.NoteMessage(context.Background(), chatID, messageID, now()); err != nil {
+			log.Warn("message number not saved", "err", err)
+		}
+	})
+	defer tg.OnMessage(nil)
+	timing := opt.Timing.withDefaults()
 	rx := opt.Rex
 	if rx == nil {
 		rx = rex.New(cfg.Rex.CLI)
@@ -102,8 +112,9 @@ func Run(ctx context.Context, opt Options) error {
 		Burst:         cfg.Telegram.RateBurst,
 		Now:           opt.Now,
 		Logger:        log,
+		CheckDelay:    timing.CheckDelay,
 	})
-	d := newDaemon(cfg, home, log, now, st, tg, rx, snd, opt.ProcStart, opt.Timing.withDefaults())
+	d := newDaemon(cfg, home, log, now, st, tg, rx, snd, opt.ProcStart, timing)
 	return d.run(ctx)
 }
 

@@ -7,11 +7,13 @@ package telegram
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"mime/multipart"
+	"net"
 	"net/http"
 	"net/http/httptrace"
 	"net/textproto"
@@ -44,6 +46,55 @@ type Client struct {
 	hc              *http.Client
 	timeout         time.Duration
 	downloadTimeout time.Duration
+	onMessage       atomic.Pointer[func(chatID, messageID int64)]
+}
+
+// OnMessage sets a function that gets the chat and the number of every
+// message that a call returns: each message the bot sends, and each message
+// in an update. rex-tg records them to check sends whose outcome is unknown.
+// A nil fn removes it.
+func (c *Client) OnMessage(fn func(chatID, messageID int64)) {
+	if fn == nil {
+		c.onMessage.Store(nil)
+		return
+	}
+	c.onMessage.Store(&fn)
+}
+
+// note passes a message's number to the OnMessage function.
+func (c *Client) note(m *Message) {
+	if f := c.onMessage.Load(); f != nil && m != nil && m.MessageID != 0 {
+		(*f)(m.Chat.ID, m.MessageID)
+	}
+}
+
+// newTransport is the HTTP transport of a Client: HTTP/1.1 only, with
+// connections that drop the data they have not sent yet when they close
+// (SO_LINGER 0). A request that timed out then cannot reach Telegram later,
+// when the network comes back, because its connection is closed: the check
+// of a send whose outcome is unknown relies on that (package sender). With
+// HTTP/2, such a request could still be on its way in a shared connection.
+func newTransport() *http.Transport {
+	d := &net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}
+	return &http.Transport{
+		Proxy: http.ProxyFromEnvironment,
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			conn, err := d.DialContext(ctx, network, addr)
+			if err != nil {
+				return nil, err
+			}
+			if tc, ok := conn.(*net.TCPConn); ok {
+				_ = tc.SetLinger(0)
+			}
+			return conn, nil
+		},
+		TLSNextProto:          map[string]func(string, *tls.Conn) http.RoundTripper{}, // no HTTP/2
+		MaxIdleConns:          10,
+		MaxIdleConnsPerHost:   4,
+		IdleConnTimeout:       60 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: time.Second,
+	}
 }
 
 // Option configures a Client.
@@ -85,7 +136,7 @@ func New(token string, opts ...Option) *Client {
 	c := &Client{
 		token:           token,
 		base:            DefaultBaseURL,
-		hc:              &http.Client{},
+		hc:              &http.Client{Transport: newTransport()},
 		timeout:         DefaultTimeout,
 		downloadTimeout: DefaultDownloadTimeout,
 	}
@@ -242,6 +293,13 @@ func (c *Client) GetUpdates(ctx context.Context, offset int64, timeoutSec int, a
 	}{offset, timeoutSec, allowed}
 	var ups []Update
 	err := c.callJSON(ctx, "getUpdates", time.Duration(timeoutSec)*time.Second+longPollSlack, p, &ups)
+	for i := range ups {
+		c.note(ups[i].Message)
+		c.note(ups[i].EditedMessage)
+		if cb := ups[i].CallbackQuery; cb != nil {
+			c.note(cb.Message)
+		}
+	}
 	return ups, err
 }
 
@@ -264,6 +322,9 @@ func (c *Client) SendMessage(ctx context.Context, p SendMessageParams) (Message,
 	}
 	var m Message
 	err := c.callJSON(ctx, "sendMessage", c.timeout, body, &m)
+	if err == nil {
+		c.note(&m)
+	}
 	return m, err
 }
 
@@ -283,6 +344,9 @@ func (c *Client) SendRichMessage(ctx context.Context, chatID, threadID int64, ma
 	}{chatID, threadID, richMessage{markdown}, silent, markup}
 	var m Message
 	err := c.callJSON(ctx, "sendRichMessage", c.timeout, body, &m)
+	if err == nil {
+		c.note(&m)
+	}
 	return m, err
 }
 
@@ -445,6 +509,9 @@ func (c *Client) SendDocument(ctx context.Context, chatID, threadID int64, filen
 	}
 	var m Message
 	err = c.call(ctx, "sendDocument", c.timeout, mw.FormDataContentType(), buf.Bytes(), &m)
+	if err == nil {
+		c.note(&m)
+	}
 	return m, err
 }
 

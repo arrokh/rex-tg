@@ -135,7 +135,7 @@ func TestNextPartsOrderingAcrossTopics(t *testing.T) {
 		t.Fatalf("%+v", got)
 	}
 	// Claiming a0 blocks topic 1 entirely; topic 2 still shows.
-	if ok := must(s.ClaimPart(ctx, a, 0)); !ok {
+	if ok := must(s.ClaimPart(ctx, a, 0, -1)); !ok {
 		t.Fatal("claim failed")
 	}
 	got = must(s.NextParts(ctx))
@@ -196,7 +196,7 @@ func TestClaimRace(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			ok, err := s.ClaimPart(ctx, id, 0)
+			ok, err := s.ClaimPart(ctx, id, 0, -1)
 			if err != nil {
 				t.Error(err)
 			}
@@ -218,7 +218,7 @@ func TestClaimRace(t *testing.T) {
 		t.Fatalf("%+v", r)
 	}
 	// Second sequential claim loses.
-	if ok := must(s.ClaimPart(ctx, id, 0)); ok {
+	if ok := must(s.ClaimPart(ctx, id, 0, -1)); ok {
 		t.Fatal("claimed twice")
 	}
 }
@@ -272,7 +272,7 @@ func TestReleasePart(t *testing.T) {
 	if err := s.ReleasePart(ctx, id, 0); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("release of a pending part: %v", err)
 	}
-	must(s.ClaimPart(ctx, id, 0))
+	must(s.ClaimPart(ctx, id, 0, -1))
 	noErr(t, s.ReleasePart(ctx, id, 0))
 	if p := must(s.NextParts(ctx)); len(p) != 1 {
 		t.Fatalf("%+v", p)
@@ -285,8 +285,8 @@ func TestRecoverSending(t *testing.T) {
 	th2, _ := topic(t, s, 2)
 	a := must(mustID(s.Enqueue(ctx, item(th1.ID, "a", "a0", "a1"))))
 	b := must(mustID(s.Enqueue(ctx, item(th2.ID, "b", "b0"))))
-	must(s.ClaimPart(ctx, a, 0))
-	must(s.ClaimPart(ctx, b, 0))
+	must(s.ClaimPart(ctx, a, 0, -1))
+	must(s.ClaimPart(ctx, b, 0, -1))
 	parts := must(s.RecoverSending(ctx))
 	if len(parts) != 2 || parts[0].State != OutboxUnknown || parts[0].OutboxID != a || parts[1].OutboxID != b {
 		t.Fatalf("%+v", parts)
@@ -377,4 +377,61 @@ func TestPrune(t *testing.T) {
 	if inbound != 1 {
 		t.Errorf("inbound rows = %d, want 1", inbound)
 	}
+}
+
+// Message numbers: a part's floor is kept from its claim, and a gap of
+// numbers that rex-tg has not seen is counted.
+func TestSeenMessagesAndPartChecks(t *testing.T) {
+	s := newStore(t)
+	th, _ := topic(t, s, 1)
+	if _, ok := must2(s.MaxMessage(ctx, th.ChatID)); ok {
+		t.Fatal("a new chat has a newest message")
+	}
+	for _, id := range []int64{5, 6, 8, 6} {
+		noErr(t, s.NoteMessage(ctx, th.ChatID, id, t0))
+	}
+	noErr(t, s.NoteMessage(ctx, th.ChatID+1, 7, t0)) // another chat
+	if id, ok := must2(s.MaxMessage(ctx, th.ChatID)); !ok || id != 8 {
+		t.Fatalf("newest = %d %v", id, ok)
+	}
+	for _, c := range []struct{ lo, hi, want int64 }{{4, 9, 1}, {5, 8, 1}, {6, 8, 1}, {8, 9, 0}, {8, 8, 0}, {5, 7, 0}} {
+		if got := must(s.UnseenBetween(ctx, th.ChatID, c.lo, c.hi)); got != c.want {
+			t.Errorf("unseen (%d, %d) = %d, want %d", c.lo, c.hi, got, c.want)
+		}
+	}
+
+	id, _, err := s.Enqueue(ctx, OutboxItem{ThreadID: th.ID, Key: "k", Kind: "answer", Parts: []PartContent{{Content: "x", Format: FormatHTML}}})
+	noErr(t, err)
+	must(s.ClaimPart(ctx, id, 0, 8))
+	noErr(t, s.MarkPartUnknown(ctx, id, 0))
+	if p := must(s.Part(ctx, id, 0)); !p.HasFloor || p.Floor != 8 || p.Checked || p.State != OutboxUnknown {
+		t.Fatalf("part after claim: %+v", p)
+	}
+	if ps := must(s.PartsToCheck(ctx)); len(ps) != 1 {
+		t.Fatalf("parts to check: %+v", ps)
+	}
+	noErr(t, s.MarkPartChecked(ctx, id, 0))
+	if ps := must(s.PartsToCheck(ctx)); len(ps) != 0 {
+		t.Fatalf("a checked part is checked again: %+v", ps)
+	}
+	if ok := must(s.ResendPart(ctx, id, 0)); !ok {
+		t.Fatal("resend part: not unknown")
+	}
+	if p := must(s.Part(ctx, id, 0)); p.State != OutboxPending || p.Checked {
+		t.Fatalf("part after resend: %+v", p)
+	}
+	if ok := must(s.ResendPart(ctx, id, 0)); ok {
+		t.Fatal("a pending part was moved again")
+	}
+	must(s.ClaimPart(ctx, id, 0, -1))
+	if p := must(s.Part(ctx, id, 0)); p.HasFloor {
+		t.Fatalf("a claim without a known floor kept the old one: %+v", p)
+	}
+}
+
+func must2[T, U any](a T, b U, err error) (T, U) {
+	if err != nil {
+		panic(err)
+	}
+	return a, b
 }

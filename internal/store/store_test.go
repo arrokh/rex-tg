@@ -14,7 +14,7 @@ func TestOpenFreshAndReopen(t *testing.T) {
 	s, err := Open(path)
 	noErr(t, err)
 	v := must(s.version(ctx))
-	if v != 2 {
+	if v != latestVersion {
 		t.Fatalf("version = %d", v)
 	}
 	noErr(t, s.Set(ctx, "x", "1"))
@@ -171,9 +171,12 @@ func TestKV(t *testing.T) {
 	}
 }
 
-func TestFreshDatabaseIsVersion2(t *testing.T) {
+// latestVersion is the schema version of a new database.
+var latestVersion = migrations[len(migrations)-1].version
+
+func TestFreshDatabaseIsTheLatestVersion(t *testing.T) {
 	s := newStore(t)
-	if v := must(s.version(ctx)); v != 2 {
+	if v := must(s.version(ctx)); v != latestVersion || v != 3 {
 		t.Fatalf("version = %d", v)
 	}
 }
@@ -200,7 +203,7 @@ func TestMigrateV1ToV2KeepsOutbox(t *testing.T) {
 	noErr(t, err)
 	defer s.Close()
 	s.now = func() time.Time { return t0 }
-	if v := must(s.version(ctx)); v != 2 {
+	if v := must(s.version(ctx)); v != latestVersion {
 		t.Fatalf("version = %d", v)
 	}
 	if _, err := os.Stat(path + ".bak-1"); err != nil {
@@ -236,5 +239,66 @@ func TestInsertRichPart(t *testing.T) {
 	noErr(t, s.db.QueryRowContext(ctx, `SELECT format FROM outbox_part WHERE outbox_id=?`, id).Scan(&f))
 	if f != FormatRich {
 		t.Fatalf("format = %q", f)
+	}
+}
+
+// Version 3 starts the table of seen message numbers with the numbers that
+// the database holds, and gives an unknown part of the last two hours the
+// floor that its check needs: the newest number seen when its item was
+// made. Numbers whose time is not known never raise that floor. Older
+// unknown parts had their notice already: they are not checked.
+func TestMigrateV2ToV3SeedsMessageNumbers(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "db")
+	s, err := open(path, migrations[:2])
+	noErr(t, err)
+	base := time.Now().Add(-10 * time.Minute)
+	s.now = func() time.Time { return base }
+	th, _ := topic(t, s, 5)
+	at := func(sec int) time.Time { return base.Add(time.Duration(sec) * time.Second) }
+	for i, sec := range []int{10, 20} { // user messages 11 and 12
+		_, err := s.InsertInbound(ctx, Inbound{UpdateID: int64(100 + i), ChatID: th.ChatID, TGMessageID: int64(11 + i),
+			FromID: 1, Kind: "text", Body: "hi", State: InboundDone, CreatedAt: at(sec)})
+		noErr(t, err)
+	}
+	// (A version 2 part is set without ClaimPart, which needs version 3.)
+	s.now = func() time.Time { return at(25) }
+	sent, _, err := s.Enqueue(ctx, OutboxItem{ThreadID: th.ID, Key: "sent", Kind: "answer", Parts: []PartContent{{Content: "a", Format: FormatHTML}}})
+	noErr(t, err)
+	noErr(t, s.MarkPartSent(ctx, sent, 0, 13)) // sent at 25 s
+	s.now = func() time.Time { return at(30) }
+	lost, _, err := s.Enqueue(ctx, OutboxItem{ThreadID: th.ID, Key: "lost", Kind: "answer", Parts: []PartContent{{Content: "b", Format: FormatHTML}}})
+	noErr(t, err)
+	noErr(t, s.MarkPartUnknown(ctx, lost, 0))
+	note, _, err := s.Enqueue(ctx, OutboxItem{ThreadID: th.ID, Key: "notice:unknown:2:0", Kind: "part-notice", Parts: []PartContent{{Content: "c", Format: FormatHTML}}})
+	noErr(t, err)
+	noErr(t, s.MarkPartUnknown(ctx, note, 0))
+	s.now = func() time.Time { return base.Add(-3 * time.Hour) }
+	old, _, err := s.Enqueue(ctx, OutboxItem{ThreadID: th.ID, Key: "old", Kind: "answer", Parts: []PartContent{{Content: "d", Format: FormatHTML}}})
+	noErr(t, err)
+	noErr(t, s.MarkPartUnknown(ctx, old, 0))
+	// An alert's time is not known: it must not raise the floor.
+	_, err = s.db.ExecContext(ctx, `INSERT INTO alert(thread_id,kind,screen_hash,options,tg_message_id,state,created_at) VALUES(?,?,?,?,?,?,?)`,
+		th.ID, "permission", "h", "[]", 14, "open", toMsNN(at(1)))
+	noErr(t, err)
+	noErr(t, s.Close())
+
+	s, err = Open(path)
+	noErr(t, err)
+	defer s.Close()
+	if n := must(s.UnseenBetween(ctx, th.ChatID, 10, 15)); n != 0 {
+		t.Fatalf("numbers 11 to 14 not all seen: %d unseen", n)
+	}
+	p := must(s.Part(ctx, lost, 0))
+	if !p.HasFloor || p.Floor != 13 || p.Checked {
+		t.Fatalf("lost part: floor %d (known %v), checked %v; want 13, unchecked", p.Floor, p.HasFloor, p.Checked)
+	}
+	if p := must(s.Part(ctx, note, 0)); !p.Checked {
+		t.Fatal("an old notice about a part must not be checked")
+	}
+	if p := must(s.Part(ctx, old, 0)); p.HasFloor || !p.Checked {
+		t.Fatalf("a part from three hours ago: %+v; want no floor, checked", p)
+	}
+	if ps := must(s.PartsToCheck(ctx)); len(ps) != 1 || ps[0].OutboxID != lost {
+		t.Fatalf("parts to check: %+v", ps)
 	}
 }

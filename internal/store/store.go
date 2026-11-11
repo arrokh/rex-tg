@@ -45,6 +45,44 @@ ALTER TABLE outbox_part_new RENAME TO outbox_part;
 CREATE INDEX outbox_part_state ON outbox_part (state);
 `
 
+// schemaV3 records the message numbers that rex-tg has seen in each chat
+// (seen_message), and for each outbox part the newest number known when it
+// was sent (floor_id), so that a part whose outcome is unknown can be checked
+// (see Store.UnseenBetween). The table starts with the numbers that the
+// database already holds. Where the time of a number is not known, it counts
+// as seen now, so it never raises the floor of an older part. Unknown parts
+// of the last two hours get a floor, so their check runs; older ones had
+// their notice already and wait for /resend.
+const schemaV3 = `
+CREATE TABLE seen_message (
+  chat_id    INTEGER NOT NULL,
+  message_id INTEGER NOT NULL,
+  seen_at    INTEGER NOT NULL,
+  PRIMARY KEY (chat_id, message_id)
+) STRICT, WITHOUT ROWID;
+ALTER TABLE outbox_part ADD COLUMN floor_id INTEGER;
+ALTER TABLE outbox_part ADD COLUMN checked INTEGER NOT NULL DEFAULT 0 CHECK (checked IN (0, 1));
+INSERT OR IGNORE INTO seen_message (chat_id, message_id, seen_at)
+  SELECT chat_id, tg_message_id, created_at FROM inbound WHERE tg_message_id IS NOT NULL;
+INSERT OR IGNORE INTO seen_message (chat_id, message_id, seen_at)
+  SELECT t.chat_id, p.tg_message_id, COALESCE(o.sent_at, CAST(strftime('%s','now') AS INTEGER) * 1000)
+  FROM outbox_part p JOIN outbox o ON o.id = p.outbox_id JOIN thread t ON t.id = o.thread_id
+  WHERE p.tg_message_id IS NOT NULL;
+INSERT OR IGNORE INTO seen_message (chat_id, message_id, seen_at)
+  SELECT t.chat_id, g.tg_message_id, COALESCE(g.edited_at, CAST(strftime('%s','now') AS INTEGER) * 1000)
+  FROM progress g JOIN thread t ON t.id = g.thread_id WHERE g.tg_message_id IS NOT NULL;
+INSERT OR IGNORE INTO seen_message (chat_id, message_id, seen_at)
+  SELECT t.chat_id, a.tg_message_id, CAST(strftime('%s','now') AS INTEGER) * 1000
+  FROM alert a JOIN thread t ON t.id = a.thread_id WHERE a.tg_message_id IS NOT NULL;
+UPDATE outbox_part SET floor_id = (
+  SELECT MAX(s.message_id) FROM seen_message s JOIN outbox o ON o.id = outbox_part.outbox_id
+  JOIN thread t ON t.id = o.thread_id WHERE s.chat_id = t.chat_id AND s.seen_at <= o.created_at)
+WHERE state = 'unknown' AND outbox_id IN (
+  SELECT id FROM outbox WHERE created_at >= (CAST(strftime('%s','now') AS INTEGER) - 7200) * 1000);
+UPDATE outbox_part SET checked = 1
+WHERE state = 'unknown' AND (floor_id IS NULL OR outbox_id IN (SELECT id FROM outbox WHERE kind = 'part-notice'));
+`
+
 // ErrNotFound is returned (wrapped) when a row does not exist.
 var ErrNotFound = errors.New("store: not found")
 
@@ -67,6 +105,7 @@ type migration struct {
 var migrations = []migration{
 	{version: 1, sql: schemaV1},
 	{version: 2, sql: schemaV2},
+	{version: 3, sql: schemaV3},
 }
 
 // Store is an open database.

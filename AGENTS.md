@@ -32,7 +32,7 @@ Guidance for coding agents (Claude Code, Codex, pi, and others) that work in thi
 
 ## Rules that keep rex-tg safe
 
-- At most once. Never send a Telegram message again on a guess, and never type a user's message into a pane twice. A send whose outcome is unknown waits for the user (`/resend` or the `🔁 Send again` button).
+- At most once. Never send a Telegram message again on a guess, and never type a user's message into a pane twice. A send whose outcome is unknown is sent again only when the chat's message numbers prove that it never arrived (design 9.1); otherwise it waits for the user (`/resend` or the `🔁 Send again` button).
 - Never type into a pane unless the expected agent process is in front of it.
 - The bot token lives only in the macOS Keychain. Never put it in files, argv, logs, or test data.
 - Tests must not send input to, capture, or close the user's own Rex panes or sessions. Use the fakes (`internal/rex/rextest`, `internal/telegram/tgtest`) or an isolated Rex server.

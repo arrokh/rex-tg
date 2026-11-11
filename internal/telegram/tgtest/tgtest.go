@@ -77,6 +77,7 @@ type Server struct {
 	calls         []Call
 	fails         map[string][]*failure
 	lost          map[string]int // calls that are handled, but answered with 502
+	answerDelays  map[string]time.Duration
 	delays        map[string]time.Duration
 	msgs          map[int64][]*Message // by chat
 	nextMsg       map[int64]int64
@@ -98,6 +99,7 @@ func New(t testing.TB) *Server {
 		topicsEnabled: true,
 		fails:         map[string][]*failure{},
 		lost:          map[string]int{},
+		answerDelays:  map[string]time.Duration{},
 		delays:        map[string]time.Duration{},
 		msgs:          map[int64][]*Message{},
 		nextMsg:       map[int64]int64{},
@@ -158,6 +160,15 @@ func (s *Server) FailNext(method string, n, code int, description string, retryA
 func (s *Server) LoseAnswerNext(method string, n int) {
 	s.mu.Lock()
 	s.lost[method] += n
+	s.mu.Unlock()
+}
+
+// DelayAnswer makes every call of method take effect at once but answer only
+// after d (0 removes it). When the client goes away meanwhile, the call has
+// still taken effect: the case of a sender that dies before Telegram answers.
+func (s *Server) DelayAnswer(method string, d time.Duration) {
+	s.mu.Lock()
+	s.answerDelays[method] = d
 	s.mu.Unlock()
 }
 
@@ -280,6 +291,11 @@ func (s *Server) PushCallback(chatID, threadID, fromID, messageID int64, data st
 func (s *Server) PushUpdate(u telegram.Update) telegram.Update {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.pushLocked(u)
+}
+
+// pushLocked is PushUpdate for a caller that holds s.mu.
+func (s *Server) pushLocked(u telegram.Update) telegram.Update {
 	if u.UpdateID == 0 {
 		u.UpdateID = s.nextUpdate
 	}
@@ -452,7 +468,17 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 	if lose {
 		s.lost[method]--
 	}
+	answerDelay := s.answerDelays[method]
 	s.mu.Unlock()
+	if answerDelay > 0 {
+		select {
+		case <-time.After(answerDelay):
+		case <-r.Context().Done():
+			return // taken effect; the client is gone
+		case <-s.done:
+			return
+		}
+	}
 	if lose {
 		writeErr(w, &apiErr{502, "Bad Gateway", 0})
 		return
@@ -710,6 +736,12 @@ func (s *Server) handle(method string, p map[string]any, docName string, docData
 		s.nextMsg[chat]++
 		id := s.nextMsg[chat]
 		s.topics = append(s.topics, &Topic{ChatID: chat, ThreadID: id, Name: name})
+		// Telegram sends the bot its own "topic created" message as an update
+		// (seen live). It is not kept with the chat's messages.
+		s.pushLocked(telegram.Update{Message: &telegram.Message{
+			MessageID: id, MessageThreadID: id, IsTopicMessage: true, Chat: telegram.Chat{ID: chat, Type: "private"},
+			From: &telegram.User{ID: 1, IsBot: true, FirstName: "TestBot", Username: "test_bot"}, Date: time.Now().Unix(),
+		}})
 		return telegram.ForumTopic{MessageThreadID: id, Name: name}, nil
 	case "editForumTopic", "closeForumTopic":
 		t := s.topic(chat, num(p, "message_thread_id"))

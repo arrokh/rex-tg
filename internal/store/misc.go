@@ -327,6 +327,7 @@ func (s *Store) Prune(ctx context.Context, now time.Time) error {
 			`DELETE FROM outbox WHERE id IN (` + doomed + `)`,
 			`DELETE FROM inbound WHERE created_at<?1`,
 			`DELETE FROM alert WHERE created_at<?1`,
+			`DELETE FROM seen_message WHERE seen_at<?1`,
 		}
 		for _, q := range stmts {
 			if _, err := tx.ExecContext(ctx, q, cut); err != nil {

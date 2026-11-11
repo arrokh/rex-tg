@@ -247,7 +247,7 @@ func (d *daemon) onCallback(u telegram.Update) {
 		idx, ok2 := arg(2)
 		if ok1 && ok2 {
 			d.spawn(func() {
-				d.answerAlert(id, int(idx), func(text string, isErr bool) { d.answerCallback(cb.ID, text, isErr) })
+				d.answerAlert(id, int(idx), cb.Message.MessageID, func(text string, isErr bool) { d.answerCallback(cb.ID, text, isErr) })
 			})
 			return
 		}

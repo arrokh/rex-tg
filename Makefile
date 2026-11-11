@@ -17,7 +17,7 @@ test:
 CORE_TESTS := TestPairing TestAgentsListsPiPane TestOpenTopicWithIntroAndBackfill \
 	TestMessageWaitsForIdleThenTypes TestRefusedWhenShellInFront TestProgressMessageBecomesSummary \
 	TestPermissionAlert TestPiVimReachesInsertBeforeThePaste TestClaudeVisualModeIsLeftBeforeThePaste \
-	TestResendAfterUnknownSend TestFailedTypingIsNeverRetried TestRestartRecovery \
+	TestUnknownReplyIsCheckedAndSentOnce TestFailedTypingIsNeverRetried TestRestartRecovery \
 	TestPaneClosedTakesTopicOffline TestAgentDyingMidTurnEndsTheTurn TestDeletedTopicIsMadeAgainFromAgents \
 	TestNewStartsAnAgentAndOpensItsTopic
 empty :=

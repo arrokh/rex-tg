@@ -19,6 +19,7 @@ type Timing struct {
 	Typing       time.Duration // "typing…" refresh (5 s)
 	NewAgentWait time.Duration // how long /new waits for the new agent to report its session (90 s)
 	NewAgentPoll time.Duration // how often /new looks for that report (1 s)
+	CheckDelay   time.Duration // the wait before a reply whose send got no answer is checked (60 s)
 }
 
 // withDefaults fills the zero fields with the production values.
@@ -41,5 +42,6 @@ func (t Timing) withDefaults() Timing {
 	def(&t.Typing, 5*time.Second)
 	def(&t.NewAgentWait, 90*time.Second)
 	def(&t.NewAgentPoll, time.Second)
+	def(&t.CheckDelay, 60*time.Second)
 	return t
 }

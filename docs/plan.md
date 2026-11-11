@@ -31,7 +31,7 @@ Proposed by the design and not yet confirmed by you, but none of them blocks the
 | Picking an agent creates a new two-way topic | 4.1, 7 | Phase 1, task 10; Phase 2 | Phase 1 and 2 checks | Covered by design. Spike S1 is pending, so private-chat topics are not yet checked live. |
 | Messages come from each agent's session JSONL when a new reply line appears | 4.2, 5, 6 | Phases 1, 3, 4 | Adapter fixture tests; Phase 1 and 4 checks | Covered; spike S4 confirms when lines are written |
 | Replies go straight into the agent's pane | 4.3, 9.5 | Phase 2 | Phase 2 checks | Covered; spike S2 confirms paste and Enter |
-| SQLite stops duplicate messages | 9.1, 10 | Phase 1, tasks 3 and 8 | Restart and `kill -9` checks; crash tests | Covered as "at most once". An unknown send needs `/resend`. |
+| SQLite stops duplicate messages | 9.1, 10 | Phase 1, tasks 3 and 8 | Restart and `kill -9` checks; crash tests; sender and daemon tests of the unknown-send check | Covered as "at most once". An unknown send is checked against the chat's message numbers: sent again when it never arrived, else it needs `/resend`. |
 | pi, Claude Code, and Codex are supported | 5, 6 | Phases 1–4 | Phase 4 checks | Covered; spike S2 showed that all three agents report state to Rex |
 | The project lives in `~/work/personal/rex-tg` | — | — | — | Done |
 | Q1 private chat with topics | D1 | Spike S1 | S1 result | Decided; S1 is pending |

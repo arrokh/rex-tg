@@ -88,6 +88,7 @@ func (c *Client) SetMyCommands(ctx, cmds []BotCommand) error
 func (c *Client) SendDocument(ctx, chatID, threadID int64, filename string, data []byte, caption string, silent bool) (Message, error)
 func (c *Client) GetFile(ctx, fileID string) (File, error)
 func (c *Client) DownloadFile(ctx, filePath string, w io.Writer, maxBytes int64) error
+func (c *Client) OnMessage(fn func(chatID, messageID int64)) // gets the number of each sent message and of each message in an update; nil removes it
 func Classify(err error) Class
 ```
 
@@ -95,7 +96,8 @@ func Classify(err error) Class
 - Errors: an `*APIError{Method, Code, Description, RetryAfter}` when Telegram answers `ok: false`. Network errors, timeouts, and 5xx answers come back as `*UnknownOutcomeError`, because the request may have taken effect.
 - `Class` values: `ClassNone`, `ClassRateLimited` (429), `ClassParseEntities`, `ClassNotModified`, `ClassEditTargetGone`, `ClassDeleteTargetGone`, `ClassThreadNotFound`, `ClassBlocked` (403), `ClassConflict` (409), `ClassBadRequest` (other 4xx), `ClassUnknownOutcome`.
 - Default timeouts: 15 s per call; `GetUpdates` uses its long-poll timeout plus 10 s. The token never appears in errors or logs.
-- `tgtest.New(t)` starts an `httptest` server that implements the methods above, keeps chats, topics, and messages in memory, records every call with its time, can fail or delay the next calls of a method, and lets a test push updates that a pending `getUpdates` returns at once.
+- The default transport speaks HTTP/1.1 only, and its connections drop unsent data when they close (`SO_LINGER` 0), so a request that timed out cannot reach Telegram later (design 9.1).
+- `tgtest.New(t)` starts an `httptest` server that implements the methods above, keeps chats, topics, and messages in memory (one message number counter per chat, shared by both sides, as Telegram does), records every call with its time, can fail or delay the next calls of a method, can handle a call and then lose its answer (`LoseAnswerNext`), sends the bot its own "topic created" message as an update, and lets a test push updates that a pending `getUpdates` returns at once.
 
 ## internal/rex and internal/rex/rextest
 
@@ -175,14 +177,23 @@ CommitBatch(c Cursor, items []OutboxItem) (inserted int, err error) // one trans
 // Outbox
 Enqueue(item OutboxItem) (id int64, inserted bool, err error)
 NextParts() ([]Part, error)       // at most one per topic: the oldest pending part, if the topic has no part in flight
-ClaimPart(outboxID int64, part int) (bool, error)
+ClaimPart(outboxID int64, part int, floor int64) (bool, error) // floor: the newest message number known before the send; < 0 unknown
 MarkPartSent(outboxID int64, part int, tgMessageID int64) error
 ReleasePart(outboxID int64, part int) error           // back to pending (429 or a clear error)
 MarkPartUnknown(outboxID int64, part int) error
 MarkPartFailed(outboxID int64, part int, reason string) error
 ResendUnknown(outboxID int64) (int, error)
+ResendPart(outboxID int64, part int) (bool, error)      // one unknown part back to pending (the check found it missing)
+MarkPartChecked(outboxID int64, part int) error
+PartsToCheck() ([]Part, error)                          // unknown, not checked, with a floor
+Part(outboxID int64, part int) (Part, error)
 RecoverSending() ([]Part, error)                      // at start: sending -> unknown
 OutboxRow(id int64) (OutboxRow, error)
+
+// Message numbers (table seen_message, schema version 3)
+NoteMessage(chatID, messageID int64, at time.Time) error
+MaxMessage(chatID int64) (int64, bool, error)
+UnseenBetween(chatID, lo, hi int64) (int64, error)      // numbers strictly between lo and hi not seen
 
 // Progress messages
 Progress(threadID int64) (Progress, bool, error)
@@ -403,7 +414,7 @@ Topic commands: `info`, `screen`, `approve`, `deny`, `esc`, `interrupt`, `key`, 
 The only component that writes to Telegram. It owns the rate budget and the priorities of design section 9.3.
 
 ```go
-type Options struct{ RatePerSecond float64; Burst int; Now func() time.Time; Logger *slog.Logger }
+type Options struct{ RatePerSecond float64; Burst int; Now func() time.Time; Logger *slog.Logger; CheckDelay time.Duration } // CheckDelay default 60 s
 func New(st *store.Store, tg *telegram.Client, opt Options) *Sender
 func (s *Sender) Run(ctx context.Context) error // until ctx ends
 func (s *Sender) Wake()                         // new outbox rows exist
@@ -412,10 +423,10 @@ func (s *Sender) React(chatID, messageID int64, emoji string)
 func (s *Sender) Typing(chatID, threadID int64)          // dropped when no budget is free
 func (s *Sender) Call(prio Priority, fn func(ctx context.Context, tg *telegram.Client) error) error // other calls (topics, alerts, callback answers), waits for the result
 func (s *Sender) Events() <-chan Event // Event{Kind: ThreadGone|Blocked|Conflict|PartUnknown; ThreadID, OutboxID int64; Part int}
-func (s *Sender) Recover(ctx context.Context) error // at start: sending parts become unknown, with one notice each
+func (s *Sender) Recover(ctx context.Context) error // at start: sending parts become unknown; unknown parts with a floor are checked
 ```
 
-Rules: outbox parts per design section 9.1 (claims, parse-error fallback to plain text, 429 waits, unknown never retried, notices with key `notice:unknown:<outbox id>:<part>`, row state from parts), documents through `SendDocument`, muted topics send answers silently, progress messages through the `progress` table (Show, Edit with "not modified" as success and "edit target gone" as a new Show, Repost as new then delete old, Finish as the last edit then the row is deleted; an unknown Show is never retried), edits and deletes retried with backoff, priorities answers > alerts > new progress > progress edits > typing.
+Rules: outbox parts per design section 9.1 (claims with the floor, parse-error fallback to plain text, 429 waits, an unknown part is checked against the chat's message numbers and sent again only when they prove it never arrived, else a notice with key `notice:unknown:<outbox id>:<part>` or the check's note edited into it, row state from parts), documents through `SendDocument`, muted topics send answers silently, progress messages through the `progress` table (Show, Edit with "not modified" as success and "edit target gone" as a new Show, Repost as new then delete old, Finish as the last edit then the row is deleted; an unknown Show is never retried), edits and deletes retried with backoff, priorities answers > alerts > new progress > progress edits > typing.
 
 ## Wave 3 packages
 

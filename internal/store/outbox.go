@@ -133,7 +133,7 @@ func (s *Store) Enqueue(ctx context.Context, item OutboxItem) (int64, bool, erro
 }
 
 const partCols = `p.outbox_id, p.part, o.thread_id, t.chat_id, t.message_thread_id, o.kind, o.event_key,
-	p.content, p.format, p.filename, o.silent, p.state, p.tg_message_id`
+	p.content, p.format, p.filename, o.silent, p.state, p.tg_message_id, p.floor_id, p.checked`
 
 const partFrom = ` FROM outbox_part p JOIN outbox o ON o.id=p.outbox_id JOIN thread t ON t.id=o.thread_id `
 
@@ -141,13 +141,15 @@ func scanPart(r scanner) (Part, error) {
 	var p Part
 	var fn sql.NullString
 	var silent int
-	var tg sql.NullInt64
+	var tg, floor sql.NullInt64
+	var checked int
 	err := r.Scan(&p.OutboxID, &p.Part, &p.ThreadID, &p.ChatID, &p.MessageThreadID, &p.Kind, &p.Key,
-		&p.Content, &p.Format, &fn, &silent, &p.State, &tg)
+		&p.Content, &p.Format, &fn, &silent, &p.State, &tg, &floor, &checked)
 	if err != nil {
 		return Part{}, err
 	}
 	p.Filename, p.Silent, p.TGMessageID = fn.String, silent != 0, tg.Int64
+	p.Floor, p.HasFloor, p.Checked = floor.Int64, floor.Valid, checked != 0
 	return p, nil
 }
 
@@ -272,9 +274,15 @@ func (s *Store) mustSetPart(ctx context.Context, outboxID int64, part int, set s
 }
 
 // ClaimPart moves a part from pending to sending. It returns false when the
-// part is not pending (someone else claimed it).
-func (s *Store) ClaimPart(ctx context.Context, outboxID int64, part int) (bool, error) {
-	return s.setPart(ctx, outboxID, part, `state='sending'`, nil, OutboxPending,
+// part is not pending (someone else claimed it). floor is the newest message
+// number known in the part's chat right before the send; a negative floor
+// means none is known.
+func (s *Store) ClaimPart(ctx context.Context, outboxID int64, part int, floor int64) (bool, error) {
+	var f any
+	if floor >= 0 {
+		f = floor
+	}
+	return s.setPart(ctx, outboxID, part, `state='sending', floor_id=?, checked=0`, []any{f}, OutboxPending,
 		`UPDATE outbox SET attempts=attempts+1 WHERE id=?`)
 }
 
@@ -319,7 +327,7 @@ func (s *Store) ResendUnknown(ctx context.Context, outboxID int64) (int, error) 
 	n := 0
 	now := s.now()
 	err := s.tx(ctx, func(tx *sql.Tx) error {
-		res, err := tx.ExecContext(ctx, `UPDATE outbox_part SET state='pending' WHERE outbox_id=? AND state='unknown'`, outboxID)
+		res, err := tx.ExecContext(ctx, `UPDATE outbox_part SET state='pending', checked=0 WHERE outbox_id=? AND state='unknown'`, outboxID)
 		if err != nil {
 			return err
 		}
@@ -385,6 +393,80 @@ func (s *Store) OutboxRow(ctx context.Context, id int64) (OutboxRow, error) {
 		return OutboxRow{}, err
 	}
 	return r, nil
+}
+
+// ResendPart moves one unknown part back to pending. It reports false when
+// the part is not unknown any more (for example, /resend came first).
+func (s *Store) ResendPart(ctx context.Context, outboxID int64, part int) (bool, error) {
+	return s.setPart(ctx, outboxID, part, `state='pending', checked=0`, nil, OutboxUnknown, "")
+}
+
+// MarkPartChecked records that the arrival of an unknown part was checked,
+// so it is not checked again; it waits for /resend.
+func (s *Store) MarkPartChecked(ctx context.Context, outboxID int64, part int) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE outbox_part SET checked=1 WHERE outbox_id=? AND part=?`, outboxID, part)
+	if err != nil {
+		return fmt.Errorf("store: mark part checked: %w", err)
+	}
+	return nil
+}
+
+// PartsToCheck returns the unknown parts whose arrival can still be
+// checked: not checked yet, and with a known floor. Oldest first.
+func (s *Store) PartsToCheck(ctx context.Context) ([]Part, error) {
+	return queryParts(ctx, s.db, `WHERE p.state='unknown' AND p.checked=0 AND p.floor_id IS NOT NULL ORDER BY o.id, p.part`)
+}
+
+// Part returns one outbox part.
+func (s *Store) Part(ctx context.Context, outboxID int64, part int) (Part, error) {
+	ps, err := queryParts(ctx, s.db, `WHERE p.outbox_id=? AND p.part=?`, outboxID, part)
+	if err != nil {
+		return Part{}, err
+	}
+	if len(ps) == 0 {
+		return Part{}, fmt.Errorf("store: part %d/%d: %w", outboxID, part, ErrNotFound)
+	}
+	return ps[0], nil
+}
+
+// ---- Message numbers ----
+
+// NoteMessage records that a message with this number exists in a chat:
+// one that rex-tg sent, or one that an update brought.
+func (s *Store) NoteMessage(ctx context.Context, chatID, messageID int64, at time.Time) error {
+	_, err := s.db.ExecContext(ctx, `INSERT OR IGNORE INTO seen_message(chat_id,message_id,seen_at) VALUES(?,?,?)`,
+		chatID, messageID, toMsNN(at))
+	if err != nil {
+		return fmt.Errorf("store: note message: %w", err)
+	}
+	return nil
+}
+
+// MaxMessage returns the newest message number seen in a chat; ok is false
+// when none was seen.
+func (s *Store) MaxMessage(ctx context.Context, chatID int64) (id int64, ok bool, err error) {
+	var v sql.NullInt64
+	if err := s.db.QueryRowContext(ctx, `SELECT MAX(message_id) FROM seen_message WHERE chat_id=?`, chatID).Scan(&v); err != nil {
+		return 0, false, fmt.Errorf("store: newest message: %w", err)
+	}
+	return v.Int64, v.Valid, nil
+}
+
+// UnseenBetween counts the message numbers strictly between lo and hi that
+// rex-tg has not seen in a chat. Telegram numbers a private chat's messages
+// in order, both ways, so a part sent after lo that arrived has a number
+// there: when every number there is seen, the part did not arrive.
+func (s *Store) UnseenBetween(ctx context.Context, chatID, lo, hi int64) (int64, error) {
+	if hi-lo <= 1 {
+		return 0, nil
+	}
+	var seen int64
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM seen_message WHERE chat_id=? AND message_id>? AND message_id<?`,
+		chatID, lo, hi).Scan(&seen)
+	if err != nil {
+		return 0, fmt.Errorf("store: unseen messages: %w", err)
+	}
+	return hi - lo - 1 - seen, nil
 }
 
 // UnknownParts returns every outbox part in state unknown, oldest first.

@@ -171,6 +171,11 @@ type Part struct {
 	Silent          bool
 	State           string
 	TGMessageID     int64
+	// Floor is the newest message number of the chat that rex-tg knew when
+	// the part was last sent; HasFloor is false when that is not known.
+	Floor    int64
+	HasFloor bool
+	Checked  bool // an unknown part whose arrival was checked, so it waits for /resend
 }
 
 // OutboxRow is an outgoing message with its parts.

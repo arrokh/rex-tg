@@ -227,10 +227,9 @@ func trustScreen(i int) string {
 }
 
 // trustEnv is a daemon whose next /new starts Claude Code in pane S2/B2,
-// which shows the trust question. A question that waits keeps rex-tg
-// waiting too, so the start wait is short here: an answer after it must
-// still work.
-func trustEnv(t *testing.T) (*env, string) {
+// which shows the trust question. wait is the start wait (0: the test
+// default).
+func trustEnv(t *testing.T, wait time.Duration) (*env, string) {
 	e := newEnv(t)
 	e.seedOwner()
 	dir := filepath.Join(e.home, "work", "fresh")
@@ -248,7 +247,9 @@ func trustEnv(t *testing.T) (*env, string) {
 		"yes": {"up": "no", "enter": "started"},
 	})
 	opt := e.options()
-	opt.Timing.NewAgentWait = 300 * time.Millisecond
+	if wait > 0 {
+		opt.Timing.NewAgentWait = wait
+	}
 	e.startWith(opt)
 	return e, dir
 }
@@ -258,15 +259,11 @@ func trustEnv(t *testing.T) (*env, string) {
 // answers as buttons. The button moves the cursor with Down and presses
 // Enter, and the agent's topic opens once it reports its session.
 func TestNewAnswersTheTrustQuestion(t *testing.T) {
-	e, dir := trustEnv(t)
+	e, dir := trustEnv(t, 0)
 	e.say(0, "/new claude ~/work/fresh")
 	q := e.waitText(0, "asks this before it starts")
 	if !strings.Contains(q.Text, "Quick safety check") || buttonData(q, "No, exit") == "" {
 		t.Fatalf("question: %q %+v", q.Text, q.Markup)
-	}
-	time.Sleep(time.Second) // longer than the start wait: the question keeps it going
-	if e.hasText(0, "has not reported its session") {
-		t.Fatal("rex-tg stopped waiting while the question was open")
 	}
 	e.pressButton(q, buttonData(q, "Yes, I trust this folder"))
 	e.waitFor("the answer note", func() bool {
@@ -293,12 +290,17 @@ func TestNewAnswersTheTrustQuestion(t *testing.T) {
 	}
 }
 
-// You answer the question on the Mac instead: its buttons go, and the
+// A question that waits for you keeps rex-tg waiting too, past the start
+// wait. Then you answer it on the Mac instead: its buttons go, and the
 // message says why. No key is pressed.
 func TestNewTrustQuestionAnsweredOnTheMac(t *testing.T) {
-	e, _ := trustEnv(t)
+	e, _ := trustEnv(t, 300*time.Millisecond)
 	e.say(0, "/new claude ~/work/fresh")
 	q := e.waitText(0, "asks this before it starts")
+	time.Sleep(time.Second) // longer than the start wait
+	if e.hasText(0, "has not reported its session") {
+		t.Fatal("rex-tg stopped waiting while the question was open")
+	}
 	e.fake.SetScreenState("started")
 	e.waitFor("the closed question", func() bool {
 		m, _ := e.message(q.ID)

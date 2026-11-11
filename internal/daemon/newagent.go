@@ -566,7 +566,10 @@ func (d *daemon) awaitAgent(chat, thread int64, rt agents.Runtime, st rex.Starte
 		case <-d.ctx.Done():
 			return
 		case a := <-answers:
-			d.onStartupAnswer(chat, st, rt, name, q, a)
+			if d.onStartupAnswer(chat, st, rt, name, q, a) {
+				// The agent goes on starting: give it the whole wait again.
+				deadline = minTime(time.Now().Add(d.timing.NewAgentWait), start.Add(newExpiry))
+			}
 			continue
 		case <-poll.C:
 		}
@@ -687,12 +690,12 @@ func (d *daemon) closeQuestion(chat int64, q *shownQuestion, note string) {
 }
 
 // onStartupAnswer presses the answer of a button, if it belongs to the
-// question on the screen (worker).
-func (d *daemon) onStartupAnswer(chat int64, st rex.Started, rt agents.Runtime, name string, q *shownQuestion, a startupAnswer) {
+// question on the screen (worker). It reports whether the answer was pressed.
+func (d *daemon) onStartupAnswer(chat int64, st rex.Started, rt agents.Runtime, name string, q *shownQuestion, a startupAnswer) bool {
 	if q == nil || q.closed || a.seq != q.seq || a.index < 0 || a.index >= len(q.labels) {
 		d.answerCallback(a.cbID, "This question is no longer open.", false)
 		d.removeButtons(chat, a.msg)
-		return
+		return false
 	}
 	if q.msg == 0 {
 		q.msg = a.msg // Telegram's answer to the send was lost; the button names the message
@@ -716,14 +719,15 @@ func (d *daemon) onStartupAnswer(chat int64, st rex.Started, rt agents.Runtime, 
 	case errors.Is(err, errStartupGone):
 		note = "This question is no longer on the screen."
 	default: // the daemon stops
-		return
+		return false
 	}
 	if keep {
 		d.editMessage(chat, q.msg, q.html+"\n"+note, q.markup)
-		return
+		return false
 	}
 	q.closed = true
 	d.editMessage(chat, q.msg, q.html+"\n"+note, nil)
+	return q.answered
 }
 
 // agentPane returns the pane row of a Rex block once its agent has a session.

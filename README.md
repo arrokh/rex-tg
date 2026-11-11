@@ -10,7 +10,7 @@ rex-tg connects coding agents that run in Rex panes to Telegram.
 - While the agent works, one progress message shows its tool calls. The answer then arrives as a normal message.
 - Text you write in a topic waits until the agent is idle. Then rex-tg types it into the pane.
 - Replies come from each agent's session file. Rex and the agent's hooks tell rex-tg whether the agent is working.
-- SQLite makes sure no reply is posted twice.
+- SQLite makes sure no reply is posted twice. A reply whose send got no answer is sent again only when the chat's message numbers prove that it never arrived.
 
 Supported agents: pi, Claude Code, and Codex, on this Mac. Not supported: T3 Code panes, and Rex servers on other computers.
 
@@ -374,7 +374,8 @@ Start with `rex-tg doctor`.
 | "waiting for session" | rex-tg does not know the session file yet. It learns the file at the agent's next prompt or turn end. |
 | "message thread not found" | You deleted the topic in Telegram, so rex-tg closed it. Open the agent again with `/agents`. |
 | "This topic is not linked" | The topic is closed, or rex-tg did not create it. Open the agent again with `/agents`. |
-| "may not have arrived" | rex-tg never resends on its own. Send the `/resend` command from the notice, if you want the missing parts. |
+| "Checking whether it arrived" | Telegram did not confirm a reply. rex-tg checks the chat's message numbers: a reply that never arrived is sent again by itself, and the note goes. |
+| "may not have arrived" | The reply may be in the chat already, so rex-tg does not send it again by itself. Tap `🔁 Send again`, or send `/resend`, if it is missing. |
 | "may be in the input box without Enter" | The daemon stopped between the paste and Enter. Check the pane with `/screen`. rex-tg does not type the text again. |
 | `/new`: "exited with code 127" | The shell did not find the agent. Set its full path in `[agents.<name>] launch`, for example `launch = ["/opt/homebrew/bin/codex"]`. |
 | `/new`: "has not reported its session yet" | The agent may wait on its screen for something that is not a list of answers, such as a login. The message shows the screen. Deal with it on the Mac, then open the agent with `/agents`. |

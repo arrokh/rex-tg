@@ -94,7 +94,22 @@ func (s *Sender) sendText(ctx context.Context, threadID, chatID, topicID int64, 
 		m, err = s.tg.SendMessage(ctx, p)
 		v = s.judge(err, threadID)
 	}
+	if v == vOK {
+		s.noteMessage(chatID, m.MessageID)
+	}
 	return m.MessageID, v, err
+}
+
+// noteMessage records the number of a message that the bot sent. The daemon
+// also records every number through the client's OnMessage, but the sender
+// does not depend on that for its own messages.
+func (s *Sender) noteMessage(chatID, messageID int64) {
+	if messageID == 0 {
+		return
+	}
+	if err := s.st.NoteMessage(context.Background(), chatID, messageID, s.now()); err != nil {
+		s.log.Warn("message number not saved", "err", err)
+	}
 }
 
 // maxFallbackText is the longest markdown sent as a plain message when a rich
@@ -219,8 +234,19 @@ func (s *Sender) Recover(ctx context.Context) error {
 		return fmt.Errorf("sender: recover outbox: %w", err)
 	}
 	for _, p := range parts {
-		s.notice(ctx, p)
+		if !p.HasFloor {
+			s.notice(ctx, p) // claimed without a known floor: it cannot be checked
+		}
 		s.emit(Event{Kind: PartUnknown, ThreadID: p.ThreadID, OutboxID: p.OutboxID, Part: p.Part})
+	}
+	// Parts left in "sending" are unknown now, and the checks that were
+	// waiting when the daemon stopped are lost: check them all again.
+	check, err := s.st.PartsToCheck(ctx)
+	if err != nil {
+		return fmt.Errorf("sender: recover checks: %w", err)
+	}
+	for _, p := range check {
+		s.unknownPart(ctx, p)
 	}
 	// A progress message caught in "sending" may exist; it is never sent again.
 	all, err := s.st.AllProgress(ctx)
@@ -241,7 +267,13 @@ func (s *Sender) Recover(ctx context.Context) error {
 // sendPart claims one part, sends it, and records the outcome.
 func (s *Sender) sendPart(ctx context.Context, p store.Part) {
 	bg := context.WithoutCancel(ctx)
-	ok, err := s.st.ClaimPart(ctx, p.OutboxID, p.Part)
+	// The newest message number known before the send: if the part arrives,
+	// its number is higher (see checkPart).
+	floor := int64(-1)
+	if id, _, err := s.st.MaxMessage(ctx, p.ChatID); err == nil {
+		floor = id // 0 when none is known yet
+	}
+	ok, err := s.st.ClaimPart(ctx, p.OutboxID, p.Part, floor)
 	if err != nil {
 		s.log.Warn("claim failed", "outbox", p.OutboxID, "part", p.Part, "err", err)
 		s.sleepOrWake(ctx, idlePoll/4)
@@ -276,6 +308,9 @@ func (s *Sender) sendPart(ctx context.Context, p store.Part) {
 	default:
 		serr, v = fmt.Errorf("unknown part format %q", p.Format), vFailed
 	}
+	if v == vOK {
+		s.noteMessage(p.ChatID, id) // every format; a text was noted already
+	}
 	if v == vUnknown && errors.Is(serr, context.Canceled) && ctx.Err() != nil && id == 0 && isTokenWait(serr) {
 		_ = s.st.ReleasePart(bg, p.OutboxID, p.Part)
 		return
@@ -302,7 +337,7 @@ func (s *Sender) finishPart(ctx context.Context, p store.Part, id int64, v verdi
 		werr = s.st.ReleasePart(ctx, p.OutboxID, p.Part)
 	case vUnknown:
 		werr = s.st.MarkPartUnknown(ctx, p.OutboxID, p.Part)
-		s.notice(ctx, p)
+		s.unknownPart(ctx, p)
 		s.emit(Event{Kind: PartUnknown, ThreadID: p.ThreadID, OutboxID: p.OutboxID, Part: p.Part})
 	default:
 		reason := "failed"
@@ -322,4 +357,126 @@ func (s *Sender) finishPart(ctx context.Context, p store.Part, id int64, v verdi
 	if werr != nil {
 		s.log.Error("part state not saved", "outbox", p.OutboxID, "part", p.Part, "err", werr)
 	}
+}
+
+// maxAutoSends is how many times a part is sent before an unknown outcome
+// leads to the notice instead of a check: each check that finds the part
+// missing sends it again.
+const maxAutoSends = 5
+
+// isAboutAPart reports the sender's own notice about another part, also one
+// stored before partNoticeKind existed.
+func isAboutAPart(p store.Part) bool {
+	return p.Kind == partNoticeKind || strings.HasPrefix(p.Key, unknownNoticePrefix) || strings.HasPrefix(p.Key, "notice:failed:")
+}
+
+// unknownPart deals with a part whose outcome is unknown: it checks later
+// whether the part arrived (checkPart). The sender's own notices about other
+// parts are never checked, so a network outage cannot make them pile up.
+func (s *Sender) unknownPart(ctx context.Context, p store.Part) {
+	if isAboutAPart(p) {
+		if err := s.st.MarkPartChecked(ctx, p.OutboxID, p.Part); err != nil {
+			s.log.Warn("part check not saved", "outbox", p.OutboxID, "part", p.Part, "err", err)
+		}
+		return
+	}
+	j := &job{prio: PriorityAnswer, notBefore: s.now().Add(s.checkDelay)}
+	j.run = func(ctx context.Context, j *job) jobResult { return s.checkPart(ctx, j, p.OutboxID, p.Part) }
+	if err := s.addJob(j); err != nil {
+		s.log.Warn("part check not started", "outbox", p.OutboxID, "part", p.Part, "err", err)
+	}
+}
+
+// checkPart finds out whether a part whose outcome is unknown arrived
+// (design section 9.1). Telegram numbers the messages of a private chat in
+// order, both ways. So it posts a short note in the part's topic and looks
+// at the numbers between the newest one known before the part was sent
+// (the part's floor) and the note's: had the part arrived, its number would
+// be there. When every number there is a message that rex-tg knows, the
+// part did not arrive: it is sent again, and the note goes. Otherwise the
+// note becomes the "may not have arrived" notice with its Send again button.
+//
+// It runs once the network works again and CheckDelay after the outcome. By
+// then the request cannot arrive late: its connection was closed, and the
+// client's connections drop unsent data when they close.
+func (s *Sender) checkPart(ctx context.Context, j *job, outboxID int64, part int) jobResult {
+	bg := context.WithoutCancel(ctx)
+	p, err := s.st.Part(ctx, outboxID, part)
+	if err != nil || p.State != store.OutboxUnknown || p.Checked {
+		return jobResult{} // gone, sent again by /resend, or checked already
+	}
+	if !p.HasFloor || s.sentTooOften(ctx, outboxID) {
+		s.giveUpCheck(bg, p)
+		return jobResult{}
+	}
+	text := fmt.Sprintf("⏳ Telegram did not confirm part %d of reply #%d. Checking whether it arrived…", p.Part+1, p.OutboxID)
+	id, v, err := s.sendText(ctx, p.ThreadID, p.ChatID, p.MessageThreadID, text, true, true, nil)
+	switch v {
+	case vOK:
+	case vRetry: // nothing was posted: the network or the rate limit
+		j.attempts++
+		return jobResult{retry: true, delay: backoff(j.attempts - 1)}
+	case vUnknown:
+		if ctx.Err() != nil && isTokenWait(err) {
+			return jobResult{} // stopping; the next start checks again
+		}
+		// The note may have arrived: its number is then unknown too, and
+		// the next try finds a gap. After a few tries, the notice comes.
+		if j.attempts++; j.attempts < 3 {
+			return jobResult{retry: true, delay: s.checkDelay}
+		}
+		s.giveUpCheck(bg, p)
+		return jobResult{}
+	case vGone, vBlocked:
+		_ = s.st.MarkPartChecked(bg, p.OutboxID, p.Part)
+		return jobResult{}
+	default:
+		s.giveUpCheck(bg, p)
+		return jobResult{}
+	}
+	th := store.Thread{ID: p.ThreadID, ChatID: p.ChatID, MessageThreadID: p.MessageThreadID}
+	unseen, err := s.st.UnseenBetween(bg, p.ChatID, p.Floor, id)
+	if err == nil && unseen == 0 {
+		if ok, err := s.st.ResendPart(bg, p.OutboxID, p.Part); err != nil {
+			s.log.Error("part not sent again", "outbox", p.OutboxID, "part", p.Part, "err", err)
+		} else if ok {
+			s.log.Info("part did not arrive; sending it again", "outbox", p.OutboxID, "part", p.Part)
+		}
+		s.deleteMessage(th, id)
+		s.Wake()
+		return jobResult{}
+	}
+	s.log.Info("part may have arrived; asking before sending again", "outbox", p.OutboxID, "part", p.Part, "unseen", unseen)
+	if err := s.st.MarkPartChecked(bg, p.OutboxID, p.Part); err != nil {
+		s.log.Warn("part check not saved", "outbox", p.OutboxID, "part", p.Part, "err", err)
+	}
+	notice := fmt.Sprintf("⚠️ Part %d of reply #%d may not have arrived.", p.Part+1, p.OutboxID)
+	markup := &telegram.InlineKeyboardMarkup{InlineKeyboard: [][]telegram.InlineKeyboardButton{{
+		{Text: "🔁 Send again", CallbackData: ResendButtonData(p.OutboxID)},
+	}}}
+	if err := s.token(ctx); err == nil {
+		_, err := s.tg.EditMessageText(ctx, telegram.EditMessageTextParams{
+			ChatID: p.ChatID, MessageID: id, Text: notice, ParseMode: "HTML", ReplyMarkup: markup,
+		})
+		if v := s.judge(err, p.ThreadID); v == vOK || v == vNotModified {
+			return jobResult{}
+		}
+	}
+	s.notice(bg, p) // the note could not become the notice: post the notice
+	return jobResult{}
+}
+
+// giveUpCheck ends the check of a part without an answer: the part gets the
+// "may not have arrived" notice and waits for /resend.
+func (s *Sender) giveUpCheck(ctx context.Context, p store.Part) {
+	if err := s.st.MarkPartChecked(ctx, p.OutboxID, p.Part); err != nil {
+		s.log.Warn("part check not saved", "outbox", p.OutboxID, "part", p.Part, "err", err)
+	}
+	s.notice(ctx, p)
+}
+
+// sentTooOften reports a row that was sent maxAutoSends times or more.
+func (s *Sender) sentTooOften(ctx context.Context, outboxID int64) bool {
+	row, err := s.st.OutboxRow(ctx, outboxID)
+	return err == nil && row.Attempts >= maxAutoSends
 }

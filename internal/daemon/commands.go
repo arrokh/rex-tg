@@ -481,7 +481,7 @@ func (d *daemon) approveDeny(th store.Thread, upd int64, approve bool) {
 			}
 		}
 	}
-	d.answerAlert(al.ID, pick, func(text string, _ bool) { d.replyTopic(th, tag, format.Escape(text)) })
+	d.answerAlert(al.ID, pick, 0, func(text string, _ bool) { d.replyTopic(th, tag, format.Escape(text)) })
 }
 
 func (d *daemon) setting(th store.Thread, upd int64, name, arg string, allowed []string) {

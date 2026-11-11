@@ -554,15 +554,20 @@ stateDiagram-v2
   sending --> unknown: timeout, lost connection, or crash while sending
   pending --> failed: permanent error, even as plain text
   pending --> skipped: filtered, or an echo of your own Telegram message
-  unknown --> pending: only through /resend
+  unknown --> pending: the check proves it never arrived, or /resend
   sent --> [*]
 ```
 
 - **Claims.** The sender claims a part with `UPDATE … SET state = 'sending' WHERE … AND state = 'pending'` in a transaction, so no part can be claimed twice.
 - **Parts.** Each long message is split into parts, and each part has its own state. After a crash, sending continues at the next part, not from the start.
 - **Not sent.** When the connection, the TLS handshake, or writing the request fails before the whole request was written, Telegram cannot have acted on it. The part goes back to `pending`, and sending pauses for 1 second, then 2, 4, up to 30 seconds while this goes on (`httptrace` tells whether the request was written).
-- **Unknown.** When the request was written but no answer came (a timeout, a dropped connection, a 5xx), rex-tg marks the part `unknown` and posts one notice with a button: `⚠️ Part 1 of reply #42 may not have arrived.` `[🔁 Send again]`. It never retries on its own, because the message may be in the chat already. The button, or `/resend 42`, sends only the parts of #42 that are `unknown`. `/resend` without an id takes the newest such reply of the topic (tapping a command in a message drops its argument, seen live), and the id of a notice stands for the reply it is about.
-- **A notice never gets a notice.** If the notice itself may not have arrived, nothing more is posted about it. Before this rule, a network stall made a chain of notices about notices (seen live, spike S1).
+- **Unknown.** When the request was written but no answer came (a timeout, a dropped connection, a 5xx), rex-tg marks the part `unknown`. It may be in the chat already, so it is never simply sent again. Instead rex-tg checks whether it arrived:
+  - Telegram numbers the messages of a private chat in order, both ways (seen live: each gap in the numbers of the bot's chat was a message that rex-tg did not record). rex-tg records the number of every message it sends and of every message in an update (`seen_message`), and keeps with each part the newest number known right before its send (`floor_id`). Had the part arrived, its number would be higher.
+  - 60 seconds after the outcome, and once Telegram answers again, rex-tg posts a silent note in the topic: `⏳ Telegram did not confirm part 1 of reply #42. Checking whether it arrived…`. If every number between the part's floor and the note's number is a message that rex-tg knows, the part never arrived: it is sent again, and the note is deleted. Otherwise the note becomes the notice `⚠️ Part 1 of reply #42 may not have arrived.` `[🔁 Send again]`, and the part waits for you.
+  - A request that timed out cannot arrive late and spoil the check: the client uses HTTP/1.1 and closes a timed-out connection at once, dropping the data it has not sent (`SO_LINGER` 0). With HTTP/2, the request could still be on its way in a shared connection. The 60 seconds cover data that was already on the network.
+  - A note that may not have arrived is posted again later; after three tries, or after a part was sent 5 times, the classic notice comes instead. A part that was claimed before this check existed has no floor and gets the notice at once.
+  - The button, or `/resend 42`, sends only the parts of #42 that are `unknown`. `/resend` without an id takes the newest such reply of the topic (tapping a command in a message drops its argument, seen live), and the id of a notice stands for the reply it is about.
+- **A notice never gets a notice.** The sender's own notices about parts are never checked, and if one may not have arrived, nothing more is posted about it. Before this rule, a network stall made a chain of notices about notices (seen live, spike S1). The daemon's other notices, such as replies to commands, are checked like answers.
 - **Failed.** A part that Telegram refuses for good is marked `failed`, and a notice says why (`⚠️ Part 1 of reply #42 could not be sent: …`). A deleted or closed topic gets no notice: it is closed in rex-tg instead.
 - **A message's state comes from its parts.** It is `sent` when all parts are `sent`, `unknown` when any part is `unknown`, and `failed` when any part is `failed`.
 - **An unknown progress message is not sent again.** The turn goes on without a progress message, and the answer is still sent. The `progress` row is deleted at the end of the turn.
@@ -586,7 +591,7 @@ Telegram errors:
 | 403 "bot was blocked by the user" | Stop sending. `/status` and `rex-tg doctor` report it. |
 | 409 Conflict on `getUpdates` | Another program polls with the same token. Stop polling and report it. |
 | No connection, or the TLS handshake fails (the request was not written) | Not sent: retried after a growing pause (1 to 30 seconds). |
-| Timeout, dropped connection, or 5xx after the request was written | A send is `unknown`, with one notice and a `🔁 Send again` button. An edit or delete is retried with backoff. |
+| Timeout, dropped connection, or 5xx after the request was written | A send is `unknown` and is checked: sent again when the message numbers prove it never arrived, else one notice with a `🔁 Send again` button. An edit or delete is retried with backoff. |
 | 400 `TOPIC_CLOSED` or `TOPIC_ID_INVALID` | Like "message thread not found": the topic is `closed`. |
 | Any other 400 | The part is `failed`, and a notice says why. |
 

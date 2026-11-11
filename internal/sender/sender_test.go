@@ -241,33 +241,156 @@ func noticeText(id int64, part int) string {
 	return "⚠️ Part " + string(rune('0'+part+1)) + " of reply #" + string(rune('0'+id)) + " may not have arrived."
 }
 
-func TestUnknownOutcomeNoRetryOneNotice(t *testing.T) {
+// visible returns the chat's messages that were not deleted.
+func (e *env) visible() []tgtest.Message {
+	var out []tgtest.Message
+	for _, m := range e.srv.Messages(chat) {
+		if !m.Deleted {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+// A part whose send got no answer, and that Telegram did not post: the check
+// finds no message number between the part's send and its note, so the part
+// is sent again, once, and the note goes. Nothing is posted twice.
+func TestUnknownPartThatDidNotArriveIsSentAgain(t *testing.T) {
 	e := newEnv(t, sender.Options{})
 	th := e.topic(1)
 	id := e.enqueue(th, "k", store.FormatPlain, "hello")
-	e.srv.FailNext("sendMessage", 1, 500, "Internal Server Error", 0)
+	e.srv.FailNext("sendMessage", 1, 500, "Internal Server Error", 0) // nothing posted
 	e.start()
-	e.waitState(id, store.OutboxUnknown)
 	ev := e.event(sender.PartUnknown)
 	if ev.OutboxID != id || ev.Part != 0 || ev.ThreadID != th.ID {
 		t.Fatalf("event = %+v", ev)
 	}
-	waitFor(t, "notice", func() bool { return len(e.srv.Messages(chat)) == 1 })
-	time.Sleep(30 * time.Millisecond)
-	ms := e.srv.Messages(chat)
-	if len(ms) != 1 || ms[0].Text != noticeText(id, 0) || ms[0].ParseMode != "HTML" {
+	e.waitState(id, store.OutboxSent)
+	waitFor(t, "the note to go", func() bool { return len(e.visible()) == 1 })
+	if ms := e.visible(); ms[0].Text != "hello" {
+		t.Fatalf("messages = %+v, want the reply once", ms)
+	}
+	if n := len(e.srv.Calls("sendMessage")); n != 3 {
+		t.Fatalf("sendMessage calls = %d, want 3: the reply, the note, the reply again", n)
+	}
+	if note, _ := e.srv.Calls("sendMessage")[1].Params["text"].(string); !strings.Contains(note, "Checking whether it arrived") {
+		t.Errorf("note = %q", note)
+	}
+}
+
+// A part that Telegram did post, but whose answer was lost: the check finds
+// a number that rex-tg never saw, so it does not send the part again. The
+// note becomes the notice, whose button sends the reply again on request.
+func TestUnknownPartThatMayHaveArrivedGetsTheNotice(t *testing.T) {
+	e := newEnv(t, sender.Options{})
+	th := e.topic(1)
+	id := e.enqueue(th, "k", store.FormatPlain, "hello")
+	e.srv.LoseAnswerNext("sendMessage", 1) // posted, but the answer is lost
+	e.start()
+	waitFor(t, "the notice", func() bool {
+		ms := e.visible()
+		return len(ms) == 2 && ms[1].Text == noticeText(id, 0)
+	})
+	ms := e.visible()
+	if ms[0].Text != "hello" {
 		t.Fatalf("messages = %+v", ms)
 	}
-	// One tap sends the reply again: the button carries its id.
-	if m := ms[0].Markup; m == nil || len(m.InlineKeyboard) != 1 || m.InlineKeyboard[0][0].CallbackData != sender.ResendButtonData(id) {
-		t.Fatalf("notice buttons = %+v, want one Send again button for #%d", ms[0].Markup, id)
+	if m := ms[1].Markup; m == nil || len(m.InlineKeyboard) != 1 || m.InlineKeyboard[0][0].CallbackData != sender.ResendButtonData(id) {
+		t.Fatalf("notice buttons = %+v, want one Send again button for #%d", ms[1].Markup, id)
 	}
-	if n := len(e.srv.Calls("sendMessage")); n != 2 {
-		t.Fatalf("sendMessage calls = %d, want 2 (original and notice)", n)
+	time.Sleep(30 * time.Millisecond)
+	if st := e.rowState(id); st != store.OutboxUnknown || len(e.srv.Calls("sendMessage")) != 2 {
+		t.Fatalf("state %s after %d sendMessage calls; want unknown after the reply and the note", st, len(e.srv.Calls("sendMessage")))
 	}
-	if _, inserted, _ := e.st.Enqueue(ctx, store.OutboxItem{ThreadID: th.ID, Key: "notice:unknown:1:0", Kind: "notice",
-		Parts: []store.PartContent{{Content: "x", Format: "plain"}}}); inserted {
-		t.Fatal("notice key was not used")
+	if p, _ := e.st.Part(ctx, id, 0); !p.Checked {
+		t.Fatal("the part is not marked checked")
+	}
+}
+
+// lostSend sets a part up as sent with an unknown outcome that never reached
+// Telegram, while the newest known message number was 0. Then you write a
+// message in the chat; noted says whether rex-tg recorded its number, as the
+// daemon records every update.
+func (e *env) lostSend(th store.Thread, noted bool) int64 {
+	e.t.Helper()
+	id := e.enqueue(th, "k", store.FormatPlain, "hello")
+	if ok, err := e.st.ClaimPart(ctx, id, 0, 0); err != nil || !ok {
+		e.t.Fatalf("claim: %v %v", ok, err)
+	}
+	if err := e.st.MarkPartUnknown(ctx, id, 0); err != nil {
+		e.t.Fatal(err)
+	}
+	u := e.srv.PushMessage(chat, 1, 7, "a message from you")
+	if noted {
+		if err := e.st.NoteMessage(ctx, chat, u.Message.MessageID, t0); err != nil {
+			e.t.Fatal(err)
+		}
+	}
+	if err := e.s.Recover(ctx); err != nil { // the check of the unknown part
+		e.t.Fatal(err)
+	}
+	return id
+}
+
+// Messages between the part and the note that rex-tg knows, such as yours,
+// do not stop the check.
+func TestCheckCountsKnownMessages(t *testing.T) {
+	e := newEnv(t, sender.Options{})
+	id := e.lostSend(e.topic(1), true)
+	e.start()
+	e.waitState(id, store.OutboxSent)
+	waitFor(t, "the note to go", func() bool { return len(e.visible()) == 2 })
+}
+
+// A message whose number rex-tg did not record could be the part: no second
+// send, the notice instead.
+func TestCheckStopsAtAnUnknownNumber(t *testing.T) {
+	e := newEnv(t, sender.Options{})
+	id := e.lostSend(e.topic(1), false)
+	e.start()
+	waitFor(t, "the notice", func() bool {
+		ms := e.visible()
+		return len(ms) == 2 && ms[1].Text == noticeText(id, 0)
+	})
+	if n := len(e.srv.Calls("sendMessage")); n != 1 {
+		t.Fatalf("sendMessage calls = %d, want only the note", n)
+	}
+}
+
+// A note that could not be sent (no network) is tried again later.
+func TestCheckWaitsForTheNetwork(t *testing.T) {
+	e := newEnv(t, sender.Options{})
+	th := e.topic(1)
+	id := e.enqueue(th, "k", store.FormatPlain, "hello")
+	e.srv.FailNext("sendMessage", 1, 500, "Internal Server Error", 0)
+	e.srv.FailNext("sendMessage", 2, 429, "Too Many Requests: retry after 1", 1) // the note waits
+	e.start()
+	e.waitState(id, store.OutboxSent)
+	waitFor(t, "the note to go", func() bool { return len(e.visible()) == 1 })
+}
+
+// /resend before the check: the part is sent, and no note is posted.
+func TestResendBeforeTheCheck(t *testing.T) {
+	e := newEnv(t, sender.Options{})
+	th := e.topic(1)
+	id := e.enqueue(th, "k", store.FormatPlain, "hello")
+	if _, err := e.st.ClaimPart(ctx, id, 0, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.st.MarkPartUnknown(ctx, id, 0); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := e.st.ResendUnknown(ctx, id); err != nil || n != 1 {
+		t.Fatalf("resend: %d %v", n, err)
+	}
+	if err := e.s.Recover(ctx); err != nil {
+		t.Fatal(err)
+	}
+	e.start()
+	e.waitState(id, store.OutboxSent)
+	time.Sleep(30 * time.Millisecond)
+	if n := len(e.srv.Calls("sendMessage")); n != 1 {
+		t.Fatalf("sendMessage calls = %d, want only the reply", n)
 	}
 }
 
@@ -275,15 +398,14 @@ func TestTimeoutIsUnknown(t *testing.T) {
 	e := newEnv(t, sender.Options{}, telegram.WithTimeout(200*time.Millisecond))
 	th := e.topic(1)
 	id := e.enqueue(th, "k", store.FormatPlain, "hello")
-	e.srv.Delay("sendMessage", 2*time.Second)
+	e.srv.Delay("sendMessage", 2*time.Second) // the fake drops a call whose client gave up
 	e.start()
-	waitFor(t, "first call", func() bool { return len(e.srv.Calls("sendMessage")) >= 1 })
+	e.event(sender.PartUnknown)
 	e.srv.Delay("sendMessage", 0)
-	e.waitState(id, store.OutboxUnknown)
-	waitFor(t, "notice", func() bool { return len(e.srv.Messages(chat)) == 1 })
-	time.Sleep(30 * time.Millisecond)
-	if n := len(e.srv.Messages(chat)); n != 1 {
-		t.Fatalf("messages = %d, want only the notice", n)
+	e.waitState(id, store.OutboxSent) // the check found that it never arrived
+	waitFor(t, "the note to go", func() bool { return len(e.visible()) == 1 })
+	if ms := e.visible(); ms[0].Text != "hello" {
+		t.Fatalf("messages = %+v", ms)
 	}
 }
 
@@ -586,7 +708,7 @@ func TestRecover(t *testing.T) {
 	e := newEnv(t, sender.Options{})
 	th := e.topic(1)
 	id := e.enqueue(th, "k", store.FormatPlain, "hello")
-	if ok, err := e.st.ClaimPart(ctx, id, 0); err != nil || !ok {
+	if ok, err := e.st.ClaimPart(ctx, id, 0, -1); err != nil || !ok {
 		t.Fatalf("claim: %v %v", ok, err)
 	}
 	if err := e.s.Recover(ctx); err != nil {
@@ -719,19 +841,17 @@ func TestRichOtherErrorsFollowPartRules(t *testing.T) {
 		t.Fatalf("sendDocument calls = %d, want 0", n)
 	}
 
-	// Unknown outcome: no fallback, part is unknown.
+	// Unknown outcome: no fallback; the check finds that it never arrived
+	// and sends it again as a rich message.
 	e = newEnv(t, sender.Options{})
 	th = e.topic(1)
 	id = e.enqueue(th, "k", store.FormatRich, "hello")
 	e.srv.FailNext("sendRichMessage", 1, 502, "Bad Gateway", 0)
 	e.start()
-	e.waitState(id, store.OutboxUnknown)
-	waitFor(t, "notice", func() bool { return len(e.srv.Messages(chat)) == 1 })
-	if got := e.srv.Messages(chat)[0].Text; got != noticeText(id, 0) {
-		t.Fatalf("message = %q, want the notice", got)
-	}
-	if n := len(e.srv.Calls("sendRichMessage")); n != 1 || len(e.srv.Calls("sendDocument")) != 0 {
-		t.Fatalf("rich calls = %d, want 1 and no fallback", n)
+	e.event(sender.PartUnknown)
+	e.waitState(id, store.OutboxSent)
+	if n := len(e.srv.Calls("sendRichMessage")); n != 2 || len(e.srv.Calls("sendDocument")) != 0 {
+		t.Fatalf("rich calls = %d, want 2 and no fallback", n)
 	}
 }
 
@@ -888,9 +1008,9 @@ func TestNoNoticeAboutANotice(t *testing.T) {
 	}
 }
 
-// The daemon's own notices (for example a reply to a command) get no
-// "may not have arrived" notice either.
-func TestNoNoticeAboutADaemonNotice(t *testing.T) {
+// The daemon's own notices (for example a reply to a command) are checked
+// like replies: one that did not arrive is sent again, with no notice.
+func TestDaemonNoticeIsCheckedLikeAReply(t *testing.T) {
 	e := newEnv(t, sender.Options{})
 	th := e.topic(1)
 	id, _, err := e.st.Enqueue(ctx, store.OutboxItem{ThreadID: th.ID, Key: "reply:42:resend", Kind: "notice",
@@ -900,9 +1020,9 @@ func TestNoNoticeAboutADaemonNotice(t *testing.T) {
 	}
 	e.srv.FailNext("sendMessage", 1, 500, "Internal Server Error", 0)
 	e.start()
-	e.waitState(id, store.OutboxUnknown)
-	time.Sleep(50 * time.Millisecond)
-	if n := len(e.srv.Calls("sendMessage")); n != 1 {
-		t.Fatalf("sendMessage calls = %d, want only the notice itself", n)
+	e.waitState(id, store.OutboxSent)
+	waitFor(t, "the note to go", func() bool { return len(e.visible()) == 1 })
+	if ms := e.visible(); !strings.Contains(ms[0].Text, "Sending 1 part") {
+		t.Fatalf("messages = %+v", ms)
 	}
 }

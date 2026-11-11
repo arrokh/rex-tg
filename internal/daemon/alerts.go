@@ -246,8 +246,11 @@ func (d *daemon) removeButtons(chatID, messageID int64) {
 }
 
 // answerAlert presses option idx of an alert (flow 5). It runs in a worker.
-// respond tells the user the result; isErr marks a refusal.
-func (d *daemon) answerAlert(alertID int64, idx int, respond func(text string, isErr bool)) {
+// tapped is the message whose button was pressed (0 for /approve and /deny):
+// a tap right after the alert was posted can come before the alert's message
+// id is saved, and the buttons must go all the same. respond tells the user
+// the result; isErr marks a refusal.
+func (d *daemon) answerAlert(alertID int64, idx int, tapped int64, respond func(text string, isErr bool)) {
 	ctx := d.ctx
 	// Claim the alert first: a second tap (or /approve) while the keys are
 	// being sent must not press them again.
@@ -284,10 +287,14 @@ func (d *daemon) answerAlert(alertID int64, idx int, respond func(text string, i
 		}
 		f.AlertMatches = screenHash(lastLines(screen, alertLines)) == al.ScreenHash
 	}
+	msg := al.TGMessageID
+	if msg == 0 {
+		msg = tapped
+	}
 	if ok, reason := inbound.Check(inbound.ActPromptAnswer, f); !ok {
 		if reason == inbound.ReasonAlertStale {
 			_ = d.st.SetAlertState(ctx, al.ID, store.AlertGone)
-			d.removeButtons(th.ChatID, al.TGMessageID)
+			d.removeButtons(th.ChatID, msg)
 			respond("This prompt is gone.", true)
 			d.emit(evAlertStale{th.ID}) // a newer prompt may show now
 			return
@@ -304,6 +311,6 @@ func (d *daemon) answerAlert(alertID int64, idx int, respond func(text string, i
 	if err := d.st.SetAlertState(ctx, al.ID, store.AlertAnswered); err != nil {
 		d.log.Warn("alert: save state", "err", err)
 	}
-	d.removeButtons(th.ChatID, al.TGMessageID)
+	d.removeButtons(th.ChatID, msg)
 	respond("Sent: "+opt.Label, false)
 }

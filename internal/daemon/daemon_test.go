@@ -502,25 +502,42 @@ func TestScreenCommand(t *testing.T) {
 	e.waitFor("a one-line screen", func() bool { return e.countText(thread, "line three") == 2 })
 }
 
-func TestResendAfterUnknownSend(t *testing.T) {
-	e, p, thread := piTopic(t, "pi-resend")
+// A reply whose send got no answer, and that Telegram never posted (seen
+// live while the connection to Telegram dropped): rex-tg checks the message
+// numbers, finds that it did not arrive, and sends it again by itself. It
+// arrives once, with no notice, and the short check note is deleted. Your
+// message in between counts as known: the daemon records every update.
+func TestUnknownReplyIsCheckedAndSentOnce(t *testing.T) {
+	e := newEnv(t)
+	e.seedOwner()
+	p := e.newPi("pi-resend")
+	p.User("start")
+	p.Final("ready")
+	opt := e.options()
+	opt.Timing.CheckDelay = 2 * time.Second // time for your message before the check
+	e.startWith(opt)
+	e.hookPi(p, "startup")
+	thread := e.openTopic()
+	e.waitText(thread, "ready")
 	p.User("go")
 	e.waitText(thread, "go")
 	e.waitText(thread, "⏱") // the progress message is out, so the next send is the answer
 	e.tg.FailNext("sendMessage", 1, 502, "bad gateway", 0)
 	p.Final("the lost answer")
-	notice := e.waitText(thread, "may not have arrived")
-	if e.hasText(thread, "the lost answer") {
-		t.Fatalf("the unknown part was sent again by itself")
-	}
-	var id int
-	if _, err := fmt.Sscanf(notice.Text[strings.Index(notice.Text, "reply #")+len("reply #"):], "%d", &id); err != nil {
-		t.Fatalf("no outbox id in %q", notice.Text)
-	}
-	e.say(thread, fmt.Sprintf("/resend %d", id))
+	e.waitFor("the unknown answer", func() bool {
+		for id := int64(1); id < 40; id++ {
+			if row, err := e.peek().OutboxRow(context.Background(), id); err == nil && row.Kind == "answer" && row.State == store.OutboxUnknown {
+				return true
+			}
+		}
+		return false
+	})
+	e.say(thread, "are you there?")
 	e.waitText(thread, "the lost answer")
-	e.waitText(thread, "again")
-	e.never("a second copy", 500*time.Millisecond, func() bool { return e.countText(thread, "the lost answer") > 1 })
+	e.waitFor("the check note to go", func() bool { return !e.hasText(thread, "Checking whether it arrived") })
+	e.never("a second copy or a notice", 500*time.Millisecond, func() bool {
+		return e.countText(thread, "the lost answer") > 1 || e.hasText(thread, "may not have arrived")
+	})
 }
 
 func TestPauseAndUnpause(t *testing.T) {
@@ -678,6 +695,10 @@ func TestTakeOverAfterClear(t *testing.T) {
 	e.waitText(thread, "later answer")
 }
 
+// A crash left a reply in "sending" and a message in "typing". The reply was
+// claimed by an older version, which recorded no message number, so it cannot
+// be checked: it gets the notice and waits for /resend. The typed message is
+// never typed again. (TestRestartChecksAReplyLeftInSending has the check.)
 func TestRestartRecovery(t *testing.T) {
 	e := newEnv(t)
 	e.seedOwner()
@@ -708,7 +729,7 @@ func TestRestartRecovery(t *testing.T) {
 		if err != nil || len(parts) != 1 {
 			t.Fatalf("NextParts = %v, %v", parts, err)
 		}
-		if ok, err := st.ClaimPart(ctx, parts[0].OutboxID, parts[0].Part); err != nil || !ok {
+		if ok, err := st.ClaimPart(ctx, parts[0].OutboxID, parts[0].Part, -1); err != nil || !ok {
 			t.Fatalf("ClaimPart = %v, %v", ok, err)
 		}
 		ok, err := st.InsertInbound(ctx, store.Inbound{UpdateID: 7001, ChatID: chatID, MessageThreadID: ft.MessageThreadID, TGMessageID: 5,
@@ -749,6 +770,51 @@ func TestRestartRecovery(t *testing.T) {
 	if len(e.pastes()) != 0 || len(e.keys()) != 0 {
 		t.Errorf("recovery typed into a pane: %v %v", e.pastes(), e.keys())
 	}
+}
+
+// A crash left a reply in "sending", claimed with the newest message number
+// known then. After the restart, rex-tg checks it: Telegram never posted it,
+// so it is sent once, with no notice.
+func TestRestartChecksAReplyLeftInSending(t *testing.T) {
+	e := newEnv(t)
+	e.seedOwner()
+	ctx := context.Background()
+	ft, err := e.tg.Client().CreateForumTopic(ctx, chatID, "pi · proj")
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.withStore(func(st *store.Store) {
+		conv, err := st.UpsertConversation(ctx, store.Conversation{
+			Runtime: "pi", NativeID: "pi-rec2", Transcript: filepath.Join(e.home, "none.jsonl"), CWD: paneCWD, FirstSeenAt: time.Now(),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		th, err := st.LinkTopic(ctx, chatID, ft.MessageThreadID, conv.ID, "pi · proj", time.Now())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := st.Enqueue(ctx, store.OutboxItem{ThreadID: th.ID, Key: "answer:half", Kind: "answer",
+			Parts: []store.PartContent{{Content: "half sent answer", Format: store.FormatHTML}}}); err != nil {
+			t.Fatal(err)
+		}
+		parts, err := st.NextParts(ctx)
+		if err != nil || len(parts) != 1 {
+			t.Fatalf("NextParts = %v, %v", parts, err)
+		}
+		// The running daemon knew the topic's own message, the newest one.
+		if err := st.NoteMessage(ctx, chatID, ft.MessageThreadID, time.Now()); err != nil {
+			t.Fatal(err)
+		}
+		if ok, err := st.ClaimPart(ctx, parts[0].OutboxID, parts[0].Part, ft.MessageThreadID); err != nil || !ok {
+			t.Fatalf("ClaimPart = %v, %v", ok, err)
+		}
+	})
+	e.start()
+	e.waitText(ft.MessageThreadID, "half sent answer")
+	e.never("a notice or a second copy", 500*time.Millisecond, func() bool {
+		return e.hasText(ft.MessageThreadID, "may not have arrived") || e.countText(ft.MessageThreadID, "half sent answer") > 1
+	})
 }
 
 // working makes the pane busy: a prompt line that no answer follows.
@@ -1652,9 +1718,10 @@ func TestProgressEditsAreSpacedByTheInterval(t *testing.T) {
 		t.Fatalf("only %d edits of the progress message", len(times))
 	}
 	for i := 1; i < len(times); i++ {
-		// The fake server sees arrival times, which jitter under load; a
-		// broken spacing would show gaps of one tick (20 ms).
-		if gap := times[i].Sub(times[i-1]); gap < 350*time.Millisecond {
+		// The fake server sees arrival times, which jitter under load: a late
+		// edit shortens the next gap (seen: 300 ms with the race detector).
+		// A broken spacing would show gaps of one tick (20 ms).
+		if gap := times[i].Sub(times[i-1]); gap < 200*time.Millisecond {
 			t.Errorf("edit %d came %v after the one before; want about 500ms", i, gap)
 		}
 	}
@@ -2203,7 +2270,7 @@ func TestFollowerStartsAgainAfterAReadError(t *testing.T) {
 // tap sends it again, and the button goes away.
 func TestLostReplyIsSentAgainWithOneTap(t *testing.T) {
 	e, p, thread := piTopic(t, "pi-lost-reply")
-	e.tg.FailNext("sendMessage", 1, 502, "Bad Gateway", 0) // the outcome is unknown
+	e.tg.LoseAnswerNext("sendMessage", 1) // posted, but the answer is lost: the outcome is unknown
 	p.Final("the lost answer")
 	notice := e.waitText(thread, "may not have arrived")
 	if strings.Contains(notice.Text, "/resend") {
@@ -2213,20 +2280,26 @@ func TestLostReplyIsSentAgainWithOneTap(t *testing.T) {
 	if data == "" {
 		t.Fatalf("no Send again button: %+v", notice.Markup)
 	}
+	if e.countText(thread, "the lost answer") != 1 {
+		t.Fatal("the reply that may have arrived was sent again without a tap")
+	}
 	e.pressButton(notice, data)
 	e.waitText(thread, "Sending 1 part(s)")
-	e.waitFor("the answer, sent again", func() bool { return e.hasText(thread, "the lost answer") })
+	e.waitFor("the answer, sent again", func() bool { return e.countText(thread, "the lost answer") == 2 })
 	e.waitFor("the button removed", func() bool { m, _ := e.message(notice.ID); return m.Markup == nil })
 }
 
 // /resend without an id sends the newest reply that may not have arrived, and
-// the id of a notice stands for the reply that it is about.
+// the id of a notice stands for the reply that it is about. Here the check
+// cannot post its note three times, so the reply gets a notice of its own.
+// The answer goes out as a rich message, so only the notes fail.
 func TestResendWithoutIDOrWithANoticeID(t *testing.T) {
-	e, p, thread := piTopic(t, "pi-resend-ids")
-	e.tg.FailNext("sendMessage", 2, 502, "Bad Gateway", 0) // the answer and its notice
+	e, p, thread := piTopicCfg(t, "pi-resend-ids", func(e *env) { e.cfg.Display.RichMessages = true })
+	e.tg.LoseAnswerNext("sendRichMessage", 1)              // the answer may have arrived
+	e.tg.FailNext("sendMessage", 3, 502, "Bad Gateway", 0) // the three check notes
 	p.Final("first lost answer")
 	var answerID, noticeID int64
-	e.waitFor("the answer and its notice, both unknown", func() bool {
+	e.waitFor("the notice of the answer", func() bool {
 		for id := int64(1); id < 40; id++ {
 			row, err := e.peek().OutboxRow(context.Background(), id)
 			if err != nil {
@@ -2235,13 +2308,13 @@ func TestResendWithoutIDOrWithANoticeID(t *testing.T) {
 			switch {
 			case row.Kind == "answer" && row.State == store.OutboxUnknown:
 				answerID = id
-			case strings.HasPrefix(row.Key, "notice:unknown:") && row.State == store.OutboxUnknown:
+			case strings.HasPrefix(row.Key, "notice:unknown:") && row.State == store.OutboxSent:
 				noticeID = id
 			}
 		}
 		return answerID != 0 && noticeID != 0
 	})
-	e.never("a notice about the notice", 400*time.Millisecond, func() bool { return e.hasText(thread, "may not have arrived") })
+	e.never("a notice about the notice", 400*time.Millisecond, func() bool { return e.countText(thread, "may not have arrived") > 1 })
 
 	e.say(thread, fmt.Sprintf("/resend %d", noticeID))
 	e.waitText(thread, fmt.Sprintf("Sending 1 part(s) of #%d again", answerID))

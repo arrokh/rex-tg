@@ -142,6 +142,7 @@ var testTiming = daemon.Timing{
 	Typing:       500 * time.Millisecond,
 	NewAgentWait: 3 * time.Second,
 	NewAgentPoll: 50 * time.Millisecond,
+	CheckDelay:   100 * time.Millisecond,
 }
 
 // start runs the daemon in a goroutine.

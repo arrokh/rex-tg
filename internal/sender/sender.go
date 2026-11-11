@@ -101,6 +101,9 @@ type Options struct {
 	Sleep func(ctx context.Context, d time.Duration) error
 	// Logger receives diagnostics, never message text (nil discards).
 	Logger *slog.Logger
+	// CheckDelay is how long after a part's unknown outcome its arrival is
+	// checked (default 60 s; see checkPart).
+	CheckDelay time.Duration
 }
 
 const (
@@ -113,11 +116,12 @@ const (
 
 // Sender writes to Telegram.
 type Sender struct {
-	st    *store.Store
-	tg    *telegram.Client
-	now   func() time.Time
-	sleep func(ctx context.Context, d time.Duration) error
-	log   *slog.Logger
+	st         *store.Store
+	tg         *telegram.Client
+	now        func() time.Time
+	sleep      func(ctx context.Context, d time.Duration) error
+	log        *slog.Logger
+	checkDelay time.Duration
 
 	events chan Event
 	wake   chan struct{}
@@ -159,8 +163,11 @@ func New(st *store.Store, tg *telegram.Client, opt Options) *Sender {
 	if opt.Logger == nil {
 		opt.Logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
+	if opt.CheckDelay <= 0 {
+		opt.CheckDelay = 60 * time.Second
+	}
 	return &Sender{
-		st: st, tg: tg, now: opt.Now, sleep: opt.Sleep, log: opt.Logger,
+		st: st, tg: tg, now: opt.Now, sleep: opt.Sleep, log: opt.Logger, checkDelay: opt.CheckDelay,
 		events:    make(chan Event, eventBufSize),
 		wake:      make(chan struct{}, 1),
 		bucket:    newBucket(opt.RatePerSecond, opt.Burst, opt.Now()),

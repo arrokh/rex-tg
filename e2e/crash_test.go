@@ -331,26 +331,46 @@ func TestCrashDuringSend(t *testing.T) {
 	e.tg.Delay("sendMessage", 0)
 	e.start()
 
-	// The user hears at most once that the answer may be missing, and the
-	// daemon never sends it a second time by itself.
-	eventually(t, 20*time.Second, "the notice or the answer after the restart", func() bool {
-		return e.noticeCount() > 0 || e.count(e.thread, "the held answer") > 0
+	// The request died with the daemon, so Telegram never posted the answer.
+	// After the restart, the check of the chat's message numbers shows that,
+	// and the answer is sent once more: it is in the chat once, with no notice.
+	eventually(t, 20*time.Second, "the answer after the restart", func() bool {
+		return e.count(e.thread, "the held answer") > 0
 	})
 	time.Sleep(3 * time.Second)
-	if n := e.count(e.thread, "the held answer"); n > 1 {
-		t.Errorf("the answer was posted %d times, want at most 1", n)
+	if n := e.count(e.thread, "the held answer"); n != 1 {
+		t.Errorf("the answer was posted %d times, want 1", n)
 	}
-	if n := e.noticeCount(); n > 1 {
-		t.Errorf("%d \"may not have arrived\" notices, want at most 1", n)
+	if n := e.noticeCount(); n != 0 {
+		t.Errorf("%d \"may not have arrived\" notices, want none", n)
 	}
-	sent := 0
-	for _, c := range e.tg.Calls("sendMessage") {
-		if s, _ := c.Params["text"].(string); strings.Contains(s, "the held answer") {
-			sent++
-		}
+}
+
+// (a2) kill -9 after Telegram posted the answer, before it answered: the
+// answer is in the chat, but the daemon never learned it. After the restart,
+// the check finds a message number that rex-tg does not know, so it never
+// sends the answer again by itself: one notice says it may be missing.
+func TestCrashAfterTelegramPostedTheAnswer(t *testing.T) {
+	t.Parallel()
+	e := newCrashEnv(t)
+	e.openTopic()
+
+	e.tg.DelayAnswer("sendMessage", 30*time.Second)
+	e.final("the posted answer")
+	eventually(t, 20*time.Second, "the answer to be posted", func() bool {
+		return e.count(e.thread, "the posted answer") > 0
+	})
+	e.kill()
+	e.tg.DelayAnswer("sendMessage", 0)
+	e.start()
+
+	eventually(t, 20*time.Second, "the notice after the restart", func() bool { return e.noticeCount() > 0 })
+	time.Sleep(3 * time.Second)
+	if n := e.count(e.thread, "the posted answer"); n != 1 {
+		t.Errorf("the answer was posted %d times, want 1", n)
 	}
-	if sent > 1 {
-		t.Errorf("the daemon sent the answer %d times, want 1 request", sent)
+	if n := e.noticeCount(); n != 1 {
+		t.Errorf("%d \"may not have arrived\" notices, want 1", n)
 	}
 }
 

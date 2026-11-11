@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -830,5 +831,49 @@ func TestTLSHandshakeTimeoutIsNotSent(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "SECRET") {
 		t.Fatalf("the token is in the error: %v", err)
+	}
+}
+
+// OnMessage gets the number of every message that the bot sends and of
+// every message in an update; a send without an answer reports none.
+func TestOnMessageReportsEveryMessageNumber(t *testing.T) {
+	s, c := setup(t)
+	var mu sync.Mutex
+	var got []int64
+	c.OnMessage(func(chatID, messageID int64) {
+		mu.Lock()
+		defer mu.Unlock()
+		if chatID == 7 {
+			got = append(got, messageID)
+		}
+	})
+	ctx := context.Background()
+	m, err := c.SendMessage(ctx, telegram.SendMessageParams{ChatID: 7, Text: "a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.FailNext("sendMessage", 1, 502, "Bad Gateway", 0)
+	if _, err := c.SendMessage(ctx, telegram.SendMessageParams{ChatID: 7, Text: "b"}); err == nil {
+		t.Fatal("want an error")
+	}
+	d, err := c.SendDocument(ctx, 7, 0, "f.md", []byte("x"), "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	u := s.PushMessage(7, 0, 9, "from the user")
+	if _, err := c.GetUpdates(ctx, 0, 0, nil); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if want := []int64{m.MessageID, d.MessageID, u.Message.MessageID}; !slices.Equal(got, want) {
+		t.Fatalf("numbers %v, want %v", got, want)
+	}
+	c.OnMessage(nil) // removed: no more calls
+	if _, err := c.SendMessage(ctx, telegram.SendMessageParams{ChatID: 7, Text: "c"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("numbers after removal: %v", got)
 	}
 }
