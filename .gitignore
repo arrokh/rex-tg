@@ -1,0 +1,15 @@
+# Build output
+/bin/
+/dist/
+
+# Local state and test artifacts
+*.db
+*.db-shm
+*.db-wal
+*.test
+/coverage.out
+
+# Editor and OS files
+.DS_Store
+.idea/
+.vscode/
