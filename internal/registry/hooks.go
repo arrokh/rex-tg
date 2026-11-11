@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"rex-tg/internal/agents"
@@ -162,11 +164,19 @@ func (r *Registry) hookSession(ctx context.Context, rt agents.Runtime, event str
 		}
 		s := session{ID: p.SessionID, Transcript: p.SessionFile, CWD: p.CWD}
 		if s.ID == "" {
-			h, err := r.readHeader(rt, p.SessionFile)
-			if err != nil || h.SessionID == "" {
-				return session{}, "", false // pi writes the file at the first prompt
+			if h, err := r.readHeader(rt, p.SessionFile); err == nil && h.SessionID != "" {
+				s.ID, s.CWD, s.Title, s.Started = h.SessionID, firstNonEmpty(s.CWD, h.CWD), h.Title, h.StartedAt
+			} else {
+				// pi writes the file at the first prompt: use <time>_<id>.jsonl.
+				name := strings.TrimSuffix(filepath.Base(p.SessionFile), ".jsonl")
+				if i := strings.LastIndex(name, "_"); i >= 0 {
+					name = name[i+1:]
+				}
+				s.ID = name
 			}
-			s.ID, s.CWD, s.Title, s.Started = h.SessionID, firstNonEmpty(s.CWD, h.CWD), h.Title, h.StartedAt
+			if s.ID == "" {
+				return session{}, "", false
+			}
 		}
 		source := ""
 		if event == "session_start" {

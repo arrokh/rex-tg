@@ -2,10 +2,13 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
+	"sort"
+	"strings"
 	"syscall"
 
 	"rex-tg/internal/install"
@@ -81,6 +84,7 @@ func doctorCmd(ctx context.Context, args []string, env Env) int {
 		} else {
 			d.bad("no owner paired (run `rex-tg pair`)")
 		}
+		unknownTypesLines(ctx, d, st)
 		_ = st.Close()
 	}
 
@@ -171,4 +175,44 @@ func lockHeld(path string) (bool, error) {
 	}
 	_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
 	return false, nil
+}
+
+// unknownTypesLines reports unknown transcript line types that the daemon
+// recorded in KV key unknown_line_types.
+func unknownTypesLines(ctx context.Context, d *doctorOut, st *store.Store) {
+	v, ok, err := st.Get(ctx, "unknown_line_types")
+	var m map[string]map[string]int
+	if err == nil && ok && v != "" {
+		_ = json.Unmarshal([]byte(v), &m)
+	}
+	found := false
+	for _, rt := range []string{"pi", "claude", "codex"} {
+		types := m[rt]
+		if len(types) == 0 {
+			continue
+		}
+		found = true
+		names := make([]string, 0, len(types))
+		for n := range types {
+			names = append(names, n)
+		}
+		sort.Slice(names, func(i, j int) bool {
+			if types[names[i]] != types[names[j]] {
+				return types[names[i]] > types[names[j]]
+			}
+			return names[i] < names[j]
+		})
+		parts := make([]string, 0, 5)
+		for i, n := range names {
+			if i == 4 {
+				parts = append(parts, "…")
+				break
+			}
+			parts = append(parts, fmt.Sprintf("%s ×%d", n, types[n]))
+		}
+		d.warn("%s: %d unknown line types (%s)", rt, len(types), strings.Join(parts, ", "))
+	}
+	if !found {
+		d.ok("transcript formats: no unknown line types")
+	}
 }

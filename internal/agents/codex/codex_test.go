@@ -219,7 +219,7 @@ func TestParseLineEdgeCases(t *testing.T) {
 		t.Error("malformed: want error")
 	}
 	for _, l := range []string{
-		`{}`, `{"type":"future"}`, `{"type":"response_item"}`,
+		`{}`, `{"type":"response_item"}`,
 		`{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"x"}]}}`,
 		`{"type":"response_item","payload":{"type":"message","role":"assistant","content":[]}}`,
 		`{"type":"event_msg","payload":{"type":"item_completed","item":{"type":"AgentMessage","content":[{"type":"text","text":"dup"}]}}}`,
@@ -314,5 +314,19 @@ func TestTranscriptCandidates(t *testing.T) {
 	}
 	if none, err := a.TranscriptCandidates(t.TempDir(), cwd, time.Time{}); err != nil || len(none) != 0 {
 		t.Errorf("empty home: %v %v", none, err)
+	}
+}
+
+func TestUnknownTypes(t *testing.T) {
+	cases := []struct{ line, want string }{
+		{`{"type":"future"}`, "future"},
+		{`{"type":"event_msg","payload":{"type":"new_thing"}}`, "event_msg/new_thing"},
+		{`{"type":"response_item","payload":{"type":"new_item"}}`, "response_item/new_item"},
+	}
+	for _, c := range cases {
+		evs, err := codex.New().ParseLine([]byte(c.line), agents.LineContext{SessionID: "S"})
+		if err != nil || len(evs) != 1 || evs[0].Kind != agents.KindUnknown || evs[0].Text != c.want || evs[0].Key != "" {
+			t.Errorf("%s: %+v %v", c.line, evs, err)
+		}
 	}
 }

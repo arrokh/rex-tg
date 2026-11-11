@@ -32,7 +32,7 @@ const (
 func (d *daemon) media(u telegram.Update, m *telegram.Message, th store.Thread) {
 	switch {
 	case len(m.Photo) > 0 || m.Document != nil:
-		if !d.record(u, m, "file", "", th.ID, store.InboundDone) {
+		if !d.recorded(u, m, "file", "", th.ID, store.InboundDone) {
 			return
 		}
 		fileID, name, size := fileOf(m)
@@ -59,7 +59,7 @@ func (d *daemon) media(u telegram.Update, m *telegram.Message, th store.Thread) 
 			d.emit(evQueueText{threadID: th.ID, orig: update, tgMsg: msg, text: text, kind: "file", action: inbound.ActText})
 		})
 	case m.Voice != nil || m.Audio != nil:
-		if !d.record(u, m, "voice", "", th.ID, store.InboundDone) {
+		if !d.recorded(u, m, "voice", "", th.ID, store.InboundDone) {
 			return
 		}
 		if d.cfg.Voice.WhisperCLI == "" || d.cfg.Voice.Model == "" {
@@ -88,7 +88,7 @@ func (d *daemon) media(u telegram.Update, m *telegram.Message, th store.Thread) 
 			d.emit(evQueueText{threadID: th.ID, orig: update, tgMsg: msg, text: text, kind: "voice", action: inbound.ActText})
 		})
 	default:
-		if d.record(u, m, "other", "", th.ID, store.InboundDone) {
+		if d.recorded(u, m, "other", "", th.ID, store.InboundDone) {
 			d.replyTopic(th, fmt.Sprintf("other:%d", u.UpdateID), onlyTextText)
 		}
 	}

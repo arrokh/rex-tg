@@ -121,8 +121,12 @@ func (adapter) ParseLine(raw []byte, ctx agents.LineContext) ([]agents.Event, er
 	if err := json.Unmarshal(raw, &l); err != nil {
 		return nil, fmt.Errorf("codex: decode line: %w", err)
 	}
-	if l.Type != "response_item" && l.Type != "event_msg" {
+	switch l.Type {
+	case "response_item", "event_msg":
+	case "", "session_meta", "turn_context", "token_usage_record", "world_state", "compacted":
 		return nil, nil
+	default:
+		return unknown(l.Type), nil
 	}
 	if len(bytes.TrimSpace(l.Payload)) == 0 {
 		return nil, nil
@@ -158,8 +162,11 @@ func (adapter) ParseLine(raw []byte, ctx agents.LineContext) ([]agents.Event, er
 				k.base = agents.Key(agents.Codex, ctx.SessionID, "turn-end:"+p.TurnID)
 			}
 			return []agents.Event{{Kind: agents.TurnEnd, Key: k.next(), At: at}}, nil
+		case "", "task_started", "token_count", "thread_settings_applied", "user_message",
+			"agent_message", "agent_reasoning", "context_compacted", "exec_command_end", "turn_diff":
+			return nil, nil
 		}
-		return nil, nil
+		return unknown(l.Type + "/" + p.Type), nil
 	}
 
 	k := keyFor(p.ID)
@@ -196,8 +203,10 @@ func (adapter) ParseLine(raw []byte, ctx agents.LineContext) ([]agents.Event, er
 		return []agents.Event{{Kind: agents.ToolResult, Key: k.next(), At: at, Tool: &agents.Tool{
 			CallID: p.CallID, OK: ok, Took: took, Output: truncateBytes(text, agents.MaxToolOutput),
 		}}}, nil
+	case "", "web_search_call", "ghost_snapshot", "compaction":
+		return nil, nil
 	}
-	return nil, nil
+	return unknown(l.Type + "/" + p.Type), nil
 }
 
 // joinText joins the text blocks (input_text, output_text, text) of content.
@@ -530,4 +539,8 @@ func relPath(p, cwd string) string {
 		return p[len(base)+1:]
 	}
 	return p
+}
+
+func unknown(name string) []agents.Event {
+	return []agents.Event{{Kind: agents.KindUnknown, Text: name}}
 }

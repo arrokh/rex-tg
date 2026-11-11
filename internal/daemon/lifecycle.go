@@ -169,16 +169,17 @@ func (d *daemon) pollLoop(ctx context.Context) {
 			continue
 		}
 		done := make(chan struct{})
-		d.emit(evUpdates{ups: ups, done: done})
+		var next int64
+		d.emit(evUpdates{ups: ups, next: &next, done: done})
 		select {
 		case <-done:
 		case <-ctx.Done():
 			return
 		}
-		for _, u := range ups {
-			if u.UpdateID >= offset {
-				offset = u.UpdateID + 1
-			}
+		if next > offset {
+			offset = next
+		} else if !sleepCtx(ctx, time.Second) { // nothing was stored; try again later
+			return
 		}
 	}
 }
@@ -199,7 +200,7 @@ func sleepCtx(ctx context.Context, d time.Duration) bool {
 func (d *daemon) rexEventLoop(ctx context.Context) {
 	backoff := time.Second
 	for ctx.Err() == nil {
-		started := time.Now()
+		started := d.now()
 		evs, errs := d.rx.Events(ctx)
 		for ev := range evs {
 			ev := ev
@@ -226,7 +227,7 @@ func (d *daemon) rexEventLoop(ctx context.Context) {
 		if ctx.Err() != nil {
 			return
 		}
-		if time.Since(started) > 30*time.Second {
+		if d.now().Sub(started) > 30*time.Second {
 			backoff = time.Second
 		}
 		if !sleepCtx(ctx, backoff) {

@@ -371,3 +371,8 @@ func (s *Store) OutboxRow(ctx context.Context, id int64) (OutboxRow, error) {
 	}
 	return r, nil
 }
+
+// UnknownParts returns every outbox part in state unknown, oldest first.
+func (s *Store) UnknownParts(ctx context.Context) ([]Part, error) {
+	return queryParts(ctx, s.db, `WHERE p.state='unknown' ORDER BY o.id, p.part`)
+}

@@ -216,7 +216,7 @@ func TestParseLineEdgeCases(t *testing.T) {
 		t.Error("malformed: want error")
 	}
 	for _, l := range []string{
-		`{}`, `{"type":"future","uuid":"1"}`, `{"type":"user","uuid":"1"}`,
+		`{}`, `{"type":"user","uuid":"1"}`,
 		`{"type":"user","uuid":"1","message":"string"}`,
 		`{"type":"assistant","uuid":"1","message":{"content":[{"type":"text","text":"  "}]}}`,
 	} {
@@ -323,5 +323,25 @@ func TestTranscriptCandidates(t *testing.T) {
 	write(filepath.Join(w2, "s.jsonl"), now)
 	if got, _ := a.TranscriptCandidates(home, "/Users/me/my proj_v1.2", time.Time{}); len(got) != 1 {
 		t.Errorf("name encoding: %v", got)
+	}
+}
+
+func TestUnknownTypes(t *testing.T) {
+	cases := []struct{ line, want string }{
+		{`{"type":"future","uuid":"1"}`, "future"},
+	}
+	for _, c := range cases {
+		evs, err := claude.New().ParseLine([]byte(c.line), agents.LineContext{SessionID: "S"})
+		if err != nil || len(evs) != 1 || evs[0].Kind != agents.KindUnknown || evs[0].Text != c.want || evs[0].Key != "" {
+			t.Errorf("%s: %+v %v", c.line, evs, err)
+		}
+	}
+}
+
+func TestUnknownBlockIgnored(t *testing.T) {
+	line := `{"type":"assistant","uuid":"a","message":{"content":[{"type":"new_block","x":1}]}}`
+	evs, err := claude.New().ParseLine([]byte(line), agents.LineContext{SessionID: "S"})
+	if err != nil || len(evs) != 0 {
+		t.Errorf("%+v %v", evs, err)
 	}
 }

@@ -38,6 +38,7 @@ const (
 type (
 	evUpdates struct {
 		ups  []telegram.Update
+		next *int64 // set before done is closed: the offset to poll from
 		done chan struct{}
 	}
 	evBatch struct {
@@ -65,6 +66,7 @@ type (
 		chatID, threadID int64
 		name             string
 		convID           int64
+		title            string
 	}
 	// evQueueText asks the core to queue text for typing (media, voice, force).
 	evQueueText struct {
@@ -73,6 +75,8 @@ type (
 		action                inbound.Action
 	}
 	evOpenDone  struct{ paneID int64 }
+	evTailScan  tailScan
+	evRestart   struct{ conv int64 }
 	evAlertDone struct{ threadID int64 }
 	evFatal     struct{ err error }
 )
@@ -98,16 +102,19 @@ type daemon struct {
 	regq   *jobQueue
 
 	paused    atomic.Bool
-	botUser   string // set before the workers start
+	answering sync.Map // alert ids whose answer is being sent
+	botUser   string   // set before the workers start
 	scanQueue atomic.Bool
 
 	// core
 	ownerUser, ownerChat int64
 	tailers              map[int64]*tailer       // by conversation
+	pending              map[int64]pendingTail   // tailers waiting for their first scan, by conversation
 	trackers             map[int64]*turn.Tracker // by thread
 	snaps                map[int64]string        // last saved tracker snapshot
 	joiner               *inbound.Joiner
-	joining              map[int64]int64 // update id -> Telegram message id, while in the joiner
+	joining              map[int64]int64   // update id -> Telegram message id, while in the joiner
+	extra                map[int64][]int64 // joined row -> Telegram messages that get its reactions too
 	actions              map[int64]inbound.Action
 	dirty                map[int64]bool // threads that may have queued messages
 	busy                 map[int64]bool // threads with a delivery in progress
@@ -119,7 +126,9 @@ type daemon struct {
 	lastThread           int64
 	lastScan, lastHouse  time.Time
 	gen                  int
+	unknown              unknownCounts
 	fatal                error
+	storeErr             error // set while handling an update that could not be stored
 }
 
 func newDaemon(cfg config.Config, home string, log *slog.Logger, now func() time.Time, st *store.Store,
@@ -132,9 +141,11 @@ func newDaemon(cfg config.Config, home string, log *slog.Logger, now func() time
 		events:      make(chan any, 256),
 		regq:        newJobQueue(),
 		tailers:     map[int64]*tailer{},
+		pending:     map[int64]pendingTail{},
 		trackers:    map[int64]*turn.Tracker{},
 		snaps:       map[int64]string{},
 		joining:     map[int64]int64{},
+		extra:       map[int64][]int64{},
 		actions:     map[int64]inbound.Action{},
 		dirty:       map[int64]bool{},
 		busy:        map[int64]bool{},
@@ -191,6 +202,7 @@ func (d *daemon) run(parent context.Context) error {
 	defer func() {
 		cancel()
 		d.stopAllTailers()
+		d.flushUnknown(context.Background())
 		d.wg.Wait()
 	}()
 
@@ -250,6 +262,10 @@ func (d *daemon) handle(ev any) {
 		d.onTopicCreated(e)
 	case evQueueText:
 		d.queueText(e.threadID, e.orig, e.tgMsg, e.text, e.kind, e.action)
+	case evTailScan:
+		d.onTailScan(e)
+	case evRestart:
+		d.restartTailer(e.conv)
 	case evOpenDone:
 		delete(d.opening, e.paneID)
 	case evAlertDone:
@@ -286,6 +302,7 @@ func (d *daemon) tick() {
 		d.lastScan = now
 		d.requestScan()
 	}
+	d.maybeFlushUnknown(now)
 	if now.Sub(d.lastHouse) >= 24*time.Hour {
 		d.lastHouse = now
 		d.spawn(func() { d.housekeeping(now) })
@@ -337,9 +354,30 @@ func (d *daemon) closeThread(threadID int64) {
 			d.stopTailer(conv, false)
 		}
 	}
+	for conv, p := range d.pending {
+		if p.thread == threadID {
+			delete(d.pending, conv)
+		}
+	}
+	d.closeAlerts(th, store.AlertGone)
+	// Messages that still wait for this topic can never be typed.
+	if qs, err := d.st.QueuedInbound(d.ctx, threadID); err == nil {
+		for _, q := range qs {
+			if err := d.st.SetInboundState(d.ctx, q.UpdateID, store.InboundRefused, "topic closed", d.now()); err != nil {
+				d.log.Warn("close topic: refuse queued message", "err", err)
+			}
+			delete(d.actions, q.UpdateID)
+			delete(d.waitNoticed, q.UpdateID)
+			delete(d.extra, q.UpdateID)
+		}
+	}
 	delete(d.trackers, threadID)
 	delete(d.snaps, threadID)
 	delete(d.dirty, threadID)
+	delete(d.busy, threadID)
+	delete(d.nextPrep, threadID)
+	delete(d.alertBusy, threadID)
+	delete(d.delivering, threadID)
 }
 
 // --- small helpers shared by the files ---

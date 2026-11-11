@@ -501,11 +501,24 @@ Write here to type into the pane. /help lists the commands.
 
 | Message | Answer |
 | --- | --- |
-| Photo, file, voice note, sticker | "Only text is supported for now." |
+| Sticker, video, or another kind not listed in 8.9 | "Only text is supported for now." |
+| A voice note when voice notes are not set up (8.9) | "Voice notes need whisper.cpp; see the README." |
 | An edited message | "Edits are not sent to the agent." The edit is ignored. |
 | A message in a topic that rex-tg did not create, or in a `closed` topic | "This topic is not linked. Use /agents in the main chat." |
 | A reply to a bot message | Only your text is sent. The quoted message is not. |
 | A message from anyone but the owner | No answer. |
+
+### 8.9 Optional features (Phase 6)
+
+These features are built. Some are off until you set them up.
+
+| Feature | How it works | Default |
+| --- | --- | --- |
+| Photos and files | rex-tg downloads a photo or document, up to `[input] max_upload_mb` (20 MB, the Bot API limit), to `~/.local/state/rex-tg/uploads/<topic>/`, with mode 0600. Then it types the file's path, after the caption if there is one, like a text message. The agents read image and file paths from the prompt. Uploads older than 7 days are deleted. | On |
+| Voice notes | rex-tg downloads the voice note, converts it to 16 kHz mono WAV with ffmpeg, and runs `whisper_cli -m <model> -l <language> -nt -np -f <wav>`. It posts "🎤 <text>" in the topic and types the text like a text message. | Off until `[voice] whisper_cli` and `model` are set |
+| Rich messages | Final answers of up to 32768 characters go out with `sendRichMessage` (Bot API 10.1) as Markdown, so Telegram renders tables, code, and headings itself. On a 400 error, rex-tg sends the same text as plain text, or as a `.md` file when it is longer than 4000 characters. This is safe for "at most once", because Telegram posted nothing. | Off (`[display] rich_messages`) |
+| `/pause`, `/unpause` | In the main chat. `/pause` stops all typing into panes, for every topic, until `/unpause`. Outgoing messages continue. The flag survives a restart. | Not paused |
+| `/mute`, `/unmute` | In a topic. Muted topics send every message without sound. | Not muted |
 
 ## 9. Delivery rules
 
@@ -896,7 +909,7 @@ testdata/<runtime>/*.jsonl  synthetic transcripts only
 | Another program polls with the same token | Telegram answers 409. | Polling stops, and `rex-tg doctor` reports it. |
 | A line is not complete yet | A half line is at the end of the file. | The tailer reads only up to the last newline. |
 | A transcript line is very large | Tool output or images can be megabytes. | The tailer reads line by line and skips lines over a size limit after reading their type. |
-| Agent format changes | The adapter does not know the new line types. | They are ignored and counted. `rex-tg doctor` reports unknown types per runtime and version. |
+| Agent format changes | The adapter does not know the new line types. | Each adapter returns a `KindUnknown` event with the type name. The daemon counts them per runtime in KV key `unknown_line_types`, and `rex-tg doctor` shows them as warnings. |
 
 ## 14. Evidence and assumptions
 

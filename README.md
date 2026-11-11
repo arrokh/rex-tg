@@ -13,7 +13,7 @@ rex-tg connects coding agents that run in Rex panes to Telegram.
 
 Supported agents: pi, Claude Code, and Codex, on this Mac. Not supported: T3 Code panes, and Rex servers on other computers.
 
-> **Status: in development.** The daemon and the `rex-tg` commands are not ready for daily use. This guide describes the planned version 1. Most packages under `internal/` have code and unit tests. Sections and steps marked **(planned)** need the daemon or the commands, so they do not work yet.
+> **Status: version 1 is built.** Unit tests, daemon integration tests (with a fake Telegram and a fake Rex), and an end-to-end test (with a real, isolated Rex server and dummy agents) pass. Spike S1 is still open: nobody has tried rex-tg with a real Telegram client yet, because that needs your bot. Items marked **(unverified)** depend on that check.
 
 ## Requirements
 
@@ -22,7 +22,7 @@ Supported agents: pi, Claude Code, and Codex, on this Mac. Not supported: T3 Cod
 - **pi, Claude Code, or Codex.** Each agent runs in a Rex pane.
 - **Go 1.26.1, to build.** `.tool-versions` sets the version. mise installs it.
 - **A Telegram bot** from @BotFather, with Threaded Mode turned on.
-- **For voice notes only:** ffmpeg and whisper.cpp (planned).
+- **For voice notes only:** ffmpeg and whisper.cpp.
 
 ## Setup
 
@@ -44,7 +44,7 @@ make install   # builds the binary and copies it to ~/.local/bin/rex-tg
 
 If the shell cannot find `rex-tg`, add `~/.local/bin` to your `PATH`. The hooks and the launchd agent use the full path, so they do not need `PATH`.
 
-### 3. Store the token and get a pairing code (planned)
+### 3. Store the token and get a pairing code
 
 ```sh
 rex-tg login
@@ -57,7 +57,7 @@ rex-tg login
 
 `rex-tg login --token-stdin` reads the token from one line of standard input instead. Use it in scripts.
 
-### 4. Install the hooks and the launchd agent (planned)
+### 4. Install the hooks and the launchd agent
 
 ```sh
 rex-tg install
@@ -78,7 +78,7 @@ Then start Codex once. Codex asks you to trust the new hook entries. Trust them.
 
 pi loads extensions from its folder. Whether pi loads this extension with no other step is not tested yet (spike S3).
 
-### 5. Pair your Telegram account (planned)
+### 5. Pair your Telegram account
 
 Send the code from step 3 to your bot:
 
@@ -93,7 +93,7 @@ Send it after step 4. The daemon reads the code only while it runs.
 - A code works once. It expires after 10 minutes. After it expires, run `rex-tg pair` for a new code.
 - After 5 wrong codes, pairing stops. Run `rex-tg login` again.
 
-### 6. Check the setup (planned)
+### 6. Check the setup
 
 ```sh
 rex-tg doctor
@@ -108,14 +108,14 @@ Doctor prints one line for each check. `✓` means the check passed. `!` is a wa
 - the launchd agent, and the folder modes
 - whether a daemon is running
 
-## Daily use (planned)
+## Daily use
 
 ### Main chat
 
 - `/agents` lists the agents in Rex panes. Tap one to open its topic. If the session already has a topic, the button opens that topic.
 - `/topics` lists the topics and their states.
 - `/status` shows the health of the daemon.
-- `/pause` and `/unpause` stop and allow all typing into panes. Use `/pause` if you lose your phone. (planned, optional)
+- `/pause` and `/unpause` stop and allow all typing into panes. Use `/pause` if you lose your phone. (optional)
 - `/help` lists the commands.
 
 An agent marked `(guess)` has no hook report yet. rex-tg took the newest transcript in the agent's folder that changed after the agent started. An agent marked `(waiting for session)` has no known session file yet. It resolves at the agent's next prompt or turn end.
@@ -138,7 +138,7 @@ Text you write in a topic goes to the agent. The commands below are for rex-tg. 
 | `/reasoning on` or `off` | Shows the agent's thinking text, when the agent stores it. |
 | `/resend <id>` | Sends again the parts of a reply that may not have arrived. |
 | `/unlink` | Closes the topic in rex-tg. The topic stays in Telegram. |
-| `/mute` and `/unmute` | Sends answers without sound, or with sound again. (planned) |
+| `/mute` and `/unmute` | Sends answers without sound, or with sound again. |
 | `/help` | Lists the commands. |
 
 Other `/` text goes to the agent unchanged. Examples are `/compact`, `/model`, and `/clear`. To send an agent command that has the same name as a bot command, add a second slash. For example, `//help` sends `/help` to the agent.
@@ -162,7 +162,7 @@ When the agent stops, the topic shows `🔴 agent stopped`. Messages you send th
 - 👀 on your message: rex-tg typed it into the pane.
 - 👍 on your message: the agent's transcript recorded it.
 - 👎 on your message: it was refused or failed. A reply says why.
-- The reactions are planned. Spike S1 has not yet checked that Telegram accepts them.
+- (unverified) Spike S1 has not yet checked on a real Telegram client that Telegram accepts these reactions.
 - `typing…` shows while the agent works. It appears in the topic you used last.
 - One progress message updates while the agent works. It appears after 2 seconds without an answer. It shows the latest commentary and the recent tool calls.
 - When the turn ends, the progress message becomes one summary line. The tool rows stay in a collapsed quote.
@@ -176,11 +176,11 @@ When an agent asks for permission, the bot posts the bottom of the pane. The pos
 
 Questions that allow free text get a `✍ Other…` button. Your next message becomes the answer. This is not tested yet (spike S2).
 
-### Files, photos, and voice notes (planned)
+### Files, photos, and voice notes
 
 - Photos and files are downloaded up to the `max_upload_mb` limit, which is 20 MB by default. Their local path is typed into the pane, with your caption.
 - Voice notes are described below.
-- Until these are built, the bot replies `Only text is supported for now.` This also applies to stickers.
+- Stickers, videos, and other kinds get the reply `Only text is supported for now.`
 - Edited messages are not sent to the agent. The bot says so.
 - A reply to a bot message sends only your new text.
 
@@ -192,7 +192,7 @@ rex-tg reads `~/.config/rex-tg/config.toml`. The file is optional. A missing fil
 - An unknown key is an error. rex-tg names the key.
 - A leading `~` is expanded in `rex.cli`, `state.dir`, `voice.whisper_cli`, and `agents.claude_exec_glob`. Use an absolute path for `voice.model`, because `~` is not expanded there.
 
-The example lists every key with its default. The `[voice]` keys and `rich_messages` are for planned features.
+The example lists every key with its default. The `[voice]` keys and `rich_messages` turn on optional features.
 
 ```toml
 # ~/.config/rex-tg/config.toml
@@ -265,25 +265,25 @@ backfill = 3                            # Final answers to post when a topic ope
 show_mac_prompts = true                 # Post prompts that you type in the pane on the Mac.
 progress_delay = "2s"                   # Wait before the progress message appears.
 progress_edit_interval = "2s"           # Least time between two edits of the progress message.
-rich_messages = false                   # Send final answers as Telegram rich messages. (planned)
+rich_messages = false                   # Send final answers as Telegram rich messages.
 
 [input]
 queue_expiry = "30m"                    # A waiting message expires after this time.
 join_window = "300ms"                   # Messages that arrive this close together become one prompt.
 join_window_long = "1500ms"             # Join window when a message is 4000 characters or longer.
 busy_after_typing = "15s"               # After a message is typed, the pane counts as busy for up to this long.
-max_upload_mb = 20                      # Largest photo or file to download from Telegram. (planned)
+max_upload_mb = 20                      # Largest photo or file to download from Telegram.
 
 [voice]
-whisper_cli = ""                        # Path to whisper-cli. Empty turns voice notes off. (planned)
-model = ""                              # Path to a ggml model file. Use an absolute path. (planned)
-language = ""                           # Language code for whisper.cpp, such as "en". (planned)
+whisper_cli = ""                        # Path to whisper-cli. Empty turns voice notes off.
+model = ""                              # Path to a ggml model file. Use an absolute path.
+language = ""                           # Language code for whisper.cpp, such as "en".
 
 [state]
 dir = "~/.local/state/rex-tg"           # Database, spool, logs, and uploads. A leading ~ is expanded.
 ```
 
-## Voice notes (planned, optional)
+## Voice notes (optional)
 
 Voice notes need ffmpeg and whisper.cpp.
 
@@ -304,7 +304,7 @@ When voice is on, rex-tg converts a voice note to 16 kHz WAV with ffmpeg. Then w
 
 When voice is off, the bot replies: `Voice notes need whisper.cpp; see the README.`
 
-## Rich messages (planned, optional)
+## Rich messages (optional)
 
 Final answers can use Telegram's rich message format. To turn it on, set:
 
@@ -315,7 +315,7 @@ rich_messages = true
 
 The default is `false`. If Telegram rejects a rich message, rex-tg sends the text as plain text. If the text is longer than 4000 characters, rex-tg sends a `.md` file instead.
 
-## Status, logs, and stopping (planned)
+## Status, logs, and stopping
 
 - `rex-tg status` shows the topics, the queued messages, and any open alerts. It only reads the database.
 - The daemon log is `~/.local/state/rex-tg/logs/rex-tg.log`. It holds one JSON object per line. The file rotates at 10 MB and keeps 3 old copies.
@@ -323,7 +323,7 @@ The default is `false`. If Telegram rejects a rich message, rex-tg sends the tex
 - To watch the log, run `tail -f ~/.local/state/rex-tg/logs/rex-tg.log`.
 - To stop the daemon, run `launchctl bootout gui/$(id -u)/local.rex-tg`. To start it again, run `rex-tg install`.
 
-## Uninstall (planned)
+## Uninstall
 
 ```sh
 rex-tg uninstall

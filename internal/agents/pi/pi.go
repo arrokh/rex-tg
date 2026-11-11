@@ -116,8 +116,10 @@ func (adapter) ParseLine(line []byte, ctx agents.LineContext) ([]agents.Event, e
 	}
 	switch head.Type {
 	case "message", "session_info", "compaction":
-	default:
+	case "", "session", "custom", "custom_message", "thinking_level_change", "model_change", "context_edit", "label", "branch_summary":
 		return nil, nil
+	default:
+		return unknown(head.Type), nil
 	}
 	base := agents.FallbackKey(agents.Pi, ctx.SessionID, ctx.Offset)
 	if head.ID != "" {
@@ -404,4 +406,8 @@ func relPath(p, cwd string) string {
 		return p[len(base)+1:]
 	}
 	return p
+}
+
+func unknown(name string) []agents.Event {
+	return []agents.Event{{Kind: agents.KindUnknown, Text: name}}
 }

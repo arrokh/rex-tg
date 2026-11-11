@@ -2,6 +2,7 @@ package daemon_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -10,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"rex-tg/internal/agents"
+	"rex-tg/internal/agents/pi"
 	"rex-tg/internal/daemon"
 	"rex-tg/internal/store"
 	"rex-tg/internal/telegram"
@@ -704,11 +707,12 @@ func TestRapidMessagesAreJoined(t *testing.T) {
 	}
 	e.waitFor("Enter once", func() bool { return len(e.keys()) == 1 })
 	e.waitFor("eyes on the first message", func() bool { m, _ := e.message(first); return m.Reaction == "👀" })
+	e.waitFor("eyes on the second message", func() bool { m, _ := e.message(second); return m.Reaction == "👀" })
 	e.never("a second paste", 600*time.Millisecond, func() bool { return len(e.pastes()) > 1 })
-	_ = second
 	// The agent records the joined text: the first message gets the 👍.
 	e.pi.User(got)
 	e.waitFor("thumbs up on the first message", func() bool { m, _ := e.message(first); return m.Reaction == "👍" })
+	e.waitFor("thumbs up on the second message", func() bool { m, _ := e.message(second); return m.Reaction == "👍" })
 	e.never("the joined prompt posted back", 400*time.Millisecond, func() bool { return e.hasText(thread, "You (on Mac)") })
 }
 
@@ -1474,4 +1478,189 @@ func TestFailedTypingIsNeverRetried(t *testing.T) {
 	if len(qs) != 0 {
 		t.Errorf("queued rows: %+v", qs)
 	}
+}
+
+func TestUnknownLineTypesAreCountedNotTracked(t *testing.T) {
+	probe, err := pi.New().ParseLine([]byte(`{"type":"made_up_type","id":"zz"}`), agents.LineContext{SessionID: "x"})
+	if err != nil || len(probe) != 1 || probe[0].Kind != agents.KindUnknown {
+		t.Skipf("the pi adapter does not yet report unknown line types as KindUnknown (got %v, %v)", probe, err)
+	}
+	e, p, thread := piTopic(t, "pi-unknown")
+	before := len(e.botMessages(thread))
+	p.write(`{"type":"made_up_type","id":"zz1"}`, `{"type":"made_up_type","id":"zz2"}`, `{"type":"other_new_type","id":"zz3"}`)
+	p.User("go")
+	p.Final("known answer")
+	e.waitText(thread, "known answer")
+	e.stop() // flushes the counts
+	v, ok, _ := e.peek().Get(context.Background(), "unknown_line_types")
+	if !ok {
+		t.Fatalf("unknown_line_types not stored (%d new messages)", len(e.botMessages(thread))-before)
+	}
+	var got map[string]map[string]int
+	if err := json.Unmarshal([]byte(v), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got["pi"]["made_up_type"] != 2 || got["pi"]["other_new_type"] != 1 {
+		t.Errorf("counts = %s", v)
+	}
+
+	// A second run merges with the stored value.
+	e.start()
+	e.waitFor("the second start", func() bool { return len(e.tg.Calls("getMe")) >= 2 })
+	p.write(`{"type":"made_up_type","id":"zz4"}`)
+	p.User("again")
+	p.Final("second answer")
+	e.waitText(thread, "second answer")
+	e.stop()
+	v, _, _ = e.peek().Get(context.Background(), "unknown_line_types")
+	got = nil
+	_ = json.Unmarshal([]byte(v), &got)
+	if got["pi"]["made_up_type"] != 3 {
+		t.Errorf("merged counts = %s", v)
+	}
+	// Nothing about the unknown lines reached Telegram.
+	if e.hasText(thread, "made_up_type") {
+		t.Errorf("an unknown line was posted")
+	}
+}
+
+func TestProgressEditsAreSpacedByTheInterval(t *testing.T) {
+	e := newEnv(t)
+	e.cfg.Display.ProgressEditInterval.Duration = 500 * time.Millisecond
+	e.seedOwner()
+	p := e.newPi("pi-edits")
+	p.User("start")
+	p.Final("ready")
+	e.pi = p
+	e.start()
+	e.hookPi(p, "startup")
+	thread := e.openTopic()
+	e.waitText(thread, "ready")
+
+	p.User("many tools")
+	p.ToolCall("c-first", "step first")
+	var progress int64
+	e.waitFor("the progress message", func() bool {
+		for _, m := range e.botMessages(thread) {
+			if strings.Contains(m.Text, "⏱") {
+				progress = m.ID
+				return true
+			}
+		}
+		return false
+	})
+	// Tool calls arrive over a span of about 1.8 s, more than three intervals.
+	for i := 0; i < 12; i++ {
+		id := fmt.Sprintf("c%d", i)
+		p.ToolCall(id, fmt.Sprintf("step %d", i))
+		p.ToolResult(id)
+		time.Sleep(150 * time.Millisecond)
+	}
+	p.Final("all steps done")
+	e.waitText(thread, "all steps done")
+	e.waitFor("the summary", func() bool { m, _ := e.message(progress); return strings.Contains(m.Text, "Done") })
+
+	var times []time.Time
+	for _, c := range e.tg.Calls("editMessageText") {
+		if id, _ := c.Params["message_id"].(float64); int64(id) == progress {
+			times = append(times, c.At)
+		}
+	}
+	if len(times) < 2 {
+		t.Fatalf("only %d edits of the progress message", len(times))
+	}
+	for i := 1; i < len(times); i++ {
+		if gap := times[i].Sub(times[i-1]); gap < 450*time.Millisecond {
+			t.Errorf("edit %d came %v after the one before; want >= 500ms", i, gap)
+		}
+	}
+}
+
+func TestAlertFromEventStreamArrivesWithinThreeSeconds(t *testing.T) {
+	e, _, thread := piTopic(t, "pi-latency")
+	e.stop()
+	e.cfg.Rex.ScanInterval.Duration = time.Hour
+	e.setScreen(permScreen)
+	at := time.Now().UTC()
+	rec := fmt.Sprintf(`{"type":"session_event","payload":{"session_id":%q,"event":{"type":"block_event","payload":{"block_id":%q,"name":"program_status_changed","payload":{"record":{"state":"blocked","kind":"permission","app":"pi","updated_at":%q,"owner":{"pid":%d,"name":"node"}},"reason":"report"}}}}}`,
+		rexSess, rexBlock, at.Format(time.RFC3339Nano), piPID)
+	e.fake.SetEvents(rec)
+	e.start()
+	e.waitText(thread, "Permission needed")
+	var sent time.Time
+	for _, c := range e.tg.Calls("sendMessage") {
+		if s, _ := c.Params["text"].(string); strings.Contains(s, "Permission needed") {
+			sent = c.At
+		}
+	}
+	if sent.IsZero() {
+		t.Fatal("no sendMessage call for the alert")
+	}
+	if d := sent.Sub(at); d > 3*time.Second {
+		t.Errorf("the alert took %v from the status record, want < 3s", d)
+	}
+}
+
+func TestPauseWhilePrepareIsInFlightBlocksTheTyping(t *testing.T) {
+	e, _, thread := piTopic(t, "pi-pause-race")
+	e.stop()
+	e.cfg.Rex.ScanInterval.Duration = time.Hour
+	e.start()
+	e.waitFor("the second start", func() bool { return len(e.tg.Calls("getMe")) >= 2 })
+	e.waitFor("the first scan", func() bool { return len(e.rexCallsMatching("program_status")) >= 1 })
+	time.Sleep(300 * time.Millisecond)
+	// The process call of the safety check takes a while.
+	e.fake.OnDelay([]string{"block", "call", "-s", rexSess, "-b", rexBlock, "process"},
+		fmt.Sprintf(`{"foreground":{"pid":%d,"name":"node","argv0":"pi","cwd":%q},"ancestors":[]}`, piPID, paneCWD), 700*time.Millisecond)
+	before := len(e.rexCallsMatching("process"))
+	id := e.say(thread, "must not be typed")
+	e.waitFor("the safety check to start", func() bool { return len(e.rexCallsMatching("process")) > before })
+	e.say(0, "/pause")
+	e.waitText(0, "paused")
+	e.never("typing after /pause", 1500*time.Millisecond, func() bool { return len(e.pastes()) > 0 })
+	_ = id
+}
+
+func (e *env) rexCallsMatching(word string) []rexCall {
+	var out []rexCall
+	for _, c := range e.fake.Calls() {
+		if len(c.Args) > 0 && strings.HasSuffix(c.Args[len(c.Args)-1], word) {
+			out = append(out, rexCall{c.Args, c.Stdin})
+		}
+	}
+	return out
+}
+
+func TestTwoTapsOnAnAlertPressTheKeysOnce(t *testing.T) {
+	e, _, thread := piTopic(t, "pi-double-tap")
+	e.setScreen(permScreen)
+	e.setStatus("blocked", "permission")
+	alert := e.waitText(thread, "Permission needed")
+	// The capture before the keys is slow, so the taps overlap.
+	e.fake.OnDelay([]string{"capture"}, permScreen, 400*time.Millisecond)
+	data := buttonData(alert, "1 Yes")
+	e.pressButton(alert, data)
+	e.pressButton(alert, data)
+	e.say(thread, "/approve")
+	e.waitFor("the key", func() bool { return len(e.keys()) >= 1 })
+	e.never("a second key press", 1200*time.Millisecond, func() bool { return len(e.keys()) > 1 })
+	if got := e.keys(); len(got) != 1 || got[0] != "1" {
+		t.Errorf("keys = %v, want [1]", got)
+	}
+}
+
+func TestUnlinkRefusesWaitingMessages(t *testing.T) {
+	e, p, thread := piTopic(t, "pi-unlink-queue")
+	working(e, p, thread)
+	e.say(thread, "queued for later")
+	e.waitText(thread, "Waiting until the agent is idle")
+	e.say(thread, "/unlink")
+	e.waitText(thread, "Unlinked")
+	e.waitFor("no queued rows", func() bool {
+		qs, _ := e.peek().QueuedInbound(context.Background(), thread)
+		return len(qs) == 0
+	})
+	p.ToolResult("job-1")
+	p.Final("job over")
+	e.never("typing for an unlinked topic", 1000*time.Millisecond, func() bool { return len(e.pastes()) > 0 })
 }

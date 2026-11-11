@@ -33,38 +33,57 @@ type tailer struct {
 	stopAt time.Time // set while the tailer waits to stop; zero while it runs
 }
 
+// pendingTail is a tailer that waits for the scan of its transcript.
+type pendingTail struct {
+	thread int64
+	token  int
+}
+
+// tailScan is the result of scanning a transcript to its end in a worker.
+type tailScan struct {
+	conv   store.Conversation
+	thread int64
+	token  int
+	ok     bool
+	pos    tail.Position
+	newest time.Time // the last event time, so a later replay of the file is recognized
+	finals []agents.Event
+}
+
 // startTailer starts (or restarts) the tailer of a session at the place its
-// TailStart names (design section 6). A start at the end of the file also
-// posts the backfill.
+// TailStart names (design section 6). A start at the end of the file scans the
+// file in a worker, then posts the backfill and starts the follower in the
+// core loop (onTailScan).
 func (d *daemon) startTailer(conv store.Conversation, threadID int64, start registry.TailStart) error {
 	d.stopTailer(conv.ID, false)
-	ctx := d.ctx
-	path := conv.Transcript
-	pos := tail.Position{}
-
 	switch {
 	case start.FromStart:
+		d.follow(conv, threadID, tail.Position{})
 	case start.AtEnd:
 		n := 0
 		if start.Backfill {
 			n = d.cfg.Display.Backfill
 		}
-		d.atEnd(conv, threadID, n, &pos)
+		d.scanThenFollow(conv, threadID, n)
 	default:
-		cur, ok, err := d.st.Cursor(ctx, path)
+		cur, ok, err := d.st.Cursor(d.ctx, conv.Transcript)
 		switch {
 		case err != nil:
 			return fmt.Errorf("daemon: read cursor: %w", err)
 		case ok:
-			pos = tail.Position{Offset: cur.Offset, DevIno: cur.DevIno}
+			d.follow(conv, threadID, tail.Position{Offset: cur.Offset, DevIno: cur.DevIno})
 		default:
-			d.atEnd(conv, threadID, 0, &pos)
+			d.scanThenFollow(conv, threadID, 0)
 		}
 	}
+	return nil
+}
 
+// follow starts the follower of a transcript at pos.
+func (d *daemon) follow(conv store.Conversation, threadID int64, pos tail.Position) {
 	d.gen++
-	fctx, cancel := context.WithCancel(ctx)
-	f := tail.Follow(fctx, path, pos, tail.Options{Poll: tailPoll})
+	fctx, cancel := context.WithCancel(d.ctx)
+	f := tail.Follow(fctx, conv.Transcript, pos, tail.Options{Poll: tailPoll})
 	tl := &tailer{conv: conv.ID, thread: threadID, gen: d.gen, f: f, cancel: cancel}
 	d.tailers[conv.ID] = tl
 	gen := tl.gen
@@ -73,31 +92,40 @@ func (d *daemon) startTailer(conv store.Conversation, threadID int64, start regi
 			d.emit(evBatch{conv: conv.ID, gen: gen, b: b})
 		}
 	})
-	return nil
 }
 
-// atEnd finds the end of the transcript, posts the last n final answers, and
-// saves the cursor there. A missing file leaves pos at 0.
-func (d *daemon) atEnd(conv store.Conversation, threadID int64, n int, pos *tail.Position) {
+func (d *daemon) scanThenFollow(conv store.Conversation, threadID int64, n int) {
+	d.gen++
+	token := d.gen
+	d.pending[conv.ID] = pendingTail{thread: threadID, token: token}
+	d.spawn(func() {
+		res := d.scanEnd(conv, n)
+		res.thread, res.token = threadID, token
+		d.emit(evTailScan(res))
+	})
+}
+
+// scanEnd reads the whole transcript once: its end position, the newest event
+// time, and the last n final answers. It runs in a worker.
+func (d *daemon) scanEnd(conv store.Conversation, n int) tailScan {
+	res := tailScan{conv: conv}
 	a, ok := d.adapters[conv.Runtime]
 	if !ok {
-		return
+		return res
 	}
-	var finals []agents.Event
-	var newest time.Time // the last event time, so a later replay of the file is recognized
 	end, err := tail.Scan(conv.Transcript, func(l tail.Line) error {
 		evs, err := a.ParseLine(l.Data, agents.LineContext{SessionID: conv.NativeID, Offset: l.Offset, CWD: conv.CWD})
 		if err != nil {
 			return nil
 		}
 		for _, e := range evs {
-			if e.At.After(newest) {
-				newest = e.At
+			if e.At.After(res.newest) {
+				res.newest = e.At
 			}
 			if n > 0 && e.Kind == agents.AssistantText && e.Phase == agents.Final {
-				finals = append(finals, e)
-				if len(finals) > n {
-					finals = finals[1:]
+				res.finals = append(res.finals, e)
+				if len(res.finals) > n {
+					res.finals = res.finals[1:]
 				}
 			}
 		}
@@ -105,28 +133,69 @@ func (d *daemon) atEnd(conv store.Conversation, threadID int64, n int, pos *tail
 	})
 	if err != nil {
 		d.log.Debug("scan transcript", "conversation", conv.ID, "err", err)
+		return res
+	}
+	res.ok, res.pos = true, end
+	return res
+}
+
+// onTailScan finishes a start at the end of the file: the cursor, the
+// backfill, and the follower. A missing file leaves the position at 0.
+func (d *daemon) onTailScan(e evTailScan) {
+	p, ok := d.pending[e.conv.ID]
+	if !ok || p.token != e.token {
+		return // stopped or restarted meanwhile
+	}
+	delete(d.pending, e.conv.ID)
+	if e.ok {
+		cur, _, _ := d.st.Cursor(d.ctx, e.conv.Transcript)
+		cur.Transcript, cur.DevIno, cur.Offset, cur.UpdatedAt = e.conv.Transcript, e.pos.DevIno, e.pos.Offset, d.now()
+		if e.newest.After(cur.LastEventAt) {
+			cur.LastEventAt = e.newest
+		}
+		if err := d.st.SaveCursor(d.ctx, cur); err != nil {
+			d.log.Warn("save cursor", "err", err)
+		}
+		for _, f := range e.finals {
+			d.enqueue(store.OutboxItem{
+				ThreadID: e.thread, Key: "backfill:" + f.Key, Kind: "backfill", Silent: true,
+				Parts: d.markdownParts(f.Text, "backfill", false),
+			})
+		}
+	}
+	d.follow(e.conv, e.thread, e.pos)
+}
+
+// restartTailer starts a stopped tailer again from the stored cursor (after a
+// failed commit). Without a cursor the follower had started at byte 0.
+func (d *daemon) restartTailer(convID int64) {
+	if _, ok := d.tailers[convID]; ok {
 		return
 	}
-	*pos = end
-	cur, _, _ := d.st.Cursor(d.ctx, conv.Transcript)
-	cur.Transcript, cur.DevIno, cur.Offset, cur.UpdatedAt = conv.Transcript, end.DevIno, end.Offset, d.now()
-	if newest.After(cur.LastEventAt) {
-		cur.LastEventAt = newest
+	if _, ok := d.pending[convID]; ok {
+		return
 	}
-	if err := d.st.SaveCursor(d.ctx, cur); err != nil {
-		d.log.Warn("save cursor", "err", err)
+	th, ok := d.threadOf(convID)
+	if !ok {
+		return
 	}
-	for _, e := range finals {
-		d.enqueue(store.OutboxItem{
-			ThreadID: threadID, Key: "backfill:" + e.Key, Kind: "backfill", Silent: true,
-			Parts: d.markdownParts(e.Text, "backfill", false),
-		})
+	conv, err := d.st.Conversation(d.ctx, convID)
+	if err != nil {
+		return
 	}
+	pos := tail.Position{}
+	if cur, ok, err := d.st.Cursor(d.ctx, conv.Transcript); err == nil && ok {
+		pos = tail.Position{Offset: cur.Offset, DevIno: cur.DevIno}
+	}
+	d.follow(conv, th.ID, pos)
 }
 
 // stopTailer stops the tailer of a session now, or after a grace period so
 // the last lines written before the agent exited still arrive.
 func (d *daemon) stopTailer(conv int64, graceful bool) {
+	if !graceful {
+		delete(d.pending, conv)
+	}
 	tl, ok := d.tailers[conv]
 	if !ok {
 		return
@@ -310,6 +379,10 @@ func (d *daemon) onBatch(ev evBatch) {
 			if e.At.After(lastAt) {
 				lastAt = e.At
 			}
+			if e.Kind == agents.KindUnknown {
+				d.unknown.add(conv.Runtime, e.Text, now) // never reaches the tracker or the registry
+				continue
+			}
 			at := e.At
 			if at.IsZero() {
 				at = now
@@ -341,7 +414,15 @@ func (d *daemon) onBatch(ev evBatch) {
 		LastEventAt: lastAt, UpdatedAt: now,
 	}
 	if _, err := d.st.CommitBatch(ctx, c, items); err != nil {
-		d.log.Error("commit batch", "conversation", conv.ID, "err", err)
+		// The tracker already took these lines. Read them again from the
+		// stored cursor; the outbox keys stop a repeat from posting twice.
+		d.log.Error("commit batch; reading the lines again", "conversation", conv.ID, "err", err)
+		d.stopTailer(conv.ID, false)
+		d.spawn(func() {
+			if sleepCtx(d.ctx, time.Second) {
+				d.emit(evRestart{conv: conv.ID})
+			}
+		})
 		return
 	}
 	d.snd.Wake()
@@ -380,8 +461,9 @@ func (d *daemon) echo(th store.Thread, e agents.Event, now time.Time) bool {
 	if err := d.st.AckInbound(d.ctx, id, e.Key); err != nil {
 		d.log.Warn("ack inbound", "err", err)
 	}
-	if r, ok := byID[id]; ok && r.TGMessageID != 0 {
-		d.snd.React(r.ChatID, r.TGMessageID, "👍")
+	if r, ok := byID[id]; ok {
+		d.react(r, "👍")
+		delete(d.extra, r.UpdateID)
 	}
 	return true
 }

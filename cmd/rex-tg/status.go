@@ -2,16 +2,11 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 
 	"rex-tg/internal/store"
 )
-
-// maxIDGap is how many missing outbox ids in a row end the scan for unknown
-// parts. The store has no list query, so status probes ids one by one.
-const maxIDGap = 1000
 
 func statusCmd(ctx context.Context, args []string, env Env) int {
 	fs := newFlags("status", env)
@@ -40,26 +35,15 @@ func statusCmd(ctx context.Context, args []string, env Env) int {
 		fmt.Fprintf(env.Stderr, "rex-tg: topics: %v\n", err)
 		return 1
 	}
+	unknownParts, err := st.UnknownParts(ctx)
+	if err != nil {
+		fmt.Fprintf(env.Stderr, "rex-tg: outbox: %v\n", err)
+		return 1
+	}
 	unknownByThread := map[int64]int{}
-	unknownTotal := 0
-	misses := 0
-	for id := int64(1); misses < maxIDGap; id++ {
-		row, err := st.OutboxRow(ctx, id)
-		if err != nil {
-			if errors.Is(err, store.ErrNotFound) {
-				misses++
-				continue
-			}
-			fmt.Fprintf(env.Stderr, "rex-tg: outbox: %v\n", err)
-			return 1
-		}
-		misses = 0
-		for _, p := range row.Parts {
-			if p.State == store.OutboxUnknown {
-				unknownByThread[row.ThreadID]++
-				unknownTotal++
-			}
-		}
+	unknownTotal := len(unknownParts)
+	for _, p := range unknownParts {
+		unknownByThread[p.ThreadID]++
 	}
 
 	out := env.Stdout

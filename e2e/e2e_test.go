@@ -72,7 +72,7 @@ func rexCmd(sock string, args ...string) *exec.Cmd {
 }
 
 // startRex starts an isolated Rex server and returns its socket path.
-func startRex(t *testing.T) string {
+func startRex(t *testing.T, tag string) string {
 	t.Helper()
 	if _, err := os.Stat(rexBin); err != nil {
 		t.Skipf("Rex CLI not installed: %v", err)
@@ -85,7 +85,7 @@ func startRex(t *testing.T) string {
 	if err := os.MkdirAll(cache, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	sock := filepath.Join(cache, fmt.Sprintf("rextg-e2e-%d.sock", os.Getpid()))
+	sock := filepath.Join(cache, fmt.Sprintf("rextg-e2e-%d-%s.sock", os.Getpid(), tag))
 	if len(sock) >= 104 {
 		t.Fatalf("socket path too long (%d bytes): %s", len(sock), sock)
 	}
@@ -174,15 +174,22 @@ func findEntry(path, ev, text string) (logEntry, bool) {
 }
 
 func TestDaemonEndToEnd(t *testing.T) {
+	// The dummy is built under the name that the registry detects.
+	for _, runtime := range []string{"pi", "claude", "codex"} {
+		t.Run(runtime, func(t *testing.T) { runFlow(t, runtime) })
+	}
+}
+
+func runFlow(t *testing.T, runtime string) {
 	// Build the dummy agent under the file name "pi".
 	binDir := t.TempDir()
-	piBin := filepath.Join(binDir, "pi")
+	piBin := filepath.Join(binDir, runtime)
 	build := exec.Command("go", "build", "-o", piBin, "./dummyagent")
 	if out, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build dummy agent: %v\n%s", err, out)
 	}
 
-	sock := startRex(t)
+	sock := startRex(t, runtime)
 
 	home := t.TempDir()
 	stateDir := t.TempDir()
@@ -268,7 +275,7 @@ func TestDaemonEndToEnd(t *testing.T) {
 
 	// Start the dummy agent in a Rex pane with the project as its folder.
 	newCmd := rexCmd(sock, "new", "e2e", "--json", "-c", project, "--shell=none", "--",
-		piBin, "-home", home, "-spool", cfg.SpoolDir(), "-log", agentLog, "-think", think.String(), "-seed", "earlier turn", "-echo-delay", echoDelay.String())
+		piBin, "-home", home, "-spool", cfg.SpoolDir(), "-log", agentLog, "-think", think.String(), "-format", runtime, "-seed", "earlier turn", "-echo-delay", echoDelay.String())
 	if out, err := newCmd.CombinedOutput(); err != nil {
 		t.Fatalf("rex new: %v\n%s", err, out)
 	}

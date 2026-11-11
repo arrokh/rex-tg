@@ -159,6 +159,7 @@ type Tracker struct {
 	lastEdit      time.Time
 	dirty         bool
 	pendingRepost bool
+	finishHeld    bool   // the finish waits for EditInterval
 	lastHTML      string // last progress or summary HTML sent
 
 	lastTyping time.Time
@@ -197,9 +198,10 @@ func (t *Tracker) Event(ev agents.Event, echo bool, now time.Time) []Action {
 	switch ev.Kind {
 	case agents.UserPrompt:
 		if t.ph == phEnding {
-			out = t.finalize(out)
+			out = t.finalize(out, now)
 		}
 		if t.ph != phActive {
+			out = t.flushHeld(out, now)
 			t.startTurn(now)
 		}
 		t.unblock()
@@ -211,7 +213,7 @@ func (t *Tracker) Event(ev agents.Event, echo bool, now time.Time) []Action {
 		if ev.Tool == nil {
 			return nil
 		}
-		t.beginIfNeeded(now)
+		out = t.beginIfNeeded(out, now)
 		t.unblock()
 		t.calls = append(t.calls, call{id: ev.Tool.CallID, name: ev.Tool.Name, kind: ev.Tool.Kind, label: ev.Tool.Label})
 		t.commentaryPending = false
@@ -252,7 +254,7 @@ func (t *Tracker) Event(ev agents.Event, echo bool, now time.Time) []Action {
 		}
 
 	case agents.Thinking:
-		t.beginIfNeeded(now)
+		out = t.beginIfNeeded(out, now)
 		t.unblock()
 		if t.set.Reasoning {
 			if md := italic(r(ev.Text)); md != "" {
@@ -265,7 +267,7 @@ func (t *Tracker) Event(ev agents.Event, echo bool, now time.Time) []Action {
 		case agents.Final, agents.Error:
 			out = t.answer(out, ev, now)
 		default:
-			t.beginIfNeeded(now)
+			out = t.beginIfNeeded(out, now)
 			t.unblock()
 			t.commentary = ev.Text
 			t.commentaryKey = ev.Key
@@ -288,10 +290,21 @@ func (t *Tracker) Event(ev agents.Event, echo bool, now time.Time) []Action {
 
 // beginIfNeeded starts a new turn when none is running. During the grace
 // period the event only adds to the ended turn.
-func (t *Tracker) beginIfNeeded(now time.Time) {
+func (t *Tracker) beginIfNeeded(out []Action, now time.Time) []Action {
 	if t.ph == phNone || t.ph == phEnded {
+		out = t.flushHeld(out, now)
 		t.startTurn(now)
 	}
+	return out
+}
+
+// flushHeld emits a held FinishProgress, so the old progress message is closed
+// before a new turn starts.
+func (t *Tracker) flushHeld(out []Action, now time.Time) []Action {
+	if t.finishHeld {
+		return t.emitFinish(out, now)
+	}
+	return out
 }
 
 func (t *Tracker) unblock() {
@@ -339,7 +352,7 @@ func (t *Tracker) answer(out []Action, ev agents.Event, now time.Time) []Action 
 		}
 		t.endKind = kind
 		if t.shown {
-			out = t.finishIfChanged(out)
+			out = t.finishIfChanged(out, now)
 		}
 	}
 	return out
@@ -354,7 +367,7 @@ func (t *Tracker) toEnding(kind string, now time.Time) {
 }
 
 // finalize ends a turn that waited out its grace period.
-func (t *Tracker) finalize(out []Action) []Action {
+func (t *Tracker) finalize(out []Action, now time.Time) []Action {
 	if t.ph != phEnding {
 		return out
 	}
@@ -365,21 +378,34 @@ func (t *Tracker) finalize(out []Action) []Action {
 	}
 	t.ph = phEnded
 	if t.shown {
-		out = t.finish(out, t.endedAt)
+		out = t.finish(out, now)
 	}
 	return out
 }
 
-func (t *Tracker) finish(out []Action, _ time.Time) []Action {
-	h := t.summaryHTML()
-	t.lastHTML = h
+// finish emits the summary, or holds it until EditInterval has passed since
+// the last progress edit.
+func (t *Tracker) finish(out []Action, now time.Time) []Action {
 	t.dirty, t.pendingRepost = false, false
+	if now.Sub(t.lastEdit) < t.cfg.EditInterval {
+		t.finishHeld = true
+		return out
+	}
+	return t.emitFinish(out, now)
+}
+
+func (t *Tracker) emitFinish(out []Action, now time.Time) []Action {
+	h := t.summaryHTML()
+	t.lastHTML, t.lastEdit, t.finishHeld = h, now, false
 	return append(out, FinishProgress{HTML: h})
 }
 
-func (t *Tracker) finishIfChanged(out []Action) []Action {
+func (t *Tracker) finishIfChanged(out []Action, now time.Time) []Action {
+	if t.finishHeld {
+		return out // the held finish is rendered when it is emitted
+	}
 	if h := t.summaryHTML(); h != t.lastHTML {
-		return t.finish(out, t.endedAt)
+		return t.finish(out, now)
 	}
 	return out
 }
@@ -395,6 +421,7 @@ func (t *Tracker) State(st State, now time.Time) []Action {
 			t.endKind = ""
 		case phActive:
 		default:
+			out = t.flushHeld(out, now)
 			t.startTurn(now)
 		}
 		t.unblock()
@@ -405,6 +432,7 @@ func (t *Tracker) State(st State, now time.Time) []Action {
 			t.endKind = ""
 		case phActive:
 		default:
+			out = t.flushHeld(out, now)
 			t.startTurn(now)
 		}
 		if !t.blocked {
@@ -428,7 +456,12 @@ func (t *Tracker) Tick(now time.Time) []Action {
 	switch t.ph {
 	case phEnding:
 		if !now.Before(t.graceAt) {
-			out = t.finalize(out)
+			out = t.finalize(out, now)
+		}
+		return out
+	case phEnded:
+		if t.finishHeld && now.Sub(t.lastEdit) >= t.cfg.EditInterval {
+			out = t.emitFinish(out, now)
 		}
 		return out
 	case phActive:
@@ -473,7 +506,7 @@ func (t *Tracker) Tick(now time.Time) []Action {
 // not finished again.
 func (t *Tracker) ProgressGone() {
 	t.shown = false
-	t.dirty, t.pendingRepost = false, false
+	t.dirty, t.pendingRepost, t.finishHeld = false, false, false
 }
 
 // SnapshotCall is one tool call in a Snapshot.
@@ -505,6 +538,7 @@ type Snapshot struct {
 	LastEdit          time.Time      `json:"last_edit"`
 	Dirty             bool           `json:"dirty,omitempty"`
 	PendingRepost     bool           `json:"pending_repost,omitempty"`
+	FinishHeld        bool           `json:"finish_held,omitempty"`
 	LastHTML          string         `json:"last_html,omitempty"`
 	LastTyping        time.Time      `json:"last_typing"`
 }
@@ -519,7 +553,7 @@ func (t *Tracker) Snapshot() Snapshot {
 		Commentary: t.commentary, CommentaryKey: t.commentaryKey,
 		CommentaryPending: t.commentaryPending, CommentarySeen: t.commentarySeen,
 		Answered: t.answered, ErrText: t.errText, Blocked: t.blocked,
-		Shown: t.shown, LastEdit: t.lastEdit, Dirty: t.dirty, PendingRepost: t.pendingRepost,
+		Shown: t.shown, LastEdit: t.lastEdit, Dirty: t.dirty, PendingRepost: t.pendingRepost, FinishHeld: t.finishHeld,
 		LastHTML: t.lastHTML, LastTyping: t.lastTyping,
 	}
 	for _, c := range t.calls {
@@ -536,7 +570,7 @@ func Restore(cfg Config, s Settings, snap Snapshot) *Tracker {
 	t.commentary, t.commentaryKey = snap.Commentary, snap.CommentaryKey
 	t.commentaryPending, t.commentarySeen = snap.CommentaryPending, snap.CommentarySeen
 	t.answered, t.errText, t.blocked = snap.Answered, snap.ErrText, snap.Blocked
-	t.shown, t.lastEdit, t.dirty, t.pendingRepost = snap.Shown, snap.LastEdit, snap.Dirty, snap.PendingRepost
+	t.shown, t.lastEdit, t.dirty, t.pendingRepost, t.finishHeld = snap.Shown, snap.LastEdit, snap.Dirty, snap.PendingRepost, snap.FinishHeld
 	t.lastHTML, t.lastTyping = snap.LastHTML, snap.LastTyping
 	for _, c := range snap.Calls {
 		t.calls = append(t.calls, call{id: c.ID, name: c.Name, kind: c.Kind, label: c.Label, status: c.Status})

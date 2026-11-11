@@ -130,6 +130,7 @@ func TestResumeOfflineTopicInNewPane(t *testing.T) {
 			e := newEnv(t)
 			e.rx.setBlock(sess1, "b1", claudeProc(100, cwdA))
 			e.claudeHook("b1", "SessionStart", "c1", "startup", e.at(1))
+			e.writeClaude("c1", cwdA, e.at(1), e.at(2))
 			c1 := e.conv(agents.Claude, "c1")
 			th := e.link(c1)
 			// The agent exits.
@@ -204,6 +205,7 @@ func TestResumeUnderNewIDInSamePaneTakesOver(t *testing.T) {
 	e.rx.setBlock(sess1, "b1", shellProc(5))
 	e.event(rex.ProcessChanged, "b1")
 	e.rx.setBlock(sess1, "b1", claudeProc(101, cwdA))
+	e.writeClaude("c9", cwdA, e.at(1), e.at(2))
 	ch := e.claudeHook("b1", "SessionStart", "c9", "resume", e.at(30))
 	to := find(t, ch, TakeOver)
 	if to.ThreadID != th.ID || to.Divider != "claude · resumed" || to.Start != (TailStart{AtEnd: true, Backfill: true}) {
@@ -586,4 +588,57 @@ func TestHookWithoutBlockIsIgnored(t *testing.T) {
 	if err != nil || len(ch) != 0 {
 		t.Fatalf("got %v, %v", ch, err)
 	}
+}
+
+func TestHookResolvesWithMissingTranscript(t *testing.T) {
+	t.Run("pi startup", func(t *testing.T) {
+		e := newEnv(t)
+		e.rx.setBlock(sess1, "b1", piProc(100, cwdA))
+		file := e.home + "/.pi/agent/sessions/x/2026-11-11T03-00-00-000Z_pi-new-1.jsonl"
+		ch := e.hook(agents.Pi, "session_start", "b1", e.at(1), map[string]any{
+			"hook_event_name": "session_start", "reason": "startup", "cwd": cwdA, "session_file": file})
+		wantKinds(t, ch, SessionStarted)
+		if !ch[0].Start.FromStart {
+			t.Errorf("start = %+v", ch[0].Start)
+		}
+		c := e.conv(agents.Pi, "pi-new-1")
+		if e.pane("b1").ConversationID != c.ID || c.Transcript != file || c.CWD != cwdA {
+			t.Errorf("conv = %+v", c)
+		}
+	})
+	t.Run("claude startup", func(t *testing.T) {
+		e := newEnv(t)
+		e.rx.setBlock(sess1, "b1", claudeProc(100, cwdA))
+		ch := e.claudeHook("b1", "SessionStart", "c-missing", "startup", e.at(1))
+		wantKinds(t, ch, SessionStarted)
+		if !ch[0].Start.FromStart || e.pane("b1").ConversationID != e.conv(agents.Claude, "c-missing").ID {
+			t.Errorf("change = %+v", ch[0])
+		}
+	})
+	t.Run("claude resume of a missing file starts at byte 0", func(t *testing.T) {
+		e := newEnv(t)
+		e.rx.setBlock(sess1, "b1", claudeProc(100, cwdA))
+		ch := e.claudeHook("b1", "SessionStart", "c-gone", "resume", e.at(1))
+		if !ch[0].Start.FromStart {
+			t.Errorf("start = %+v", ch[0].Start)
+		}
+	})
+	t.Run("pi /new takes over", func(t *testing.T) {
+		e := newEnv(t)
+		e.rx.setBlock(sess1, "b1", piProc(100, cwdA))
+		e.piHook("b1", "session_start", "p1", "startup", e.at(1))
+		th := e.link(e.conv(agents.Pi, "p1"))
+		file := e.home + "/.pi/agent/sessions/x/2026-11-11T03-10-00-000Z_p2-new.jsonl"
+		ch := e.hook(agents.Pi, "session_start", "b1", e.at(10), map[string]any{
+			"hook_event_name": "session_start", "reason": "new", "cwd": cwdA, "session_file": file,
+			"previous_session_file": e.home + "/.pi/agent/sessions/x/p1.jsonl"})
+		to := find(t, ch, TakeOver)
+		if to.ThreadID != th.ID || to.Divider != "pi · new session (new)" || !to.Start.FromStart {
+			t.Errorf("take over = %+v", to)
+		}
+		if e.thread(th.ID).CurrentConversationID != e.conv(agents.Pi, "p2-new").ID {
+			t.Error("topic should show the new session")
+		}
+		e.invariants()
+	})
 }

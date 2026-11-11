@@ -138,17 +138,18 @@ func (d *daemon) attach(c registry.Change) {
 	}
 }
 
-// rename gives a topic the name of its new session.
+// rename gives a topic the name of its new session. The title comes from the
+// transcript, so the work runs in a worker.
 func (d *daemon) rename(th store.Thread, conv store.Conversation) {
-	name := topicName(conv.Runtime, conv.CWD, d.convTitle(conv))
-	if name == th.Name {
-		return
-	}
-	if err := d.st.SetThreadName(d.ctx, th.ID, name); err != nil {
-		d.log.Warn("rename topic", "err", err)
-		return
-	}
 	d.spawn(func() {
+		name := topicName(conv.Runtime, conv.CWD, d.convTitle(conv))
+		if name == th.Name {
+			return
+		}
+		if err := d.st.SetThreadName(d.ctx, th.ID, name); err != nil {
+			d.log.Warn("rename topic", "err", err)
+			return
+		}
 		err := d.snd.Call(sender.PriorityEdit, func(ctx context.Context, tg *telegram.Client) error {
 			return tg.EditForumTopic(ctx, th.ChatID, th.MessageThreadID, name)
 		})
@@ -229,7 +230,8 @@ func (d *daemon) openTopic(cbID string, paneID int64) {
 			return
 		}
 		conv := *v.Conversation
-		name := topicName(conv.Runtime, conv.CWD, d.convTitle(conv))
+		title := d.convTitle(conv)
+		name := topicName(conv.Runtime, conv.CWD, title)
 		var ft telegram.ForumTopic
 		err = d.snd.Call(sender.PriorityAlert, func(ctx context.Context, tg *telegram.Client) error {
 			t, err := tg.CreateForumTopic(ctx, chat, name)
@@ -241,7 +243,7 @@ func (d *daemon) openTopic(cbID string, paneID int64) {
 			d.answerCallback(cbID, "Could not create the topic. Is Threaded Mode on for the bot?", true)
 			return
 		}
-		d.emit(evTopicCreated{chatID: chat, threadID: ft.MessageThreadID, name: name, convID: conv.ID})
+		d.emit(evTopicCreated{chatID: chat, threadID: ft.MessageThreadID, name: name, convID: conv.ID, title: title})
 		d.answerCallback(cbID, "Topic created", false)
 		d.say(chat, 0, "🔗 Opened "+format.Escape(name), linkMarkup("Open topic", d.topicLink(ft.MessageThreadID)))
 	})
@@ -281,7 +283,7 @@ func (d *daemon) onTopicCreated(e evTopicCreated) {
 	d.dirty[th.ID] = true
 	d.enqueue(store.OutboxItem{
 		ThreadID: th.ID, Key: fmt.Sprintf("intro:%d", th.ID), Kind: "notice", Silent: true,
-		Parts: []store.PartContent{{Content: d.introCard(th, conv), Format: store.FormatHTML}},
+		Parts: []store.PartContent{{Content: d.introCard(th, conv, e.title), Format: store.FormatHTML}},
 	})
 	if err := d.startTailer(conv, th.ID, registry.TailStart{AtEnd: true, Backfill: true}); err != nil {
 		d.log.Warn("start tailer", "thread", th.ID, "err", err)
@@ -289,8 +291,7 @@ func (d *daemon) onTopicCreated(e evTopicCreated) {
 }
 
 // introCard is the first message of a topic (design section 8.7).
-func (d *daemon) introCard(th store.Thread, conv store.Conversation) string {
-	title := d.convTitle(conv)
+func (d *daemon) introCard(th store.Thread, conv store.Conversation, title string) string {
 	if title == "" {
 		title = conv.NativeID
 	}

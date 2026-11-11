@@ -36,6 +36,7 @@ type prepResult struct {
 	reason string
 	pane   store.Pane
 	rt     agents.Runtime
+	conv   int64 // the session the checks were made for
 }
 
 // baseFacts gathers the facts about a topic that need no call to Rex.
@@ -77,10 +78,10 @@ func (d *daemon) queueExpiry() time.Duration {
 
 // queueText stores text that the user wants typed (media, voice, /force) as a
 // queued message. The row id is minus the update id, so a repeat is ignored.
-func (d *daemon) queueText(threadID, orig, tgMsg int64, text, kind string, act inbound.Action) {
+func (d *daemon) queueText(threadID, orig, tgMsg int64, text, kind string, act inbound.Action) bool {
 	th, err := d.st.Thread(d.ctx, threadID)
 	if err != nil || th.Status == store.ThreadClosed {
-		return
+		return false
 	}
 	id := -orig
 	inserted, err := d.st.InsertInbound(d.ctx, store.Inbound{
@@ -90,16 +91,17 @@ func (d *daemon) queueText(threadID, orig, tgMsg int64, text, kind string, act i
 	})
 	if err != nil {
 		d.log.Warn("queue text", "err", err)
-		return
+		return false
 	}
 	if !inserted {
-		return
+		return true
 	}
 	if act != inbound.ActText {
 		d.actions[id] = act
 	}
 	d.dirty[th.ID] = true
 	delete(d.nextPrep, th.ID)
+	return true
 }
 
 // joined handles a group from the joiner: the messages become one prompt.
@@ -109,17 +111,26 @@ func (d *daemon) joined(g inbound.Joined) {
 	}
 	first := g.UpdateIDs[0]
 	tgFirst := d.joining[first]
-	for _, id := range g.UpdateIDs {
+	var others []int64 // Telegram messages after the first, which get the same reactions
+	for i, id := range g.UpdateIDs {
+		if m := d.joining[id]; i > 0 && m != 0 {
+			others = append(others, m)
+		}
 		delete(d.joining, id)
 	}
 	if len(g.UpdateIDs) > 1 {
-		// The first update carries the joined text; the others are done.
+		// The first update carries the joined text; the others are done. The
+		// joined row is stored first, so a failure never loses the text.
+		if !d.queueText(g.ThreadID, first, tgFirst, g.Text, "text", inbound.ActText) {
+			d.dirty[g.ThreadID] = true // they stay queued, and are typed one by one
+			return
+		}
+		d.extra[-first] = others
 		for _, id := range g.UpdateIDs {
 			if err := d.st.SetInboundState(d.ctx, id, store.InboundDone, "joined", d.now()); err != nil {
 				d.log.Warn("joined: state", "err", err)
 			}
 		}
-		d.queueText(g.ThreadID, first, tgFirst, g.Text, "text", inbound.ActText)
 	}
 	d.dirty[g.ThreadID] = true
 	delete(d.nextPrep, g.ThreadID)
@@ -215,7 +226,7 @@ func (d *daemon) prepare(th store.Thread, in store.Inbound, act inbound.Action) 
 	if conv, err := d.st.Conversation(ctx, th.CurrentConversationID); err == nil {
 		rt = conv.Runtime
 	}
-	return prepResult{kind: prepGo, pane: pane, rt: rt}
+	return prepResult{kind: prepGo, pane: pane, rt: rt, conv: th.CurrentConversationID}
 }
 
 func (d *daemon) stillQueued(threadID, updateID int64) bool {
@@ -259,7 +270,17 @@ func (d *daemon) onPrepared(e evPrepared) {
 	case prepRefuse:
 		d.refuse(th, e.in, e.res.reason)
 	case prepGo:
-		d.startTyping(th, e.in, e.res)
+		// The checks ran in a worker. Make sure nothing changed since, right
+		// before typing (design section 9.5).
+		switch {
+		case th.Status == store.ThreadClosed:
+			delete(d.busy, tid)
+			d.refuse(th, e.in, inbound.ReasonTopicNotLive)
+		case d.paused.Load(), th.Status != store.ThreadLive, th.CurrentConversationID != e.res.conv:
+			delete(d.busy, tid) // the row stays queued; the next round checks again
+		default:
+			d.startTyping(th, e.in, e.res)
+		}
 	}
 }
 
@@ -292,6 +313,9 @@ func (d *daemon) expire(th store.Thread, in store.Inbound) {
 func (d *daemon) react(in store.Inbound, emoji string) {
 	if in.TGMessageID != 0 {
 		d.snd.React(in.ChatID, in.TGMessageID, emoji)
+	}
+	for _, m := range d.extra[in.UpdateID] { // the other messages of a joined group
+		d.snd.React(in.ChatID, m, emoji)
 	}
 }
 

@@ -191,6 +191,8 @@ func (d *daemon) createAlert(th store.Thread, kind string) {
 		_ = d.st.SetAlertState(ctx, id, store.AlertGone)
 		return
 	}
+	d.log.Info("alert sent", "thread", th.ID, "alert", id,
+		"latency_ms", d.now().Sub(pane.StateAt).Milliseconds()) // blocked signal to Telegram's reply
 	if err := d.st.SetAlertMessage(ctx, id, msg.MessageID); err != nil {
 		d.log.Warn("alert: save message", "err", err)
 	}
@@ -230,6 +232,13 @@ func (d *daemon) removeButtons(chatID, messageID int64) {
 // respond tells the user the result; isErr marks a refusal.
 func (d *daemon) answerAlert(alertID int64, idx int, respond func(text string, isErr bool)) {
 	ctx := d.ctx
+	// Claim the alert first: a second tap (or /approve) while the keys are
+	// being sent must not press them again.
+	if _, busy := d.answering.LoadOrStore(alertID, struct{}{}); busy {
+		respond("Already sending an answer.", false)
+		return
+	}
+	defer d.answering.Delete(alertID)
 	al, err := d.st.Alert(ctx, alertID)
 	if err != nil || al.State != store.AlertOpen {
 		respond("This prompt is gone.", true)

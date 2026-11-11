@@ -127,8 +127,12 @@ func (adapter) ParseLine(raw []byte, ctx agents.LineContext) ([]agents.Event, er
 	}
 	switch l.Type {
 	case "assistant", "user", "custom-title", "system", "attachment":
-	default:
+	case "", "api-request", "api-request-blob", "api-request-shape", "session-owner", "atis-latch",
+		"last-prompt", "tools-used", "queue-operation", "mode", "permission-mode",
+		"file-history-snapshot", "ai-title", "cost-state", "progress", "summary":
 		return nil, nil
+	default:
+		return unknown(l.Type), nil
 	}
 	if l.IsSidechain {
 		return nil, nil
@@ -492,4 +496,8 @@ func (a adapter) TranscriptCandidates(home, cwd string, since time.Time) ([]stri
 		out[i] = c.path
 	}
 	return out, nil
+}
+
+func unknown(name string) []agents.Event {
+	return []agents.Event{{Kind: agents.KindUnknown, Text: name}}
 }

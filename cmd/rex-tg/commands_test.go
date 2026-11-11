@@ -325,6 +325,19 @@ func TestDoctor(t *testing.T) {
 		t.Fatal(err)
 	}
 	st.Close()
+	if code := te.run("doctor"); !strings.Contains(te.stdout.String(), "✓ transcript formats: no unknown line types") {
+		t.Fatalf("exit %d\n%s", code, te.stdout)
+	}
+	st, _ = store.Open(filepath.Join(te.stateDir(), "rex-tg.db"))
+	_ = st.Set(ctx, "unknown_line_types", `{"claude":{"foo":12,"bar":1}}`)
+	st.Close()
+	te.run("doctor")
+	if !strings.Contains(te.stdout.String(), "! claude: 2 unknown line types (foo ×12, bar ×1)") {
+		t.Fatalf("unknown types line missing:\n%s", te.stdout)
+	}
+	st, _ = store.Open(filepath.Join(te.stateDir(), "rex-tg.db"))
+	_ = st.Delete(ctx, "unknown_line_types")
+	st.Close()
 	if err := os.MkdirAll(filepath.Join(te.stateDir(), "spool"), 0o700); err != nil {
 		t.Fatal(err)
 	}

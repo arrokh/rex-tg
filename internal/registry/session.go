@@ -2,7 +2,9 @@ package registry
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"time"
 
@@ -274,7 +276,17 @@ func (r *Registry) adopt(ctx context.Context, pane store.Pane, mem *paneMem, rt 
 		}
 	}
 
+	missing := false
+	if _, err := os.Stat(conv.Transcript); err != nil && errors.Is(err, fs.ErrNotExist) {
+		missing = true // the agent writes the file at the first prompt
+	}
 	resumeHint, label := classify(source, hasCursor, s.Started, mem.proc.start)
+	startFor := func(resume, hasCursor bool) TailStart {
+		if missing {
+			return TailStart{FromStart: true}
+		}
+		return startFor(resume, hasCursor)
+	}
 	newDivider := func(resume bool) string {
 		if resume {
 			return fmt.Sprintf("%s · resumed", rt)

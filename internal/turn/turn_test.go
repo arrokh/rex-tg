@@ -175,7 +175,10 @@ func TestCollapseRowCapAndSummaryMore(t *testing.T) {
 	html = find[turn.EditProgress](t, x.tick(4.5)).HTML
 	golden(t, "row_cap", html)
 	as = x.ev(text("a", agents.Final, "ok"), 5)
-	golden(t, "summary_more", find[turn.FinishProgress](t, as).HTML)
+	if types(as) != "Post" {
+		t.Fatalf("finish must be held: %s", types(as))
+	}
+	golden(t, "summary_more", find[turn.FinishProgress](t, x.tick(6.5)).HTML)
 }
 
 func TestRepostAfterPost(t *testing.T) {
@@ -281,7 +284,7 @@ func TestStateErrorAndErrorAnswer(t *testing.T) {
 	y.ev(prompt("p", "go"), 0)
 	y.ev(call("c", "t", "Read", agents.ToolRead, "a.go"), 0.5)
 	y.tick(2)
-	as = y.ev(text("e1", agents.Error, "rate limit <429>\nmore"), 3)
+	as = y.ev(text("e1", agents.Error, "rate limit <429>\nmore"), 4)
 	if types(as) != "Post,FinishProgress" {
 		t.Fatalf("got %s", types(as))
 	}
@@ -548,9 +551,9 @@ func TestSnapshotRoundTrip(t *testing.T) {
 		t.Errorf("restored differs:\n%v\n%v", a, b)
 	}
 	y.Event(result("r2", "t2", true, ""), false, at(5))
-	as := y.Event(text("a", agents.Final, "ok"), false, at(6))
+	as := y.Event(text("a", agents.Final, "ok"), false, at(7))
 	fin := find[turn.FinishProgress](t, as).HTML
-	if !strings.HasPrefix(fin, "✅ Done · 6s · 2 tools") {
+	if !strings.HasPrefix(fin, "✅ Done · 7s · 2 tools") {
 		t.Errorf("%q", fin)
 	}
 }
@@ -603,5 +606,102 @@ func TestTruncationAndElapsed(t *testing.T) {
 		if !strings.HasSuffix(html, c.want) {
 			t.Errorf("%s: want suffix %q", html, c.want)
 		}
+	}
+}
+
+func TestFinishHeldThenEmittedOnTick(t *testing.T) {
+	x := newH(t, turn.Config{}, progress)
+	x.ev(prompt("p", "go"), 0)
+	x.tick(2) // show
+	x.ev(call("c", "t", "Read", agents.ToolRead, "a"), 2.5)
+	find[turn.EditProgress](t, x.tick(4)) // edit at 4
+	as := x.ev(text("a", agents.Final, "ans"), 4.2)
+	if types(as) != "Post" || as[0].(turn.Post).Kind != "answer" {
+		t.Fatalf("answer must be immediate: %s", types(as))
+	}
+	if got := without(x.tick(5.9)); len(got) != 0 {
+		t.Fatalf("too early: %s", types(got))
+	}
+	as = without(x.tick(6))
+	if types(as) != "FinishProgress" || !strings.HasPrefix(as[0].(turn.FinishProgress).HTML, "✅ Done · 4s · 1 tool") {
+		t.Fatalf("got %v", as)
+	}
+	if got := x.tick(20); len(got) != 0 {
+		t.Errorf("emitted twice: %s", types(got))
+	}
+}
+
+func TestFinishImmediateWhenLastEditOld(t *testing.T) {
+	x := newH(t, turn.Config{}, progress)
+	x.ev(prompt("p", "go"), 0)
+	x.tick(2)
+	if as := x.ev(text("a", agents.Final, "ans"), 4); types(as) != "Post,FinishProgress" {
+		t.Errorf("got %s", types(as))
+	}
+}
+
+func TestLateFinalCorrectionIsHeld(t *testing.T) {
+	x := newH(t, turn.Config{}, progress)
+	x.ev(prompt("p", "go"), 0)
+	x.tick(2)
+	x.k.State(turn.StateIdle, at(10))
+	x.tick(15) // interrupted summary at 15
+	as := x.ev(text("a", agents.Final, "late"), 16)
+	if types(as) != "Post" {
+		t.Fatalf("got %s", types(as))
+	}
+	as = x.tick(17)
+	if types(as) != "FinishProgress" || as[0].(turn.FinishProgress).HTML != "✅ Done · 10s · 0 tools" {
+		t.Errorf("got %v", as)
+	}
+}
+
+func TestNewTurnFlushesHeldFinish(t *testing.T) {
+	for name, start := range map[string]func(x *h) []turn.Action{
+		"prompt": func(x *h) []turn.Action { return x.ev(prompt("p2", "next"), 4.5) },
+		"state":  func(x *h) []turn.Action { return x.k.State(turn.StateWorking, at(4.5)) },
+		"tool": func(x *h) []turn.Action {
+			return x.ev(call("c2", "t2", "Read", agents.ToolRead, "b"), 4.5)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			x := newH(t, turn.Config{}, progress)
+			x.ev(prompt("p", "go"), 0)
+			x.tick(2)
+			x.ev(text("a", agents.Final, "ans"), 3) // held
+			as := start(x)
+			if len(as) == 0 || types(as[:1]) != "FinishProgress" {
+				t.Fatalf("held finish must come first: %s", types(as))
+			}
+			if !strings.HasPrefix(as[0].(turn.FinishProgress).HTML, "✅ Done · 3s") {
+				t.Errorf("%v", as[0])
+			}
+			// The new turn then shows a fresh progress message.
+			find[turn.ShowProgress](t, x.tick(6.6))
+		})
+	}
+}
+
+func TestSnapshotRoundTripHeldFinish(t *testing.T) {
+	cfg := turn.Config{}
+	x := newH(t, cfg, progress)
+	x.ev(prompt("p", "go"), 0)
+	x.tick(2)
+	x.ev(text("a", agents.Final, "ans"), 3)
+	raw, err := json.Marshal(x.k.Snapshot())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var snap turn.Snapshot
+	if err := json.Unmarshal(raw, &snap); err != nil {
+		t.Fatal(err)
+	}
+	y := turn.Restore(cfg, progress, snap)
+	if got := y.Tick(at(3.5)); len(got) != 0 {
+		t.Fatalf("too early: %s", types(got))
+	}
+	as := y.Tick(at(4))
+	if types(as) != "FinishProgress" || !strings.HasPrefix(as[0].(turn.FinishProgress).HTML, "✅ Done · 3s") {
+		t.Errorf("got %v", as)
 	}
 }

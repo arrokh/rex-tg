@@ -175,7 +175,7 @@ func TestParseLineEdgeCases(t *testing.T) {
 	if _, err := a.ParseLine([]byte(`{"type":"message",`), agents.LineContext{}); err == nil {
 		t.Error("malformed JSON: want error")
 	}
-	for _, l := range []string{`{}`, `{"type":"future_thing","id":"1"}`, `{"type":"message","id":"1"}`, `{"type":"message","id":"1","message":{"role":"user","content":[{"type":"image"}]}}`} {
+	for _, l := range []string{`{}`, `{"type":"message","id":"1"}`, `{"type":"message","id":"1","message":{"role":"user","content":[{"type":"image"}]}}`} {
 		evs, err := a.ParseLine([]byte(l), agents.LineContext{})
 		if err != nil || len(evs) != 0 {
 			t.Errorf("%s: %v %v", l, evs, err)
@@ -280,5 +280,17 @@ func TestTranscriptCandidates(t *testing.T) {
 	got, err = a.TranscriptCandidates(home, "/no/such/dir", time.Time{})
 	if err != nil || len(got) != 0 {
 		t.Errorf("missing dir: %v %v", got, err)
+	}
+}
+
+func TestUnknownTypes(t *testing.T) {
+	cases := []struct{ line, want string }{
+		{`{"type":"future_thing","id":"1"}`, "future_thing"},
+	}
+	for _, c := range cases {
+		evs, err := pi.New().ParseLine([]byte(c.line), agents.LineContext{SessionID: "S"})
+		if err != nil || len(evs) != 1 || evs[0].Kind != agents.KindUnknown || evs[0].Text != c.want || evs[0].Key != "" {
+			t.Errorf("%s: %+v %v", c.line, evs, err)
+		}
 	}
 }

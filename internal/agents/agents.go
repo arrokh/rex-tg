@@ -172,8 +172,10 @@ type Adapter interface {
 	// ReadHeader reads the session identity from the start of a transcript.
 	ReadHeader(r io.Reader) (Header, error)
 	// ParseLine turns one complete JSONL line (without the newline) into zero
-	// or more events. It must not panic on any input, and it ignores line
-	// types it does not know.
+	// or more events. It must not panic on any input. For a line type it does
+	// not know (neither handled nor deliberately skipped), it returns one
+	// event with Kind KindUnknown, Text set to the type name, and no Key, so
+	// callers can count format changes after an agent update.
 	ParseLine(line []byte, ctx LineContext) ([]Event, error)
 	// TranscriptCandidates lists this runtime's transcripts for the working
 	// folder cwd that changed at or after since, newest first. home is the

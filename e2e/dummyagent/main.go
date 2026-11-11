@@ -31,6 +31,7 @@ type agent struct {
 	home, spool, logPath string
 	think                time.Duration
 	seed                 string
+	format               string
 	echoDelay            time.Duration
 
 	pending atomic.Int32 // prompts submitted and not yet answered
@@ -51,7 +52,14 @@ func main() {
 	flag.DurationVar(&a.think, "think", 2*time.Second, "simulated work time per prompt")
 	flag.StringVar(&a.seed, "seed", "", "prompt of a turn that is already in the transcript at start")
 	flag.DurationVar(&a.echoDelay, "echo-delay", 0, "time between a submit and the user line in the transcript")
+	flag.StringVar(&a.format, "format", "pi", "transcript and hook format: pi, claude, or codex")
 	flag.Parse()
+	switch a.format {
+	case "pi", "claude", "codex":
+	default:
+		fmt.Fprintln(os.Stderr, "dummyagent: -format must be pi, claude, or codex")
+		os.Exit(2)
+	}
 	if a.home == "" || a.spool == "" || a.logPath == "" {
 		fmt.Fprintln(os.Stderr, "dummyagent: -home, -spool, and -log are required")
 		os.Exit(2)
@@ -70,8 +78,7 @@ func (a *agent) run() error {
 	a.cwd = cwd
 	a.sessionID = uuid()
 	now := time.Now().UTC()
-	dir := filepath.Join(a.home, ".pi", "agent", "sessions", "--"+strings.ReplaceAll(strings.TrimPrefix(cwd, "/"), "/", "-")+"--")
-	a.sessionFile = filepath.Join(dir, fmt.Sprintf("%s-%03dZ_%s.jsonl", now.Format("2006-01-02T15-04-05"), now.Nanosecond()/1e6, a.sessionID))
+	a.sessionFile = a.transcriptPath(now)
 
 	// Raw input without echo, like a full-screen terminal program.
 	stty := exec.Command("stty", "raw", "-echo")
@@ -188,6 +195,7 @@ func (a *agent) readInput(out chan<- string) {
 // answer simulates a run: working, then the transcript lines, then done.
 func (a *agent) answer(prompt string) error {
 	a.status("working", "e2e")
+	a.hook("UserPromptSubmit")
 	time.Sleep(a.echoDelay)
 	if err := a.append("user", prompt, ""); err != nil {
 		return err
@@ -198,6 +206,7 @@ func (a *agent) answer(prompt string) error {
 	}
 	a.record(map[string]any{"ev": "done", "text": prompt})
 	a.pending.Add(-1)
+	a.hook("Stop")
 	a.status("done", "e2e")
 	return nil
 }
@@ -215,7 +224,23 @@ func (a *agent) record(v map[string]any) {
 	_, _ = f.Write(append(b, '\n'))
 }
 
-// append writes pi-format lines. The first call writes the header first.
+// transcriptPath is where this runtime keeps its session file.
+func (a *agent) transcriptPath(now time.Time) string {
+	stamp := fmt.Sprintf("%s-%03dZ", now.Format("2006-01-02T15-04-05"), now.Nanosecond()/1e6)
+	switch a.format {
+	case "claude":
+		dir := strings.NewReplacer("/", "-", ".", "-").Replace(a.cwd)
+		return filepath.Join(a.home, ".claude", "projects", dir, a.sessionID+".jsonl")
+	case "codex":
+		return filepath.Join(a.home, ".codex", "sessions", now.Format("2006"), now.Format("01"), now.Format("02"),
+			fmt.Sprintf("rollout-%s-%s.jsonl", now.Format("2006-01-02T15-04-05"), a.sessionID))
+	}
+	dir := "--" + strings.ReplaceAll(strings.TrimPrefix(a.cwd, "/"), "/", "-") + "--"
+	return filepath.Join(a.home, ".pi", "agent", "sessions", dir, stamp+"_"+a.sessionID+".jsonl")
+}
+
+// append writes the transcript lines of one message in the runtime's format.
+// The first call writes the header first.
 func (a *agent) append(role, text, stop string) error {
 	if err := os.MkdirAll(filepath.Dir(a.sessionFile), 0o755); err != nil {
 		return err
@@ -226,21 +251,53 @@ func (a *agent) append(role, text, stop string) error {
 	}
 	defer f.Close()
 	ts := time.Now().UTC().Format("2006-01-02T15:04:05.000Z")
-	var lines []any
-	if a.lastEntry == "" {
-		lines = append(lines, map[string]any{"type": "session", "version": 3, "id": a.sessionID, "timestamp": ts, "cwd": a.cwd})
-	}
 	id := shortID()
-	msg := map[string]any{"role": role, "content": []any{map[string]any{"type": "text", "text": text}}}
-	if stop != "" {
-		msg["stopReason"] = stop
-	}
 	var parent any
 	if a.lastEntry != "" {
 		parent = a.lastEntry
 	}
-	lines = append(lines, map[string]any{"type": "message", "id": id, "parentId": parent, "timestamp": ts, "message": msg})
+	first := a.lastEntry == ""
 	a.lastEntry = id
+	var lines []any
+	switch a.format {
+	case "claude":
+		line := map[string]any{"type": role, "uuid": id, "parentUuid": parent, "sessionId": a.sessionID,
+			"isSidechain": false, "cwd": a.cwd, "timestamp": ts}
+		if role == "user" {
+			line["message"] = map[string]any{"role": "user", "content": text}
+		} else {
+			line["message"] = map[string]any{"id": "msg_" + id, "role": "assistant", "stop_reason": "end_turn",
+				"content": []any{map[string]any{"type": "text", "text": text}}}
+		}
+		lines = append(lines, line)
+	case "codex":
+		if first {
+			lines = append(lines, map[string]any{"timestamp": ts, "type": "session_meta", "payload": map[string]any{
+				"id": a.sessionID, "cwd": a.cwd, "timestamp": ts, "originator": "codex-tui", "source": "cli"}})
+		}
+		if role == "user" {
+			lines = append(lines, map[string]any{"timestamp": ts, "type": "event_msg", "payload": map[string]any{
+				"type": "item_completed", "turn_id": "turn-" + id,
+				"item": map[string]any{"type": "UserMessage", "id": id,
+					"content": []any{map[string]any{"type": "text", "text": text}}}}})
+		} else {
+			lines = append(lines,
+				map[string]any{"timestamp": ts, "type": "response_item", "payload": map[string]any{
+					"type": "message", "id": "msg-" + id, "role": "assistant", "phase": "final_answer",
+					"content": []any{map[string]any{"type": "output_text", "text": text}}}},
+				map[string]any{"timestamp": ts, "type": "event_msg", "payload": map[string]any{
+					"type": "task_complete", "turn_id": "turn-" + id, "last_agent_message": text}})
+		}
+	default:
+		if first {
+			lines = append(lines, map[string]any{"type": "session", "version": 3, "id": a.sessionID, "timestamp": ts, "cwd": a.cwd})
+		}
+		msg := map[string]any{"role": role, "content": []any{map[string]any{"type": "text", "text": text}}}
+		if stop != "" {
+			msg["stopReason"] = stop
+		}
+		lines = append(lines, map[string]any{"type": "message", "id": id, "parentId": parent, "timestamp": ts, "message": msg})
+	}
 	var out bytes.Buffer
 	for _, l := range lines {
 		b, err := json.Marshal(l)
@@ -254,18 +311,32 @@ func (a *agent) append(role, text, stop string) error {
 	return err
 }
 
-// writeHook writes the session_start spool report, atomically.
+// writeHook writes the session start report.
 func (a *agent) writeHook() error {
-	payload := map[string]any{
-		"hook_event_name": "session_start",
-		"reason":          "startup",
-		"session_file":    a.sessionFile,
-		"cwd":             a.cwd,
-		"session_id":      a.sessionID,
+	if a.format == "pi" {
+		return a.writeSpool("session_start", map[string]any{
+			"hook_event_name": "session_start", "reason": "startup",
+			"session_file": a.sessionFile, "cwd": a.cwd, "session_id": a.sessionID})
 	}
+	return a.writeSpool("SessionStart", map[string]any{
+		"hook_event_name": "SessionStart", "source": "startup",
+		"session_id": a.sessionID, "transcript_path": a.sessionFile, "cwd": a.cwd})
+}
+
+// hook writes a later report. Pi has no per-prompt hook here.
+func (a *agent) hook(ev string) {
+	if a.format == "pi" {
+		return
+	}
+	_ = a.writeSpool(ev, map[string]any{"hook_event_name": ev,
+		"session_id": a.sessionID, "transcript_path": a.sessionFile, "cwd": a.cwd})
+}
+
+// writeSpool writes one spool file, atomically.
+func (a *agent) writeSpool(event string, payload map[string]any) error {
 	rep := map[string]any{
-		"runtime":     "pi",
-		"event":       "session_start",
+		"runtime":     a.format,
+		"event":       event,
 		"at":          time.Now().UTC().Format(time.RFC3339Nano),
 		"rex_session": os.Getenv("REX_SESSION"),
 		"rex_block":   os.Getenv("REX_BLOCK"),

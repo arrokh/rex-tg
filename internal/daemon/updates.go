@@ -21,16 +21,24 @@ const (
 // onUpdates stores and routes a batch of updates (flow 3). The poll offset
 // moves only after this returns, so a stored update is never lost.
 func (d *daemon) onUpdates(e evUpdates) {
-	var last int64
+	next := int64(0)
 	for _, u := range e.ups {
+		d.storeErr = nil
 		d.onUpdate(u)
-		if u.UpdateID > last {
-			last = u.UpdateID
+		if d.storeErr != nil {
+			// Not stored: leave the offset at this update so Telegram sends it again.
+			d.log.Error("update not stored; it will be fetched again", "update", u.UpdateID, "err", d.storeErr)
+			d.storeErr = nil
+			break
+		}
+		if u.UpdateID >= next {
+			next = u.UpdateID + 1
 		}
 	}
-	if last > 0 {
-		d.kvSetInt("tg_offset", last+1)
+	if next > 0 {
+		d.kvSetInt("tg_offset", next)
 	}
+	*e.next = next
 	close(e.done)
 }
 
@@ -50,9 +58,9 @@ func (d *daemon) fromOwner(from *telegram.User, chatID int64) bool {
 	return d.ownerUser != 0 && from != nil && from.ID == d.ownerUser && chatID == d.ownerChat
 }
 
-// record stores an update before it is handled. It returns false when the
-// update was stored before (a repeat after a restart).
-func (d *daemon) record(u telegram.Update, m *telegram.Message, kind, body string, threadID int64, state string) bool {
+// record stores an update before it is handled. inserted is false when the
+// update was stored before (a repeat after a restart); err is a store error.
+func (d *daemon) record(u telegram.Update, m *telegram.Message, kind, body string, threadID int64, state string) (inserted bool, err error) {
 	in := store.Inbound{
 		UpdateID: u.UpdateID, ChatID: m.Chat.ID, MessageThreadID: m.MessageThreadID, TGMessageID: m.MessageID,
 		FromID: m.From.ID, Kind: kind, Body: body, ThreadID: threadID, State: state, CreatedAt: d.now(),
@@ -62,7 +70,17 @@ func (d *daemon) record(u telegram.Update, m *telegram.Message, kind, body strin
 	}
 	ok, err := d.st.InsertInbound(d.ctx, in)
 	if err != nil {
-		d.log.Warn("store update", "update", u.UpdateID, "err", err)
+		return false, fmt.Errorf("store update %d: %w", u.UpdateID, err)
+	}
+	return ok, nil
+}
+
+// recorded is record for handlers: a store error is kept in d.storeErr for
+// onUpdates, and counts as "do not handle".
+func (d *daemon) recorded(u telegram.Update, m *telegram.Message, kind, body string, threadID int64, state string) bool {
+	ok, err := d.record(u, m, kind, body, threadID, state)
+	if err != nil {
+		d.storeErr = err
 		return false
 	}
 	return ok
@@ -90,7 +108,7 @@ func (d *daemon) onMessage(u telegram.Update) {
 
 func (d *daemon) mainMessage(u telegram.Update, m *telegram.Message) {
 	if m.Text == "" {
-		if d.record(u, m, "other", "", 0, store.InboundDone) {
+		if d.recorded(u, m, "other", "", 0, store.InboundDone) {
 			d.say(m.Chat.ID, 0, textOnly, nil)
 		}
 		return
@@ -99,7 +117,7 @@ func (d *daemon) mainMessage(u telegram.Update, m *telegram.Message) {
 	if r.Kind != inbound.RouteCommand {
 		return
 	}
-	if !d.record(u, m, "command", m.Text, 0, store.InboundDone) {
+	if !d.recorded(u, m, "command", m.Text, 0, store.InboundDone) {
 		return
 	}
 	d.mainCommand(r, m.Chat.ID, 0, false)
@@ -108,7 +126,7 @@ func (d *daemon) mainMessage(u telegram.Update, m *telegram.Message) {
 func (d *daemon) topicMessage(u telegram.Update, m *telegram.Message) {
 	th, ok, err := d.st.ThreadByTopic(d.ctx, m.Chat.ID, m.MessageThreadID)
 	if err != nil || !ok || th.Status == store.ThreadClosed {
-		if d.record(u, m, "other", "", 0, store.InboundDone) {
+		if d.recorded(u, m, "other", "", 0, store.InboundDone) {
 			d.say(m.Chat.ID, m.MessageThreadID, notLinkedText, nil)
 		}
 		return
@@ -121,11 +139,11 @@ func (d *daemon) topicMessage(u telegram.Update, m *telegram.Message) {
 	r := inbound.RouteText(m.Text, true, d.botUser)
 	switch r.Kind {
 	case inbound.RouteCommand:
-		if d.record(u, m, "command", m.Text, th.ID, store.InboundDone) {
+		if d.recorded(u, m, "command", m.Text, th.ID, store.InboundDone) {
 			d.topicCommand(u, m, th, r)
 		}
 	case inbound.RouteAgentText:
-		if !d.record(u, m, "text", r.Text, th.ID, store.InboundQueued) {
+		if !d.recorded(u, m, "text", r.Text, th.ID, store.InboundQueued) {
 			return
 		}
 		d.joining[u.UpdateID] = m.MessageID
@@ -139,7 +157,7 @@ func (d *daemon) onEdited(u telegram.Update) {
 	if m.From == nil || !d.fromOwner(m.From, m.Chat.ID) {
 		return
 	}
-	if !d.record(u, m, "other", "", 0, store.InboundDone) {
+	if !d.recorded(u, m, "other", "", 0, store.InboundDone) {
 		return
 	}
 	thread := int64(0)
@@ -162,9 +180,11 @@ func (d *daemon) onCallback(u telegram.Update) {
 		State: store.InboundDone, CreatedAt: d.now(),
 	})
 	if err != nil {
-		d.log.Warn("store callback", "update", u.UpdateID, "err", err)
+		d.storeErr = fmt.Errorf("store callback %d: %w", u.UpdateID, err)
+		d.answerCallback(cb.ID, "", false)
+		return
 	}
-	if err == nil && !ok {
+	if !ok {
 		return // answered before the restart
 	}
 	parts := strings.Split(cb.Data, ":")
