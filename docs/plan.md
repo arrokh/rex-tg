@@ -67,6 +67,8 @@ Each spike is a throwaway program, not product code. Each one writes its result 
 
 ### S1. Telegram topics in the private chat
 
+Status: partly done. See [spikes/s1-telegram.md](spikes/s1-telegram.md). Finding: with Threaded Mode, a private chat has no main chat; every message goes into a topic.
+
 **Status:** Pending. It needs your bot token and your phone.
 
 1. Create a test bot with @BotFather and turn on Threaded Mode.
