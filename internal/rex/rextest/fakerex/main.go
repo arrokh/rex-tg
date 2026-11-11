@@ -110,7 +110,7 @@ func main() {
 	}
 	r := sc.Rules[best]
 	if r.DelayMS > 0 {
-		time.Sleep(time.Duration(r.DelayMS) * time.Millisecond)
+		waitOrExitWhenOrphaned(time.Duration(r.DelayMS) * time.Millisecond)
 	}
 	fmt.Fprint(os.Stdout, r.Stdout)
 	fmt.Fprint(os.Stderr, r.Stderr)
@@ -144,7 +144,21 @@ func runEvents(dir string, sc scenario) {
 		fmt.Fprint(os.Stderr, sc.EventsStderr)
 		os.Exit(sc.EventsExitCode)
 	}
-	time.Sleep(time.Hour) // wait until killed
+	// Wait until killed, like the real `rex events`.
+	waitOrExitWhenOrphaned(time.Hour)
+}
+
+// waitOrExitWhenOrphaned waits for d, but exits at once when the parent is
+// gone. A real `rex` ends when its reader is gone (its next write fails); the
+// fake may print nothing more, so it watches for its parent instead. The e2e
+// crash tests kill the daemon with SIGKILL, which would leave it behind.
+func waitOrExitWhenOrphaned(d time.Duration) {
+	for deadline := time.Now().Add(d); time.Now().Before(deadline); {
+		if os.Getppid() == 1 {
+			os.Exit(0)
+		}
+		time.Sleep(min(200*time.Millisecond, time.Until(deadline)))
+	}
 }
 
 func stdinIsPipe() bool {

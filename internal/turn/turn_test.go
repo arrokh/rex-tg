@@ -722,7 +722,10 @@ func TestStoppedTurnSummary(t *testing.T) {
 	x.ev(prompt("p", "go"), 0)
 	x.tick(2)
 	x.k.State(turn.StateStopped, at(7))
-	as := x.tick(15)
+	if as := x.tick(8); len(as) != 0 {
+		t.Fatalf("ended before the short grace: %v", types(as))
+	}
+	as := x.tick(9.5) // the grace for a stopped agent is 2 s, not the 5 s for an answer
 	if len(as) == 0 {
 		t.Fatal("no action after the stop")
 	}

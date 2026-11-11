@@ -36,9 +36,13 @@ type Settings struct {
 
 // Config holds timing and size limits. Zero fields take their defaults.
 type Config struct {
-	ProgressDelay  time.Duration // default 2s
-	EditInterval   time.Duration // default 2s
-	AnswerGrace    time.Duration // default 5s
+	ProgressDelay time.Duration // default 2s
+	EditInterval  time.Duration // default 2s
+	AnswerGrace   time.Duration // default 5s
+	// StoppedGrace is the wait for the last lines of an agent that stopped.
+	// Its lines were written before it exited, so they are read by the time
+	// the stop is seen; a short wait is enough. Default 2s.
+	StoppedGrace   time.Duration
 	TypingInterval time.Duration // default 5s
 	MaxRows        int           // default 8
 	MaxSummaryRows int           // default 30
@@ -55,6 +59,9 @@ func (c Config) withDefaults() Config {
 	}
 	if c.AnswerGrace <= 0 {
 		c.AnswerGrace = 5 * time.Second
+	}
+	if c.StoppedGrace <= 0 {
+		c.StoppedGrace = 2 * time.Second
 	}
 	if c.TypingInterval <= 0 {
 		c.TypingInterval = 5 * time.Second
@@ -446,6 +453,9 @@ func (t *Tracker) State(st State, now time.Time) []Action {
 		}
 		t.unblock()
 		t.toEnding(string(st), now)
+		if st == StateStopped && t.cfg.StoppedGrace < t.cfg.AnswerGrace {
+			t.graceAt = now.Add(t.cfg.StoppedGrace)
+		}
 	}
 	return out
 }
