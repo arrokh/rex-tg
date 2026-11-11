@@ -565,6 +565,29 @@ func TestReact(t *testing.T) {
 	waitFor(t, "reaction", func() bool { return e.srv.Messages(chat)[0].Reaction == "👍" })
 }
 
+func TestNewerReactionWinsOverRetriedOlderOne(t *testing.T) {
+	e := newEnv(t, sender.Options{})
+	th := e.topic(1)
+	id := e.enqueue(th, "k", store.FormatPlain, "hi")
+	e.start()
+	e.waitState(id, store.OutboxSent)
+	msg := e.srv.Messages(chat)[0].ID
+	// The first reaction gets a 429 and waits for its retry; the newer one
+	// must win, and the older one must not be sent after it.
+	e.srv.FailNext("setMessageReaction", 1, 429, "Too Many Requests: retry after 1", 1)
+	e.s.React(chat, msg, "👀")
+	waitFor(t, "first attempt", func() bool { return len(e.srv.Calls("setMessageReaction")) == 1 })
+	e.s.React(chat, msg, "👍")
+	waitFor(t, "newer reaction", func() bool { return e.srv.Messages(chat)[0].Reaction == "👍" })
+	time.Sleep(1500 * time.Millisecond) // past the older reaction's retry time
+	if got := e.srv.Messages(chat)[0].Reaction; got != "👍" {
+		t.Fatalf("reaction = %q, want 👍", got)
+	}
+	if n := len(e.srv.Calls("setMessageReaction")); n != 2 {
+		t.Fatalf("setMessageReaction calls = %d, want 2 (the failed 👀 and the 👍)", n)
+	}
+}
+
 func TestRecover(t *testing.T) {
 	e := newEnv(t, sender.Options{})
 	th := e.topic(1)

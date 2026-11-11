@@ -448,6 +448,20 @@ func (d *daemon) approveDeny(th store.Thread, upd int64, approve bool) {
 	if !approve {
 		pick = idx[len(idx)-1]
 	}
+	// Choose by label when it says yes or no. Codex's "No" presses Esc, and
+	// its last other option is "Always", which must never answer /deny.
+	want := "yes"
+	if !approve {
+		want = "no"
+	}
+	for i, o := range al.Options {
+		if answerWord(o.Label) == want {
+			pick = i
+			if approve {
+				break
+			}
+		}
+	}
 	d.answerAlert(al.ID, pick, func(text string, _ bool) { d.replyTopic(th, tag, format.Escape(text)) })
 }
 
@@ -522,3 +536,22 @@ func (d *daemon) unlink(th store.Thread) {
 }
 
 var _ = agents.Pi
+
+// answerWord returns "yes" or "no" when an answer label is a plain yes or no
+// ("Yes", "1 Yes", "4 No", "No, and tell the agent"), else "".
+func answerWord(label string) string {
+	f := strings.Fields(strings.ToLower(label))
+	if len(f) > 1 && strings.Trim(f[0], ".)") != "" && strings.Trim(f[0], "0123456789.)") == "" {
+		f = f[1:] // a leading option number
+	}
+	if len(f) == 0 {
+		return ""
+	}
+	switch strings.Trim(f[0], ",.:;!") {
+	case "yes":
+		return "yes"
+	case "no":
+		return "no"
+	}
+	return ""
+}

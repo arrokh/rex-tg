@@ -269,6 +269,14 @@ func (d *daemon) onTopicCreated(e evTopicCreated) {
 		})
 		return
 	}
+	// A new topic starts in the configured display mode.
+	if m := d.cfg.Display.Mode; m != "" && m != th.Mode {
+		if err := d.st.SetThreadSettings(ctx, th.ID, m, th.Verbose, th.Reasoning, th.Muted); err != nil {
+			d.log.Warn("apply display mode", "thread", th.ID, "err", err)
+		} else {
+			th.Mode = m
+		}
+	}
 	d.tracker(th)
 	d.dirty[th.ID] = true
 	d.enqueue(store.OutboxItem{

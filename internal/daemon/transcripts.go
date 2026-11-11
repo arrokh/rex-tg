@@ -84,16 +84,17 @@ func (d *daemon) atEnd(conv store.Conversation, threadID int64, n int, pos *tail
 		return
 	}
 	var finals []agents.Event
+	var newest time.Time // the last event time, so a later replay of the file is recognized
 	end, err := tail.Scan(conv.Transcript, func(l tail.Line) error {
-		if n == 0 {
-			return nil
-		}
 		evs, err := a.ParseLine(l.Data, agents.LineContext{SessionID: conv.NativeID, Offset: l.Offset, CWD: conv.CWD})
 		if err != nil {
 			return nil
 		}
 		for _, e := range evs {
-			if e.Kind == agents.AssistantText && e.Phase == agents.Final {
+			if e.At.After(newest) {
+				newest = e.At
+			}
+			if n > 0 && e.Kind == agents.AssistantText && e.Phase == agents.Final {
 				finals = append(finals, e)
 				if len(finals) > n {
 					finals = finals[1:]
@@ -109,6 +110,9 @@ func (d *daemon) atEnd(conv store.Conversation, threadID int64, n int, pos *tail
 	*pos = end
 	cur, _, _ := d.st.Cursor(d.ctx, conv.Transcript)
 	cur.Transcript, cur.DevIno, cur.Offset, cur.UpdatedAt = conv.Transcript, end.DevIno, end.Offset, d.now()
+	if newest.After(cur.LastEventAt) {
+		cur.LastEventAt = newest
+	}
 	if err := d.st.SaveCursor(d.ctx, cur); err != nil {
 		d.log.Warn("save cursor", "err", err)
 	}

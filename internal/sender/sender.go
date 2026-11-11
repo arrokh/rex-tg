@@ -130,6 +130,11 @@ type Sender struct {
 	blocked bool
 	gone    map[int64]bool
 	served  map[int64]uint64
+	// reactions holds the newest reaction per message. An older reaction
+	// that has not been sent yet is skipped, so a message always ends with
+	// the newest one, also when an older one waits for a retry.
+	reactions map[[2]int64]uint64
+	reactGen  uint64
 }
 
 // New returns a Sender. Call Run to start it.
@@ -151,12 +156,13 @@ func New(st *store.Store, tg *telegram.Client, opt Options) *Sender {
 	}
 	return &Sender{
 		st: st, tg: tg, now: opt.Now, sleep: opt.Sleep, log: opt.Logger,
-		events: make(chan Event, eventBufSize),
-		wake:   make(chan struct{}, 1),
-		bucket: newBucket(opt.RatePerSecond, opt.Burst, opt.Now()),
-		prog:   map[int64][]*progOp{},
-		gone:   map[int64]bool{},
-		served: map[int64]uint64{},
+		events:    make(chan Event, eventBufSize),
+		wake:      make(chan struct{}, 1),
+		bucket:    newBucket(opt.RatePerSecond, opt.Burst, opt.Now()),
+		prog:      map[int64][]*progOp{},
+		gone:      map[int64]bool{},
+		served:    map[int64]uint64{},
+		reactions: map[[2]int64]uint64{},
 	}
 }
 
@@ -255,11 +261,25 @@ func (s *Sender) Call(prio Priority, fn func(ctx context.Context, tg *telegram.C
 }
 
 // React sets a reaction on a message. It waits for budget; errors are logged.
+// A newer reaction for the same message replaces an older one that was not
+// sent yet.
 func (s *Sender) React(chatID, messageID int64, emoji string) {
+	key := [2]int64{chatID, messageID}
+	s.mu.Lock()
+	s.reactGen++
+	gen := s.reactGen
+	s.reactions[key] = gen
+	s.mu.Unlock()
 	j := &job{prio: PriorityNewProgress}
 	j.run = func(ctx context.Context, j *job) jobResult {
+		if !s.reactionCurrent(key, gen) {
+			return jobResult{} // a newer reaction for this message is queued
+		}
 		if err := s.token(ctx); err != nil {
 			return jobResult{err: err}
+		}
+		if !s.reactionCurrent(key, gen) {
+			return jobResult{}
 		}
 		err := s.tg.SetMessageReaction(ctx, chatID, messageID, emoji)
 		if v := s.judge(err, 0); v == vRetry {
@@ -267,9 +287,21 @@ func (s *Sender) React(chatID, messageID int64, emoji string) {
 		} else if v != vOK {
 			s.log.Warn("reaction failed", "chat", chatID, "message", messageID, "verdict", v)
 		}
+		s.mu.Lock()
+		if s.reactions[key] == gen {
+			delete(s.reactions, key)
+		}
+		s.mu.Unlock()
 		return jobResult{}
 	}
 	s.addJob(j)
+}
+
+// reactionCurrent reports whether gen is still the newest reaction for key.
+func (s *Sender) reactionCurrent(key [2]int64, gen uint64) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.reactions[key] == gen
 }
 
 // Typing shows "typing…" in a topic. It is dropped when no budget is free.

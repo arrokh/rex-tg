@@ -247,9 +247,14 @@ func (d *daemon) onPrepared(e evPrepared) {
 	}
 	switch e.res.kind {
 	case prepWait:
-		if !d.waitNoticed[e.in.UpdateID] {
+		// The flag is kept in memory and in the row's reason, so a restart
+		// does not post the waiting notice again.
+		if !d.waitNoticed[e.in.UpdateID] && e.in.Reason != reasonWaitNoticed {
 			d.waitNoticed[e.in.UpdateID] = true
 			d.say(th.ChatID, th.MessageThreadID, "⏳ Waiting until the agent is idle.", waitMarkup(e.in.UpdateID))
+			if err := d.st.SetInboundState(d.ctx, e.in.UpdateID, store.InboundQueued, reasonWaitNoticed, d.now()); err != nil {
+				d.log.Warn("waiting: state", "err", err)
+			}
 		}
 	case prepRefuse:
 		d.refuse(th, e.in, e.res.reason)
@@ -361,12 +366,16 @@ func (d *daemon) onTyped(e evTyped) {
 	if err := d.st.SetInboundState(d.ctx, e.in.UpdateID, store.InboundDelivered, "", now); err != nil {
 		d.log.Warn("typing: state", "err", err)
 	}
+	d.react(e.in, "👀")
 	if dl != nil && dl.echoKey != "" {
+		// The agent recorded the prompt before the typing call returned.
+		// The reactions still go out in order: 👀, then 👍.
 		if err := d.st.AckInbound(d.ctx, e.in.UpdateID, dl.echoKey); err != nil {
 			d.log.Warn("ack inbound", "err", err)
 		}
 		d.react(e.in, "👍")
-		return
 	}
-	d.react(e.in, "👀")
 }
+
+// reasonWaitNoticed marks a queued row whose waiting notice was posted.
+const reasonWaitNoticed = "wait-noticed"
