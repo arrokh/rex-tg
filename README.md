@@ -115,6 +115,7 @@ Doctor prints one line for each check. `✓` means the check passed. `!` is a wa
 
 - `/agents` lists the agents in Rex panes. Tap one to open its topic. If the session already has a topic, you get a link to it. If you deleted that topic, a new one is made for the same session.
 - `/new` starts a coding agent in a new Rex tab. Tap the agent, then tap a recent folder or send a path such as `~/work/app`. The tab goes into the Rex session named after the folder (only the name counts, so two folders with the same name share a session). If there is no such session, rex-tg makes it. The agent starts as if you typed its name in a terminal, so your `~/.zshrc` applies. When the agent is ready, its topic opens. `/new pi ~/work/app` does it in one step.
+- If the new agent asks something before it starts, such as Claude Code's or Codex's "trust this folder?", the question comes to the chat with a button for each answer. A button moves the agent's cursor there and presses Enter, checking the screen after each key.
 - A topic is named after its Rex pane when you gave the pane a name, else after the agent's session name. The name follows changes of both.
 - When an agent exits or its pane closes, its topic says so (🔴), a running turn ends, and the topic's name gets a 🔴 until the agent runs again.
 - `/topics` lists the topics and their states.
@@ -376,7 +377,8 @@ Start with `rex-tg doctor`.
 | "may not have arrived" | rex-tg never resends on its own. Send the `/resend` command from the notice, if you want the missing parts. |
 | "may be in the input box without Enter" | The daemon stopped between the paste and Enter. Check the pane with `/screen`. rex-tg does not type the text again. |
 | `/new`: "exited with code 127" | The shell did not find the agent. Set its full path in `[agents.<name>] launch`, for example `launch = ["/opt/homebrew/bin/codex"]`. |
-| `/new`: "has not reported its session yet" | The agent may wait for an answer on its screen, such as a folder trust question. Answer it on the Mac, then open the agent with `/agents`. |
+| `/new`: "has not reported its session yet" | The agent may wait on its screen for something that is not a list of answers, such as a login. The message shows the screen. Deal with it on the Mac, then open the agent with `/agents`. |
+| `/new`: "did not react to a key" | The startup question did not move its cursor. Answer it on the Mac. rex-tg pressed nothing more. |
 | Telegram returns 409 Conflict | Another program uses the same bot token. Stop it. Only one daemon may poll Telegram. |
 | Telegram says the bot was blocked | Unblock the bot in Telegram. |
 | `doctor` reports unknown line types | The agent changed its transcript format. rex-tg ignores those lines. The adapter may need an update. |

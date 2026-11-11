@@ -84,7 +84,7 @@ func (p *memPane) Process(context.Context, string, string) (rex.Process, error) 
 	if pid == 0 {
 		pid = memPID
 	}
-	return rex.Process{Foreground: rex.ProcInfo{PID: pid, Name: memName}}, nil
+	return rex.Process{Foreground: rex.ProcInfo{PID: pid, Name: memName, Argv0: memName}}, nil
 }
 
 func (p *memPane) setState(s string) {

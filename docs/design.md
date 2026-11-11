@@ -497,7 +497,8 @@ Start an agent with `/new`:
 2. The bot asks for the folder. Its buttons offer up to 6 folders where agent sessions ran, the most recently used first. In a linked topic, the folder of the topic's agent comes first. You can also send a path: `~/work/app`, an absolute path, or a path from your home folder (`work/app`).
 3. rex-tg looks for the Rex session that has the folder's name, for example `rex-tg` for `~/work/personal/rex-tg`. It adds a tab named after the agent to that session (`rex window new --focus=false`, so the tab that the Rex app shows stays the same). When no session has that name, it makes one (`rex new`). Only the name counts, so two folders with the same name share a session. Rex takes at most 128 characters and no control characters in a name, so rex-tg leaves those out. Starts run one at a time, so two starts in one folder make one session.
 4. The tab runs the agent's `launch` command (section 12) through your login shell with its interactive startup files (`--interactive`), as when you type the command in a terminal. So the PATH and the shell functions from `~/.zshrc` apply. Rex passes each word of the command as it is: spaces and `$` are not read by the shell.
-5. When the agent reports its session (its hook at start), rex-tg opens its topic, as the Open button of `/agents` does. If the agent exits first, rex-tg shows the exit code and the end of the pane's screen. If no report comes within 90 seconds, rex-tg shows the screen and points to `/agents`. That can happen when the agent waits for an answer on its screen, such as a folder trust question.
+5. When the agent reports its session (its hook at start), rex-tg opens its topic, as the Open button of `/agents` does. If the agent exits first, rex-tg shows the exit code and the end of the pane's screen. If no report comes within 90 seconds, rex-tg shows the screen and points to `/agents`.
+6. Before its session starts, an agent may ask a question on its screen, such as "trust this folder?" of Claude Code and Codex in a folder they do not know yet. It has no topic then, so rex-tg posts the question in the chat with a button for each answer. It looks for a list of answers with a cursor (`❯` or `›`) in the bottom 30 lines, with at least two answers, on two screen reads in a row. A button moves the cursor to that answer with Down or Up, one key at a time, and reads the screen after each key; when the cursor is on the answer, it presses Enter. Claude Code 2.1.322 shows its trust answers without numbers, with "No, exit" first and the cursor on it, so a number key would be a guess; Codex 0.167.1 also takes Up, Down, and Enter. Before each key, rex-tg checks that typing is not paused and that the pane's foreground process is the agent that `/new` started. If a key shows no effect, it presses nothing more and says so. If you answer on the Mac, the buttons go. While a question is open, rex-tg keeps waiting for the agent, up to 10 minutes.
 
 `/new <agent>` skips the first question. `/new <agent> <folder>` skips both.
 
@@ -626,7 +627,7 @@ Which checks apply to which action:
 
 Checks 1 and 3 can never be skipped. Only `/force` skips check 4.
 
-`/new` types nothing into an existing pane, so only check 1 applies. It starts a new program, so it starts nothing while typing is paused.
+`/new` types nothing into an existing pane, so only check 1 applies. It starts a new program, so it starts nothing while typing is paused. A button of a startup question (8.7) presses keys in the new pane, so it needs check 1, typing not paused, the agent that `/new` started in front (check 3), and the same question still on the screen (like "alert still matches").
 
 Waiting (D11):
 

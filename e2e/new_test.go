@@ -20,16 +20,14 @@ import (
 	"rex-tg/internal/telegram/tgtest"
 )
 
-// TestNewAgent starts the dummy pi agent twice with /new in a real, isolated
-// Rex server. The first start makes the Rex session named after the folder,
-// through the buttons and a typed path. The second, `/new pi <folder>`, adds
-// a tab to that session. Each agent gets its own topic, and the first one
-// answers a prompt. The folder's name has a space, which must survive the
-// shell that starts the agent.
-func TestNewAgent(t *testing.T) {
-	t.Parallel()
+// newEnvE2E runs the daemon with a real, isolated Rex server and a paired
+// owner. /new pi starts the dummy agent with agentArgs added. It returns the
+// fake Telegram, the Rex socket, and a project folder whose name has a
+// space, which must survive the shell that starts the agent.
+func newEnvE2E(t *testing.T, tag string, agentArgs ...string) (*tgtest.Server, string, string) {
+	t.Helper()
 	piBin := program(t, "./dummyagent", "pi")
-	sock := startRex(t, "new")
+	sock := startRex(t, tag)
 
 	home := t.TempDir()
 	stateDir := t.TempDir()
@@ -52,7 +50,7 @@ func TestNewAgent(t *testing.T) {
 	cfg.InputSettings.JoinWindow = config.Duration{Duration: 200 * time.Millisecond}
 	cfg.InputSettings.JoinWindowLong = config.Duration{Duration: 400 * time.Millisecond}
 	cfg.InputSettings.BusyAfterTyping = config.Duration{Duration: 300 * time.Millisecond}
-	cfg.Agents.Pi.Launch = []string{piBin, "-home", home, "-spool", cfg.SpoolDir(), "-log", agentLog, "-think", "1s", "-format", "pi"}
+	cfg.Agents.Pi.Launch = append([]string{piBin, "-home", home, "-spool", cfg.SpoolDir(), "-log", agentLog, "-think", "1s", "-format", "pi"}, agentArgs...)
 
 	tg := tgtest.New(t)
 	t.Cleanup(func() {
@@ -107,6 +105,18 @@ func TestNewAgent(t *testing.T) {
 		return botMessageContaining(tg, chatID, 0, "Paired") != nil
 	})
 
+	return tg, sock, project
+}
+
+// TestNewAgent starts the dummy pi agent twice with /new in a real, isolated
+// Rex server. The first start makes the Rex session named after the folder,
+// through the buttons and a typed path. The second, `/new pi <folder>`, adds
+// a tab to that session. Each agent gets its own topic, and the first one
+// answers a prompt.
+func TestNewAgent(t *testing.T) {
+	t.Parallel()
+	tg, sock, project := newEnvE2E(t, "new")
+
 	// First agent: the buttons, then a typed path.
 	tg.PushMessage(chatID, 0, ownerID, "/new")
 	var q *tgtest.Message
@@ -114,18 +124,7 @@ func TestNewAgent(t *testing.T) {
 		q = botMessageContaining(tg, chatID, 0, "Which coding agent?")
 		return q != nil
 	})
-	pi := ""
-	for _, row := range q.Markup.InlineKeyboard {
-		for _, b := range row {
-			if b.Text == "pi" {
-				pi = b.CallbackData
-			}
-		}
-	}
-	if pi == "" {
-		t.Fatalf("no pi button: %+v", q.Markup)
-	}
-	tg.PushCallback(chatID, 0, ownerID, q.ID, pi)
+	tg.PushCallback(chatID, 0, ownerID, q.ID, button(t, q, "pi"))
 	eventually(t, 15*time.Second, "the folder question", func() bool {
 		return botMessageContaining(tg, chatID, 0, "Which folder?") != nil
 	})
@@ -190,4 +189,48 @@ func waitTopics(t *testing.T, tg *tgtest.Server, n int) int64 {
 		return true
 	})
 	return newest
+}
+
+// button returns the callback data of the button named text.
+func button(t *testing.T, m *tgtest.Message, text string) string {
+	t.Helper()
+	if m.Markup != nil {
+		for _, row := range m.Markup.InlineKeyboard {
+			for _, b := range row {
+				if b.Text == text {
+					return b.CallbackData
+				}
+			}
+		}
+	}
+	t.Fatalf("no %q button: %+v", text, m.Markup)
+	return ""
+}
+
+// TestNewAgentAsksFirst: the agent asks a question with a cursor list before
+// its session starts, as the trust questions of Claude Code and Codex do.
+// The question comes to the chat, and its button reaches the real pane: the
+// cursor moves down, Enter picks "Yes", the agent starts, and its topic
+// opens.
+func TestNewAgentAsksFirst(t *testing.T) {
+	t.Parallel()
+	tg, _, project := newEnvE2E(t, "ask", "-ask", "Trust this folder?")
+
+	tg.PushMessage(chatID, 0, ownerID, "/new pi "+project)
+	var q *tgtest.Message
+	eventually(t, 30*time.Second, "the agent's question", func() bool {
+		q = botMessageContaining(tg, chatID, 0, "asks this before it starts")
+		return q != nil
+	})
+	if !strings.Contains(q.Text, "Trust this folder?") {
+		t.Errorf("question text: %q", q.Text)
+	}
+	tg.PushCallback(chatID, 0, ownerID, q.ID, button(t, q, "Yes, continue"))
+	eventually(t, 20*time.Second, "the answer note", func() bool {
+		return botMessageContaining(tg, chatID, 0, "Answered: Yes, continue") != nil
+	})
+	thread := waitTopics(t, tg, 1)
+	eventually(t, 20*time.Second, "the intro card", func() bool {
+		return botMessageContaining(tg, chatID, thread, "Linked:") != nil
+	})
 }

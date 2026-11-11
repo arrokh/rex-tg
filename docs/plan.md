@@ -44,7 +44,7 @@ Proposed by the design and not yet confirmed by you, but none of them blocks the
 | Q8 no other hosts | 1 | — | — | Covered |
 | Q9 summary line | D13, 8.1 | Phase 3, task 3 | Golden-file test, Phase 3 check | Covered |
 | Q10 row labels | D14, 8.1 | Phase 3, task 4 | Golden-file test | Covered |
-| `/new` asks for the agent and the folder, makes the folder's Rex session when it is missing, and opens a new tab with the agent | 8.7, 9.5, 11 | After Phase 6 | Unit tests (folder paths, session names, questions); daemon tests (new session with buttons; a path in a linked topic, a new tab, an agent that exits; buttons after a lost send answer); end-to-end test `TestNewAgent` with real Rex | Covered |
+| `/new` asks for the agent and the folder, makes the folder's Rex session when it is missing, and opens a new tab with the agent | 8.7, 9.5, 11 | After Phase 6 | Unit tests (folder paths, session names, questions); daemon tests (new session with buttons; a path in a linked topic, a new tab, an agent that exits; buttons after a lost send answer; the trust question answered with a button or on the Mac); unit tests of the startup question reader and its keys; end-to-end tests `TestNewAgent` and `TestNewAgentAsksFirst` with real Rex | Covered |
 
 ## Order of work
 

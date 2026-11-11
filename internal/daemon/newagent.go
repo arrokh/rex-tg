@@ -56,6 +56,7 @@ const (
 	newPickAgent  newStep = iota // the agent buttons are shown
 	newPickFolder                // the folder buttons are shown, and a path may be typed
 	newStarting                  // a worker starts the agent; the request takes no more answers
+	newWaiting                   // the agent runs and has not reported its session; it may ask a startup question
 )
 
 // newFlow is one /new request (core).
@@ -68,6 +69,15 @@ type newFlow struct {
 	rt           agents.Runtime
 	folders      []string // the folder buttons, by index
 	expires      time.Time
+	answers      chan startupAnswer // newWaiting: button presses for the agent's startup question
+}
+
+// startupAnswer is a press of a startup question's button, for the worker
+// that waits for the agent.
+type startupAnswer struct {
+	cbID       string
+	msg        int64 // the question's message
+	seq, index int   // which question, and which answer
 }
 
 // newToken returns a random token for a request's buttons.
@@ -269,18 +279,20 @@ func (d *daemon) newCommand(chat, thread int64, linked bool, args string) {
 		d.say(chat, thread, "There is no agent named <code>"+esc(format.Truncate(bad, 40))+"</code>. Use /new, or /new pi|claude|codex [folder].", nil)
 		return
 	}
+	d.newSeq++
+	f := &newFlow{seq: d.newSeq, chat: chat, thread: thread, linked: linked, step: newPickAgent, expires: d.now().Add(newExpiry)}
+	token := newToken()
 	if rt != "" && folder != "" {
 		if dir, ok := d.checkFolder(chat, thread, folder); ok {
-			d.spawn(func() { d.launch("", 0, chat, thread, rt, dir) })
+			f.step, f.rt = newStarting, rt
+			d.newFlows[token] = f
+			d.spawn(func() { d.launch(token, 0, chat, thread, rt, dir) })
 		}
 		return
 	}
-	d.newSeq++
-	f := &newFlow{seq: d.newSeq, chat: chat, thread: thread, linked: linked, step: newPickAgent, expires: d.now().Add(newExpiry)}
 	if rt != "" {
 		f.step, f.rt = newPickFolder, rt
 	}
-	token := newToken()
 	d.newFlows[token] = f
 	q := *f
 	d.spawn(func() { d.ask(token, q) })
@@ -329,21 +341,39 @@ func (d *daemon) newButton(cb *telegram.CallbackQuery, parts []string) {
 		token = parts[0]
 		f = d.newFlows[token]
 	}
-	if f == nil || f.chat != chat || d.now().After(f.expires) {
+	if f == nil || f.chat != chat || (f.step < newStarting && d.now().After(f.expires)) {
 		// Expired, cancelled, started, or forgotten by a restart. Only the
 		// buttons go: the text may say that the agent started.
 		d.answerCallback(cb.ID, "This request expired. Send /new again.", false)
 		d.removeButtons(chat, msg)
 		return
 	}
+	kind := parts[1]
+	if kind == "o" { // an answer to the agent's startup question
+		if f.step == newWaiting && len(parts) == 4 {
+			seq, err1 := strconv.Atoi(parts[2])
+			idx, err2 := strconv.Atoi(parts[3])
+			if err1 == nil && err2 == nil {
+				select {
+				case f.answers <- startupAnswer{cbID: cb.ID, msg: msg, seq: seq, index: idx}:
+				default:
+					d.answerCallback(cb.ID, "One moment: the last answer is still being pressed.", false)
+				}
+				return
+			}
+		}
+		d.answerCallback(cb.ID, "This question is no longer open.", false)
+		d.removeButtons(chat, msg)
+		return
+	}
 	if f.msg == 0 {
 		f.msg = msg // Telegram's answer to the send was lost; the button names the message
 	}
-	if f.step == newStarting {
+	if f.step >= newStarting {
 		d.answerCallback(cb.ID, "The agent is starting already.", false)
 		return
 	}
-	switch kind := parts[1]; {
+	switch {
 	case kind == "x" && len(parts) == 2:
 		delete(d.newFlows, token)
 		d.answerCallback(cb.ID, "Cancelled", false)
@@ -439,7 +469,7 @@ func (d *daemon) startFlow(token string, f *newFlow, dir string) {
 // expireNewFlows ends the /new questions that waited too long (core).
 func (d *daemon) expireNewFlows(now time.Time) {
 	for token, f := range d.newFlows {
-		if f.step != newStarting && now.After(f.expires) {
+		if f.step < newStarting && now.After(f.expires) {
 			delete(d.newFlows, token)
 			if f.msg != 0 {
 				d.editAsync(f.chat, f.msg, "⌛ This /new request expired. Send /new again.", nil)
@@ -452,14 +482,7 @@ func (d *daemon) expireNewFlows(now time.Time) {
 // is the message to show the progress in; 0 sends a new one. token names the
 // request ("" for /new with all its arguments).
 func (d *daemon) launch(token string, msg, chat, thread int64, rt agents.Runtime, dir string) {
-	done := false
-	finish := func() {
-		if !done {
-			done = true
-			d.emit(evNewDone{token})
-		}
-	}
-	defer finish()
+	defer d.emit(evNewDone{token})
 	show := func(html string) {
 		if msg == 0 {
 			if m, err := d.sendNow(chat, thread, html, nil); err == nil {
@@ -493,8 +516,9 @@ func (d *daemon) launch(token string, msg, chat, thread int64, rt agents.Runtime
 	}
 	d.log.Info("new: agent started", "runtime", rt, "session", st.SessionID, "block", st.BlockID)
 	show("✅ Started " + name + " in " + where + ", in " + in + ".\nIts topic opens when " + name + " reports its session.")
-	finish()
-	d.awaitAgent(chat, thread, rt, st)
+	answers := make(chan startupAnswer, 1)
+	d.emit(evNewWaiting{token: token, answers: answers})
+	d.awaitAgent(chat, thread, rt, st, token, answers)
 }
 
 // errNoRex: Rex did not list its sessions, so nothing was started.
@@ -523,21 +547,27 @@ func (d *daemon) startTab(rt agents.Runtime, dir string) (st rex.Started, in str
 }
 
 // awaitAgent waits until the new agent reports its session, then has the
-// core open its topic (worker). It stops when the agent exits or after
-// Timing.NewAgentWait, and then shows the end of the pane's screen.
-func (d *daemon) awaitAgent(chat, thread int64, rt agents.Runtime, st rex.Started) {
+// core open its topic (worker). It stops when the agent exits, or after
+// Timing.NewAgentWait, and then shows the end of the pane's screen. A
+// startup question on the screen goes to the chat with its answers as
+// buttons (see startup.go), and keeps the wait going, up to newExpiry. The
+// presses come through answers.
+func (d *daemon) awaitAgent(chat, thread int64, rt agents.Runtime, st rex.Started, token string, answers <-chan startupAnswer) {
 	name := format.Escape(runtimeName(rt))
-	timeout := time.NewTimer(d.timing.NewAgentWait)
-	defer timeout.Stop()
+	start := time.Now()
+	deadline := start.Add(d.timing.NewAgentWait)
 	poll := time.NewTicker(d.timing.NewAgentPoll)
 	defer poll.Stop()
+	var q *shownQuestion
+	seq, seen := 0, ""
+	defer func() { d.closeQuestion(chat, q, "") }()
 	for {
 		select {
 		case <-d.ctx.Done():
 			return
-		case <-timeout.C:
-			d.sayScreen(chat, thread, st, "⏳ "+name+" has not reported its session yet, so it has no topic. When it is ready, open it with /agents.")
-			return
+		case a := <-answers:
+			d.onStartupAnswer(chat, st, rt, name, q, a)
+			continue
 		case <-poll.C:
 		}
 		if id, ok := d.agentPane(st.BlockID); ok {
@@ -553,7 +583,147 @@ func (d *daemon) awaitAgent(chat, thread int64, rt agents.Runtime, st rex.Starte
 			d.sayScreen(chat, thread, st, fmt.Sprintf("⚠️ %s exited with code %d.", name, p.LastExit.Code))
 			return
 		}
+		m, ok, err := d.readStartupMenu(d.ctx, st)
+		now := time.Now()
+		switch {
+		case err != nil: // keep what is shown; the next read decides
+		case ok:
+			// While a question waits for you, so does rex-tg, up to newExpiry.
+			if until := now.Add(d.timing.NewAgentWait); until.After(deadline) {
+				deadline = minTime(until, start.Add(newExpiry))
+			}
+			// A list counts once it shows on two reads in a row, so a frame
+			// drawn halfway is never posted.
+			if id := m.id(); (q == nil || q.id != id) && seen == id {
+				d.closeQuestion(chat, q, "")
+				seq++
+				q = d.postQuestion(chat, thread, token, name, m, seq)
+			}
+			seen = m.id()
+		default:
+			seen = ""
+			if q != nil {
+				d.closeQuestion(chat, q, "")
+				q = nil
+			}
+		}
+		if now.After(deadline) {
+			d.sayScreen(chat, thread, st, "⏳ "+name+" has not reported its session yet, so it has no topic. When it is ready, open it with /agents.")
+			return
+		}
 	}
+}
+
+// dropAnswers answers the button presses that reached a request after its
+// worker stopped waiting (core). Nothing reads them any more, and Telegram
+// shows a press as pending until it is answered.
+func (d *daemon) dropAnswers(f *newFlow) {
+	for f.answers != nil {
+		select {
+		case a := <-f.answers:
+			d.answerCallback(a.cbID, "This question is no longer open.", false)
+			d.removeButtons(f.chat, a.msg)
+		default:
+			return
+		}
+	}
+}
+
+// minTime returns the earlier of two times.
+func minTime(a, b time.Time) time.Time {
+	if a.Before(b) {
+		return a
+	}
+	return b
+}
+
+// shownQuestion is a startup question that awaitAgent posted.
+type shownQuestion struct {
+	id       string
+	seq      int
+	labels   []string
+	html     string // the question's text, without the outcome
+	markup   *telegram.InlineKeyboardMarkup
+	msg      int64 // its message; 0 when Telegram's answer to the send was lost
+	answered bool
+	closed   bool // its buttons are gone
+}
+
+// postQuestion posts a startup question with a button for each answer
+// (worker). It is posted once, also when the send fails: a send whose
+// outcome is unknown is never repeated.
+func (d *daemon) postQuestion(chat, thread int64, token, name string, m startupMenu, seq int) *shownQuestion {
+	html := "❓ <b>" + name + " asks this before it starts:</b>"
+	if len(m.question) > 0 {
+		html += "\n" + preBlock(m.question, 1500)
+	}
+	var rows [][]telegram.InlineKeyboardButton
+	for i, l := range m.labels {
+		rows = append(rows, []telegram.InlineKeyboardButton{{
+			Text: format.Redact(format.Truncate(l, 60)), CallbackData: fmt.Sprintf("nw:%s:o:%d:%d", token, seq, i),
+		}})
+	}
+	q := &shownQuestion{id: m.id(), seq: seq, labels: m.labels, html: html, markup: &telegram.InlineKeyboardMarkup{InlineKeyboard: rows}}
+	if sent, err := d.sendNow(chat, thread, html+"\nTap an answer. rex-tg moves the cursor there and presses Enter.", q.markup); err == nil {
+		q.msg = sent.MessageID
+	}
+	return q
+}
+
+// closeQuestion removes the buttons of a question that is still open, with
+// a note (worker). A question that was answered here keeps its text.
+func (d *daemon) closeQuestion(chat int64, q *shownQuestion, note string) {
+	if q == nil || q.closed || q.msg == 0 {
+		return
+	}
+	q.closed = true
+	if q.answered {
+		return
+	}
+	if note == "" {
+		note = "This question is no longer on the screen."
+	}
+	d.editMessage(chat, q.msg, q.html+"\n"+note, nil)
+}
+
+// onStartupAnswer presses the answer of a button, if it belongs to the
+// question on the screen (worker).
+func (d *daemon) onStartupAnswer(chat int64, st rex.Started, rt agents.Runtime, name string, q *shownQuestion, a startupAnswer) {
+	if q == nil || q.closed || a.seq != q.seq || a.index < 0 || a.index >= len(q.labels) {
+		d.answerCallback(a.cbID, "This question is no longer open.", false)
+		d.removeButtons(chat, a.msg)
+		return
+	}
+	if q.msg == 0 {
+		q.msg = a.msg // Telegram's answer to the send was lost; the button names the message
+	}
+	d.answerCallback(a.cbID, "", false)
+	label := esc(q.labels[a.index])
+	keep := false // keep the buttons, so you can tap again
+	var note string
+	switch err := d.answerStartup(d.ctx, st, rt, q.id, a.index); {
+	case err == nil:
+		q.answered = true
+		note = "✅ Answered: " + label
+	case errors.Is(err, errPausedBefore):
+		note, keep = "⏸ Typing is paused, so nothing was pressed. Use /unpause, then tap again.", true
+	case errors.Is(err, errRetryBefore):
+		note, keep = "⚠️ Could not reach Rex, so the answer may be incomplete. Check the screen, then tap again.", true
+	case errors.Is(err, errGoneBefore):
+		note = "⛔ Not sent: " + format.Escape(inbound.ReasonAgentNotFront) + "."
+	case errors.Is(err, errStartupStuck):
+		note = "⚠️ " + name + " did not react to a key, so nothing more was pressed. Answer it on the Mac."
+	case errors.Is(err, errStartupGone):
+		note = "This question is no longer on the screen."
+	default: // the daemon stops
+		return
+	}
+	if keep {
+		d.editMessage(chat, q.msg, q.html+"\n"+note, q.markup)
+		return
+	}
+	q.closed = true
+	d.editMessage(chat, q.msg, q.html+"\n"+note, nil)
 }
 
 // agentPane returns the pane row of a Rex block once its agent has a session.

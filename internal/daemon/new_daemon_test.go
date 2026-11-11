@@ -210,3 +210,106 @@ func TestNewInALinkedTopicTakesOnlyAPath(t *testing.T) {
 		}
 	}
 }
+
+// trustScreen is Claude Code's trust question with the cursor on answer i:
+// no numbers, and "No, exit" first.
+func trustScreen(i int) string {
+	answers := []string{"No, exit", "Yes, I trust this folder"}
+	s := " Quick safety check: Is this a project you created or one you trust?\n\n"
+	for k, a := range answers {
+		if k == i {
+			s += " ❯ " + a + "\n"
+		} else {
+			s += "   " + a + "\n"
+		}
+	}
+	return s + "\n Enter to confirm · Esc to cancel\n"
+}
+
+// trustEnv is a daemon whose next /new starts Claude Code in pane S2/B2,
+// which shows the trust question. A question that waits keeps rex-tg
+// waiting too, so the start wait is short here: an answer after it must
+// still work.
+func trustEnv(t *testing.T) (*env, string) {
+	e := newEnv(t)
+	e.seedOwner()
+	dir := filepath.Join(e.home, "work", "fresh")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	e.fake.On([]string{"new"}, `{"session_id":"S2","initial_windows":[{"window_id":"W2","block_ids":["B2"]}]}`, 0)
+	e.fake.On([]string{"block", "call", "-s", "S2", "-b", "B2", "process"},
+		fmt.Sprintf(`{"foreground":{"pid":6161,"name":"2.1.322","argv0":"claude","cwd":%q}}`, dir), 0)
+	e.fake.On([]string{"block", "call", "-s", "S2", "-b", "B2", "program_status"}, `{"records":[]}`, 0)
+	e.fake.SetScreenMachine("no", map[string]string{
+		"no": trustScreen(0), "yes": trustScreen(1), "started": "╭───╮\n│ > │\n╰───╯\n",
+	}, map[string]map[string]string{
+		"no":  {"down": "yes"},
+		"yes": {"up": "no", "enter": "started"},
+	})
+	opt := e.options()
+	opt.Timing.NewAgentWait = 300 * time.Millisecond
+	e.startWith(opt)
+	return e, dir
+}
+
+// A new Claude Code asks whether you trust the folder before its session
+// starts, so it has no topic yet. The question comes to the chat with its
+// answers as buttons. The button moves the cursor with Down and presses
+// Enter, and the agent's topic opens once it reports its session.
+func TestNewAnswersTheTrustQuestion(t *testing.T) {
+	e, dir := trustEnv(t)
+	e.say(0, "/new claude ~/work/fresh")
+	q := e.waitText(0, "asks this before it starts")
+	if !strings.Contains(q.Text, "Quick safety check") || buttonData(q, "No, exit") == "" {
+		t.Fatalf("question: %q %+v", q.Text, q.Markup)
+	}
+	time.Sleep(time.Second) // longer than the start wait: the question keeps it going
+	if e.hasText(0, "has not reported its session") {
+		t.Fatal("rex-tg stopped waiting while the question was open")
+	}
+	e.pressButton(q, buttonData(q, "Yes, I trust this folder"))
+	e.waitFor("the answer note", func() bool {
+		m, _ := e.message(q.ID)
+		return strings.Contains(m.Text, "Answered: Yes, I trust this folder") && m.Markup == nil
+	})
+	if got := strings.Join(e.keys(), ","); got != "down,enter" {
+		t.Fatalf("keys %q, want down,enter", got)
+	}
+
+	// Now the agent starts its session.
+	e.fake.On([]string{"ls"}, `{"sessions":[{"session_id":"S1","label":"main"},{"session_id":"S2","label":"fresh"}]}`, 0)
+	e.fake.On([]string{"block", "ls", "-s", "S2"}, `{"blocks":[{"block_id":"B2","label":"shell"}]}`, 0)
+	transcript := filepath.Join(e.home, "claude-new.jsonl")
+	if err := os.WriteFile(transcript, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	e.spoolFrom("S2", "B2", "claude", "SessionStart", map[string]any{
+		"hook_event_name": "SessionStart", "session_id": "c-new-1", "transcript_path": transcript, "cwd": dir, "source": "startup",
+	})
+	e.waitText(0, "Opened fresh")
+	if got := strings.Join(e.keys(), ","); got != "down,enter" {
+		t.Errorf("keys after the start %q, want down,enter", got)
+	}
+}
+
+// You answer the question on the Mac instead: its buttons go, and the
+// message says why. No key is pressed.
+func TestNewTrustQuestionAnsweredOnTheMac(t *testing.T) {
+	e, _ := trustEnv(t)
+	e.say(0, "/new claude ~/work/fresh")
+	q := e.waitText(0, "asks this before it starts")
+	e.fake.SetScreenState("started")
+	e.waitFor("the closed question", func() bool {
+		m, _ := e.message(q.ID)
+		return strings.Contains(m.Text, "no longer on the screen") && m.Markup == nil
+	})
+	e.pressButton(q, buttonData(q, "Yes, I trust this folder")) // a late tap
+	e.waitFor("the answer to the late tap", func() bool {       // before or after the wait ended
+		cb := e.callbackTexts()
+		return slices.Contains(cb, "This question is no longer open.") || slices.Contains(cb, "This request expired. Send /new again.")
+	})
+	if keys := e.keys(); len(keys) != 0 {
+		t.Errorf("keys %q, want none", keys)
+	}
+}

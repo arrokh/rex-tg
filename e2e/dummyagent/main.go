@@ -35,6 +35,7 @@ type agent struct {
 	echoDelay            time.Duration
 	exitFile             string
 	fixedID              string
+	ask                  string
 
 	pending atomic.Int32 // prompts submitted and not yet answered
 
@@ -57,6 +58,7 @@ func main() {
 	flag.StringVar(&a.exitFile, "exit-file", "", "exit at once when this file exists")
 	flag.StringVar(&a.fixedID, "session-id", "", "session id; when its transcript exists, the agent resumes it")
 	flag.StringVar(&a.format, "format", "pi", "transcript and hook format: pi, claude, or codex")
+	flag.StringVar(&a.ask, "ask", "", "a question to ask at start, before the session starts, like a trust question")
 	flag.Parse()
 	switch a.format {
 	case "pi", "claude", "codex":
@@ -116,6 +118,9 @@ func (a *agent) run() error {
 		_ = restore.Run()
 	}()
 
+	if a.ask != "" && !a.askFirst() {
+		return nil // "No": exit before the session starts
+	}
 	fmt.Print("\x1b[?2004h") // bracketed paste on
 	a.status("idle", "")
 	fmt.Print("dummy pi ready\r\n")
@@ -141,6 +146,48 @@ func (a *agent) run() error {
 		}
 	}
 	return nil
+}
+
+// askFirst asks a.ask with a list of answers and a cursor, as the trust
+// questions of Claude Code and Codex do: the cursor starts on "No, exit",
+// Up and Down move it, and Enter picks. It reports whether the answer is
+// Yes.
+func (a *agent) askFirst() bool {
+	answers := []string{"No, exit", "Yes, continue"}
+	cur := 0
+	draw := func() {
+		fmt.Print("\x1b[2J\x1b[H " + a.ask + "\r\n\r\n")
+		for i, s := range answers {
+			mark := "  "
+			if i == cur {
+				mark = "❯ "
+			}
+			fmt.Print(" " + mark + s + "\r\n")
+		}
+		fmt.Print("\r\n Enter to confirm\r\n")
+	}
+	draw()
+	buf := make([]byte, 64)
+	for {
+		n, err := os.Stdin.Read(buf)
+		if err != nil {
+			return false
+		}
+		for in := string(buf[:n]); in != ""; {
+			switch {
+			case strings.HasPrefix(in, "\x1b[A") || strings.HasPrefix(in, "\x1bOA"):
+				cur, in = max(cur-1, 0), in[3:]
+			case strings.HasPrefix(in, "\x1b[B") || strings.HasPrefix(in, "\x1bOB"):
+				cur, in = min(cur+1, len(answers)-1), in[3:]
+			case in[0] == '\r' || in[0] == '\n':
+				fmt.Print("\x1b[2J\x1b[H")
+				return cur == 1
+			default:
+				in = in[1:]
+			}
+		}
+		draw()
+	}
 }
 
 // findTranscript returns the existing transcript of the fixed session id.

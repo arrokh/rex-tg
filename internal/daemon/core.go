@@ -86,6 +86,12 @@ type (
 	}
 	// evNewDone: a /new request ended.
 	evNewDone struct{ token string }
+	// evNewWaiting: the agent of a /new request runs; answers takes the
+	// presses of its startup question's buttons.
+	evNewWaiting struct {
+		token   string
+		answers chan startupAnswer
+	}
 	// evNewReady: the agent that /new started reported its session.
 	evNewReady  struct{ paneID, thread int64 }
 	evAlertDone struct{ threadID int64 }
@@ -125,6 +131,7 @@ type daemon struct {
 	reg      *registry.Registry
 	snd      *sender.Sender
 	adapters map[agents.Runtime]agents.Adapter
+	rules    registry.Rules // how a process is told to be an agent
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -203,12 +210,13 @@ func newDaemon(cfg config.Config, home string, log *slog.Logger, now func() time
 		jl = 1500 * time.Millisecond
 	}
 	d.joiner = inbound.NewJoiner(jw, jl, 4000)
+	d.rules = registry.Rules{
+		PiArgv0: cfg.Agents.PiArgv0, ClaudeArgv0: cfg.Agents.ClaudeArgv0,
+		ClaudeExecGlob: cfg.Agents.ClaudeExecGlob, CodexNames: cfg.Agents.CodexNames,
+	}
 	d.reg = registry.New(st, rx, registry.Options{
-		Home: home,
-		Rules: registry.Rules{
-			PiArgv0: cfg.Agents.PiArgv0, ClaudeArgv0: cfg.Agents.ClaudeArgv0,
-			ClaudeExecGlob: cfg.Agents.ClaudeExecGlob, CodexNames: cfg.Agents.CodexNames,
-		},
+		Home:            home,
+		Rules:           d.rules,
 		Adapters:        adapters,
 		Now:             now,
 		Logger:          log,
@@ -326,7 +334,14 @@ func (d *daemon) handle(ev any) {
 			f.folders = e.folders
 		}
 	case evNewDone:
+		if f, ok := d.newFlows[e.token]; ok {
+			d.dropAnswers(f)
+		}
 		delete(d.newFlows, e.token)
+	case evNewWaiting:
+		if f, ok := d.newFlows[e.token]; ok {
+			f.step, f.answers = newWaiting, e.answers
+		}
 	case evNewReady:
 		d.openNewTopic(e.paneID, e.thread)
 	case evAlertDone:
