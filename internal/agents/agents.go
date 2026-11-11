@@ -153,6 +153,7 @@ type Header struct {
 type LineContext struct {
 	SessionID string // the session the line belongs to
 	Offset    int64  // byte offset of the line's first byte, for fallback keys
+	CWD       string // the session's working folder, for relative file labels; may be empty
 }
 
 // InputProfile describes how rex-tg types into the agent's terminal UI.

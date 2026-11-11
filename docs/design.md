@@ -29,7 +29,7 @@ Not in the first version: photos, files, voice notes, group chats, and more than
 | --- | --- | --- | --- |
 | D1 | Telegram surface | Topics in the private chat with the bot. BotFather calls this "Threaded Mode"; `getMe` then reports `has_topics_enabled`. | Decided (Q1) |
 | D2 | Source of shown text | Each agent's session JSONL file | Decided (your requirement) |
-| D3 | Source of agent state | Rex `program_status_changed` events when the agent reports them. Otherwise the agent's hooks and its transcript lines. | Proposed; spike S2 checks which agents report to Rex |
+| D3 | Source of agent state | Rex `program_status_changed` events. All three agents report to Rex (observed in S2). The agent's hooks and its transcript lines are the second sources. | Proposed; S2 confirmed that all three agents report to Rex |
 | D4 | Path for typed text | Rex pane input: a paste event, then Enter | Decided (your requirement) |
 | D5 | What a topic is bound to | The agent session. A new session in the same pane takes over the topic. | Decided (Q5, revised on 2026-11-11) |
 | D6 | Finding the transcript of a pane | Agent hooks report the pane and the transcript path. A process scan with a "newest file" guess is the fallback. | Proposed |
@@ -164,9 +164,9 @@ sequenceDiagram
 
 The pane registry keeps one state per pane: `idle`, `working`, `done`, `blocked` (with kind `permission`, `question`, or `auth`), or `error`. It takes the state from three sources (D3):
 
-1. **Rex status.** `program_status_changed` events, when the agent reports them to Rex. pi does. Spike S2 checks the Claude Code and Codex CLIs.
-2. **Hooks.** `UserPromptSubmit` means working. `Stop` means idle. The `PermissionRequest` hooks of Claude Code and Codex mean blocked. Claude Code's `Notification` hook fires both for permission requests and for "waiting for your input". Only the first kind means blocked, and spike S3 records the field that tells them apart. For pi, spike S3 finds the matching extension events.
-3. **Transcript lines.** A prompt line means working. A final answer means idle.
+1. **Rex status.** `program_status_changed` events. All three agents report their state to Rex: pi, Claude Code, and Codex (observed in spike S2).
+2. **Hooks.** These are the second source. `UserPromptSubmit` means working. `Stop` means idle. The `PermissionRequest` hooks of Claude Code and Codex mean blocked. Claude Code's `Notification` hook fires both for permission requests and for "waiting for your input". Only `notification_type` = `permission_prompt` means blocked (observed in S3). Claude Code sends no `Stop` after Esc or after a denied permission. So after those, Rex status and the transcript are the only signals (observed in S2). For pi, the extension events `agent_start` and `agent_end` mark the start and end of a run (observed in S3). Codex hook payloads are not yet checked at runtime.
+3. **Transcript lines.** These are the third source. A prompt line means working. A final answer means idle.
 
 How the sources combine:
 
@@ -185,7 +185,7 @@ What the states drive:
 End of a turn:
 
 - A turn ends when the final answer line arrives, or when a state source says `idle` or `done`.
-- The state often arrives before the answer line is read. So after `idle` or `done`, the turn tracker waits up to 5 seconds for the answer line.
+- The state often arrives before the answer line is read. So after `idle` or `done`, the turn tracker waits up to 5 seconds for the answer line. In the Claude Code and Codex spikes, the state and the final line came within about 40 ms of each other (observed in S2 and S4).
 - If the answer arrives after that, it is still sent, and the summary line is corrected.
 
 The registry detects agents by the pane's foreground process, not by the `app` field of the Rex status. T3 Code panes report `app=claude` while their foreground process is `tr3x`, and they are not supported.
@@ -292,9 +292,9 @@ Hook events per runtime. This table is the full list of the hook entries that `r
 
 | Runtime | Events that report | Data used |
 | --- | --- | --- |
-| Claude Code | `SessionStart` (source `startup`, `resume`, `clear`, or `compact`), `UserPromptSubmit`, `Stop`, `PermissionRequest`, `Notification`, `SessionEnd` | `session_id`, `transcript_path`, `cwd`, `source`, `hook_event_name` from stdin |
-| Codex | `SessionStart`, `UserPromptSubmit`, `Stop`, `PermissionRequest` | to verify in spike S3 |
-| pi | `session_start`, `session_shutdown`, and the events for session switches and agent start and end, if pi has them | `ctx.sessionManager.getSessionFile()` |
+| Claude Code | `SessionStart` (source `startup`, `resume`, `clear`, or `compact`), `UserPromptSubmit`, `Stop`, `PermissionRequest`, `Notification`, `SessionEnd` | `session_id`, `transcript_path`, `cwd`, `source`, `hook_event_name` from stdin, and `notification_type` on `Notification` |
+| Codex | `SessionStart`, `UserPromptSubmit`, `Stop`, `PermissionRequest` | The names `session_id`, `transcript_path`, `hook_event_name`, `permission_mode`, and `tool_input` occur in the Codex 0.167.0 binary. The spike ran with hooks off, so no payload was checked at runtime (S3). |
+| pi | `session_start`, `session_shutdown`, `agent_start`, `agent_end`. The rex-tg extension subscribes to these four. `/new`, `/resume`, and forks are not yet observed. | `ctx.sessionManager.getSessionFile()`, plus `reason`, `previousSessionFile`, and `targetSessionFile` |
 
 Where a tailer starts reading:
 
@@ -303,9 +303,11 @@ Where a tailer starts reading:
 | A topic is created | The end of the file. The last 3 final answers are read from the part before it. |
 | A new session takes over a topic (`startup`, `clear`, `/new`) | Byte 0 of the new file |
 | A session of a topic resumes (`/resume`, `--continue`, after a Rex restart) | Its saved cursor. Without one: the end of the file, plus the last 3 final answers. |
-| A file that rex-tg first sees through a resume | The end of the file, plus the last 3 final answers, even when the file is new. Some agents may copy the old history into a new file on resume (spike S3). |
-| No hook says whether a session is new or resumed | Resumed if the file's first line is older than the agent process; otherwise new |
-| The path does not exist yet | The tailer waits for the file. pi may create it only at the first reply (spike S4). |
+| A file that rex-tg first sees through a resume | The end of the file, plus the last 3 final answers, even when the file is new. Claude Code and Codex append to the old file and copy no old lines (observed in S3 and S4). pi is not checked yet. |
+| No hook says whether a session is new or resumed | Resumed if the file's first line that has a timestamp is older than the agent process; otherwise new. Claude Code's first lines have no timestamp (observed in S4). |
+| The path does not exist yet | The tailer waits for the file. pi and Codex create it at the first prompt. Claude Code creates it at session start (observed in S4). |
+
+Resume rule: Claude Code and Codex resume into the same transcript file, with the same session ID. Old lines stay, and no history is copied (observed in S3 and S4). pi is not checked yet, so its resume rule is still an assumption (section 14).
 
 Two guards stop repeats:
 
@@ -431,10 +433,16 @@ Telegram allows only a fixed set of reaction emoji. Hermes uses 👀, 👍, and 
 When the pane's state is `blocked` with kind `permission` or `question`:
 
 1. rex-tg captures the pane (`rex capture --trim`) and takes the last 25 lines.
-2. It posts them as monospace text, with one button per answer, for example `1 Yes`, `2 Always`, `3 No`, and `Esc`. For a question that allows free text, a `✍ Other…` button makes your next message the answer. OpenClaw and Hermes both use buttons like these. `/approve` and `/deny` also work, as in Hermes.
-3. A button press sends the matching keys through `rex send-key`. Spike S2 records the keys for each agent version.
+2. It posts them as monospace text, with one button per answer, for example `1 Yes`, `2 Always`, `4 No`, and `Esc`. For a question that allows free text, a `✍ Other…` button makes your next message the answer. OpenClaw and Hermes both use buttons like these. `/approve` and `/deny` also work, as in Hermes.
+3. A button press sends the matching keys through `rex send-key`. The keys seen in the spikes are listed below.
 
-The `PermissionRequest` hooks of Claude Code and Codex also carry the tool name and input. rex-tg uses them for the alert's first line. The screen capture is still needed, because the answer keys are on the screen.
+The `PermissionRequest` hooks of Claude Code carry the tool name and input (observed in S3). rex-tg uses them for the alert's first line. The Codex hook payload is not yet checked at runtime (S3). The screen capture is still needed, because the answer keys are on the screen.
+
+Answer keys seen in the spikes (S2):
+
+- **Claude Code.** `1` (Yes) and `4` (No) were pressed. A digit works alone, without Enter. `2` (always allow) and `3` (auto mode) are on the screen, but were not pressed. Do not offer `3`. `escape` cancels, as the footer says.
+- **Codex.** `y` (Yes) was pressed, and the command ran. No Enter was needed. `p` (do not ask again for this command prefix) and `escape` (No) are printed on the prompt. They were not pressed on it.
+- **pi.** No permission prompt was seen.
 
 Each alert is stored as a row, with a hash of the prompt text on the screen (section 10). Its buttons carry the alert ID and the answer number, such as `a:17:2`, because callback data is limited to 64 bytes.
 
@@ -603,83 +611,82 @@ Echo:
 
 ## 10. SQLite schema
 
-The database lives at `~/.local/state/rex-tg/rex-tg.db` and uses WAL mode. Only the daemon writes to it.
+The database lives at `~/.local/state/rex-tg/rex-tg.db` and uses WAL mode. Only the daemon writes to it. `Open` sets WAL mode, foreign keys, and a 5-second busy timeout (`internal/store/store.go`). The schema is in `internal/store/schema.sql`, which the binary embeds. The SQL below is a copy of that file.
 
 ```sql
-PRAGMA journal_mode = WAL;
-PRAGMA foreign_keys = ON;
+-- rex-tg schema, version 1. See docs/design.md section 10.
+-- PRAGMAs (WAL, foreign_keys, busy_timeout) are set by Open, not here.
 
--- An agent session: one session JSONL file.
 CREATE TABLE conversation (
   id            INTEGER PRIMARY KEY,
   runtime       TEXT NOT NULL CHECK (runtime IN ('pi', 'claude', 'codex')),
-  native_id     TEXT NOT NULL,              -- the agent's session ID
-  transcript    TEXT NOT NULL,              -- absolute path of the JSONL file
+  native_id     TEXT NOT NULL,
+  transcript    TEXT NOT NULL,
   cwd           TEXT,
   title         TEXT,
-  thread_id     INTEGER REFERENCES thread (id), -- the topic this session belongs to (D5)
+  thread_id     INTEGER REFERENCES thread (id),
   first_seen_at INTEGER NOT NULL,
   UNIQUE (runtime, native_id)
 ) STRICT;
 
--- A Rex pane, and what runs in it now.
 CREATE TABLE pane (
   id                   INTEGER PRIMARY KEY,
-  rex_host             TEXT NOT NULL,       -- Rex host_id
+  rex_host             TEXT NOT NULL,
   rex_block            TEXT NOT NULL,
   rex_session          TEXT NOT NULL,
   label                TEXT,
-  conversation_id      INTEGER REFERENCES conversation (id), -- NULL when no agent runs
-  last_conversation_id INTEGER REFERENCES conversation (id), -- the session that ran here before (take-over)
+  conversation_id      INTEGER REFERENCES conversation (id),
+  last_conversation_id INTEGER REFERENCES conversation (id),
   pid                  INTEGER,
-  process_name         TEXT,                -- compared with pid, because PIDs are reused
+  process_name         TEXT,
   source               TEXT CHECK (source IN ('hook', 'scan', 'guess')),
-  state                TEXT,                -- idle, working, done, blocked, error
-  state_kind           TEXT,                -- permission, question, auth
-  busy_until           INTEGER,             -- set after typing (section 9.5)
+  state                TEXT,
+  state_kind           TEXT,
+  state_at             INTEGER,
+  busy_until           INTEGER,
   seen_at              INTEGER NOT NULL,
-  gone_at              INTEGER,             -- set when the pane closes
+  gone_at              INTEGER,
   UNIQUE (rex_host, rex_block)
 ) STRICT;
 CREATE UNIQUE INDEX pane_conversation ON pane (conversation_id) WHERE conversation_id IS NOT NULL;
 
--- A Telegram topic, and the session it shows now.
 CREATE TABLE thread (
-  id                INTEGER PRIMARY KEY,
-  chat_id           INTEGER NOT NULL,
-  message_thread_id INTEGER NOT NULL,
-  current_conversation_id INTEGER NOT NULL REFERENCES conversation (id), -- changes on take-over and resume
-  name              TEXT NOT NULL,
-  mode              TEXT NOT NULL DEFAULT 'progress' CHECK (mode IN ('progress', 'block', 'final')),
-  verbose           TEXT NOT NULL DEFAULT 'off' CHECK (verbose IN ('off', 'on', 'full')),
-  reasoning         INTEGER NOT NULL DEFAULT 0 CHECK (reasoning IN (0, 1)),
-  status            TEXT NOT NULL DEFAULT 'live' CHECK (status IN ('live', 'offline', 'closed')),
-  created_at        INTEGER NOT NULL,
+  id                      INTEGER PRIMARY KEY,
+  chat_id                 INTEGER NOT NULL,
+  message_thread_id       INTEGER NOT NULL,
+  current_conversation_id INTEGER NOT NULL REFERENCES conversation (id),
+  name                    TEXT NOT NULL,
+  mode                    TEXT NOT NULL DEFAULT 'progress' CHECK (mode IN ('progress', 'block', 'final')),
+  verbose                 TEXT NOT NULL DEFAULT 'off' CHECK (verbose IN ('off', 'on', 'full')),
+  reasoning               INTEGER NOT NULL DEFAULT 0 CHECK (reasoning IN (0, 1)),
+  muted                   INTEGER NOT NULL DEFAULT 0 CHECK (muted IN (0, 1)),
+  status                  TEXT NOT NULL DEFAULT 'live' CHECK (status IN ('live', 'offline', 'closed')),
+  created_at              INTEGER NOT NULL,
+  closed_at               INTEGER,
   UNIQUE (chat_id, message_thread_id)
 ) STRICT;
 CREATE UNIQUE INDEX thread_current ON thread (current_conversation_id) WHERE status <> 'closed';
 
--- Read position in each transcript file.
 CREATE TABLE cursor (
-  transcript TEXT PRIMARY KEY,
-  dev_ino    TEXT NOT NULL,                 -- detects a replaced file
-  offset     INTEGER NOT NULL,              -- byte offset after the last complete line
-  last_event_at INTEGER,                    -- timestamp of the newest line read (replay guard, section 6)
-  updated_at INTEGER NOT NULL
+  transcript    TEXT PRIMARY KEY,
+  dev_ino       TEXT NOT NULL,
+  offset        INTEGER NOT NULL,
+  last_event_at INTEGER,
+  updated_at    INTEGER NOT NULL
 ) STRICT;
 
--- Outgoing messages. The unique key is the "no duplicates" rule.
 CREATE TABLE outbox (
-  id          INTEGER PRIMARY KEY,
-  thread_id   INTEGER NOT NULL REFERENCES thread (id),
-  event_key   TEXT NOT NULL,                -- for example pi:<session id>:<entry id>
-  kind        TEXT NOT NULL,                -- answer, block, tool, prompt, notice, divider, backfill
-  body        TEXT NOT NULL,                -- normalized Markdown, after secret removal
-  state       TEXT NOT NULL CHECK (state IN ('pending', 'sending', 'sent', 'unknown', 'failed', 'skipped')),
-  attempts    INTEGER NOT NULL DEFAULT 0,
-  last_error  TEXT,
-  created_at  INTEGER NOT NULL,
-  sent_at     INTEGER,
+  id         INTEGER PRIMARY KEY,
+  thread_id  INTEGER NOT NULL REFERENCES thread (id),
+  event_key  TEXT NOT NULL,
+  kind       TEXT NOT NULL,
+  body       TEXT NOT NULL,
+  state      TEXT NOT NULL CHECK (state IN ('pending', 'sending', 'sent', 'unknown', 'failed', 'skipped')),
+  silent     INTEGER NOT NULL DEFAULT 0 CHECK (silent IN (0, 1)),
+  attempts   INTEGER NOT NULL DEFAULT 0,
+  last_error TEXT,
+  created_at INTEGER NOT NULL,
+  sent_at    INTEGER,
   UNIQUE (thread_id, event_key)
 ) STRICT;
 
@@ -687,57 +694,70 @@ CREATE TABLE outbox_part (
   outbox_id     INTEGER NOT NULL REFERENCES outbox (id),
   part          INTEGER NOT NULL,
   state         TEXT NOT NULL CHECK (state IN ('pending', 'sending', 'sent', 'unknown', 'failed')),
+  content       TEXT NOT NULL,
+  format        TEXT NOT NULL CHECK (format IN ('html', 'plain', 'document')),
+  filename      TEXT,
   tg_message_id INTEGER,
   PRIMARY KEY (outbox_id, part)
 ) STRICT;
+CREATE INDEX outbox_part_state ON outbox_part (state);
 
--- The live progress message of the running turn. At most one per topic.
 CREATE TABLE progress (
   thread_id     INTEGER PRIMARY KEY REFERENCES thread (id),
-  turn_key      TEXT NOT NULL,              -- session + key of the turn's first event
+  turn_key      TEXT NOT NULL,
   state         TEXT NOT NULL CHECK (state IN ('waiting', 'sending', 'shown', 'unknown')),
-  tg_message_id INTEGER,                    -- set once the message exists
+  tg_message_id INTEGER,
   headline      TEXT,
   rows          TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(rows)),
   started_at    INTEGER NOT NULL,
   edited_at     INTEGER
 ) STRICT;
 
--- A permission prompt or question, shown with answer buttons (section 8.6).
 CREATE TABLE alert (
   id            INTEGER PRIMARY KEY,
   thread_id     INTEGER NOT NULL REFERENCES thread (id),
   kind          TEXT NOT NULL CHECK (kind IN ('permission', 'question')),
-  screen_hash   TEXT NOT NULL,              -- hash of the prompt text on the screen
-  options       TEXT NOT NULL CHECK (json_valid(options)), -- button label and keys, in order
+  screen_hash   TEXT NOT NULL,
+  options       TEXT NOT NULL CHECK (json_valid(options)),
   tg_message_id INTEGER,
   state         TEXT NOT NULL CHECK (state IN ('open', 'answered', 'gone')),
   created_at    INTEGER NOT NULL
 ) STRICT;
 
--- Incoming Telegram updates. update_id makes each update count once.
 CREATE TABLE inbound (
   update_id         INTEGER PRIMARY KEY,
   chat_id           INTEGER NOT NULL,
   message_thread_id INTEGER,
   tg_message_id     INTEGER,
   from_id           INTEGER NOT NULL,
-  kind              TEXT NOT NULL,          -- text, command, callback, other
+  kind              TEXT NOT NULL,
   body              TEXT NOT NULL,
-  body_hash         TEXT,                   -- for matching the echo in the transcript
+  body_hash         TEXT,
   thread_id         INTEGER REFERENCES thread (id),
-  -- text: queued -> typing -> delivered -> acked; typing -> unknown after a crash;
-  -- done for a handled command or button press
   state             TEXT NOT NULL CHECK (state IN ('queued', 'typing', 'delivered', 'acked', 'refused', 'expired', 'unknown', 'done')),
-  reason            TEXT,                   -- why it was refused or expired
+  reason            TEXT,
   created_at        INTEGER NOT NULL,
   delivered_at      INTEGER,
-  acked_event_key   TEXT                    -- the transcript line that confirmed it
+  acked_event_key   TEXT
 ) STRICT;
+CREATE INDEX inbound_thread ON inbound (thread_id, state);
 
--- Small values: Telegram poll offset, owner user ID and chat ID, schema version.
 CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT NOT NULL) STRICT;
 ```
+
+What each table holds. The notes that were in the old inline comments are kept here:
+
+- `conversation`: one agent session, which is one session JSONL file. `native_id` is the agent's session ID. `transcript` is the absolute path of the JSONL file. `thread_id` is the topic this session belongs to (D5).
+- `pane`: one Rex pane, and what runs in it now. `rex_host` is the Rex host ID. `conversation_id` is NULL when no agent runs. `last_conversation_id` is the session that ran here before (take-over). `process_name` is compared with `pid`, because PIDs are reused. `state` is `idle`, `working`, `done`, `blocked`, or `error`. `state_kind` is `permission`, `question`, or `auth`. `state_at` is when `state` was last set. `busy_until` is set after typing (section 9.5). `gone_at` is set when the pane closes.
+- `thread`: one Telegram topic, and the session it shows now. `current_conversation_id` changes on take-over and resume. `mode`, `verbose`, and `reasoning` are the display settings (sections 8.3 and 8.4). `muted` = 1 means answers are sent without sound. `closed_at` is set when the topic is closed, and cleared when it is reopened. The outbox rows of a topic closed for more than 30 days are deleted (see Housekeeping).
+- `cursor`: the read position in one transcript file. `dev_ino` detects a replaced file. `offset` is the byte offset after the last complete line. `last_event_at` is the timestamp of the newest line read (the replay guard in section 6).
+- `outbox`: one outgoing message. The unique key (`thread_id`, `event_key`) is the "no duplicates" rule. `event_key` looks like `pi:<session id>:<entry id>`. `kind` is `answer`, `block`, `tool`, `prompt`, `notice`, `divider`, or `backfill`. `body` is normalized Markdown, after secret removal. `silent` = 1 means the message is sent without sound.
+- `outbox_part`: one part of an outgoing message. `content` is the text to send. `format` is `html`, `plain`, or `document`. `filename` is set for documents only.
+- `progress`: the live progress message of the running turn. At most one per topic. `turn_key` is the session and the key of the turn's first event. `tg_message_id` is set once the message exists. `rows` is a JSON array.
+- `alert`: a permission prompt or question with answer buttons (section 8.6). `screen_hash` is a hash of the prompt text on the screen. `options` holds the button labels and keys, in order.
+- `inbound`: one incoming Telegram update. `update_id` makes each update count once. `kind` is `text`, `command`, `callback`, or `other`. `body_hash` is used to match the echo in the transcript. For text, `state` goes from `queued` to `typing`, then `delivered`, then `acked`. A `typing` row becomes `unknown` after a crash. `refused` and `expired` are the other end states. A handled command or button press is `done`. `reason` says why a message was refused or expired. `acked_event_key` is the transcript line that confirmed it.
+- `kv`: small values, such as the Telegram poll offset, the owner user ID and chat ID, and the schema version.
+- Indexes: `pane_conversation` allows one pane per session. `thread_current` allows one open topic per current session. `outbox_part_state` and `inbound_thread` speed up lookups by state.
 
 `conversation` and `thread` refer to each other. The daemon writes them in one transaction, in this order: the `conversation` row with an empty `thread_id`, then the `thread` row, then `conversation.thread_id`. One rule must always hold, and a test checks it: the current session of a topic belongs to that topic. In other words, `thread.current_conversation_id` points to a conversation whose `thread_id` is that topic.
 
@@ -890,6 +910,14 @@ Checked on this Mac on 2026-11-10 and 2026-11-11:
 - Transcript formats of pi 1.5.2, Claude Code 2.1.322, and Codex CLI 0.167.0, including the IDs that pair tool calls with results. See [agent-transcripts.md](agent-transcripts.md).
 - Hooks are already in use for all three agents on this Mac.
 - Go 1.25.1 is the active Go version (1.26.1 is also installed).
+- Spikes S2 to S5 ran on the installed Rex Beta app, version 0.1.0 (bundle build 1925). Their results are in [spikes/s2-s4-claude.md](spikes/s2-s4-claude.md), [spikes/s2-s4-codex.md](spikes/s2-s4-codex.md), [spikes/s2-s4-pi.md](spikes/s2-s4-pi.md), and [spikes/s5-rex.md](spikes/s5-rex.md).
+- Claude Code, Codex, and pi all report their state to Rex. Claude Code and Codex report `blocked` with kind `permission`. pi reports through its own reporter (OSC 7501). The `app` values are `claude-code`, `codex`, and `pi`.
+- Rex `process` for pi shows `name=node` and `argv0=pi`. For Claude Code, `name` is the version string and `argv0` is `claude`. For Codex, `name` and `argv0` are both `codex`. For Claude Code and Codex, the agent stays the foreground process during a tool run.
+- A paste, then Enter after a 300 ms wait, gave one prompt for each agent. A message sent during a tool run joined the same turn (Claude Code and Codex) or the same run (pi).
+- Hooks saw `REX_SESSION` and `REX_BLOCK` for Claude Code and pi. No Codex hook ran in the spike.
+- Transcript timing: each tool call line was written before its tool ran, for all three agents. pi and Codex create their transcript at the first prompt. Claude Code creates its transcript at session start.
+- Resume: Claude Code and Codex resume into the same transcript file and session ID. No old lines were copied.
+- Rex restart, on an isolated server with one restart and two panes: the block IDs and the session ID stayed the same. A restored pane does not run its creation command again.
 
 From the Telegram Bot API changelog (latest version 10.4, 2026-11-09):
 
@@ -916,17 +944,16 @@ From the Hermes Agent docs (hermes-agent.nousresearch.com, read 2026-11-11; the 
 - Private-chat topics need BotFather's Threaded Mode (summary).
 - Reactions 👀 (processing), 👍 (delivered), and 👎 (error). Tool progress is sent silently. `cleanup_progress` defaults to `false`. Long messages are split into numbered parts such as `(1/3)`. Link previews are off. (All summary.)
 
-Assumptions that the spikes in [plan.md](plan.md) must check:
+Assumptions that the spikes in [plan.md](plan.md) must check. These are still open:
 
-- Whether `closeForumTopic` works in private chats, and how the main chat looks when Threaded Mode is on.
-- Which emoji Telegram allows as reactions. ✅ is probably not one of them.
-- How an expandable quote looks in a topic, and whether `deleteMessage` and `editMessageText` work in private-chat topics as in groups.
-- Whether the Claude Code and Codex CLIs report their state to Rex.
-- How each agent handles a paste followed by Enter, while idle and while working.
-- What Rex's `process` method reports for each agent, including during a tool run.
-- Whether hooks see `REX_BLOCK`. Claude Code's background helper processes make this worth checking.
-- The fields of the Codex hook payload, and whether Codex asks to trust new hook entries.
-- What Claude Code, Codex, and pi do to the transcript file on resume: same file or a new one.
-- The pi events for `/new`, `/resume`, forks, and agent start and end, and whether pi loads every file in `~/.pi/agent/extensions/`.
-- When each agent writes its lines: per block, per message, or at the end of the turn. The progress message depends on tool call lines being written before the tool runs.
-- Whether Rex block IDs change after a server restart.
+- S1: whether `closeForumTopic` works in private chats, and how the main chat looks when Threaded Mode is on.
+- S1: which emoji Telegram allows as reactions. ✅ is probably not one of them.
+- S1: how an expandable quote looks in a topic, and whether `deleteMessage` and `editMessageText` work in private-chat topics as in groups.
+- S2: a paste followed by Enter with a delay under 300 ms. The 300 ms value is the wait that the spike set. The notes show longer gaps between the recorded paste and Enter times.
+- S2: question prompts with a free-text choice, for all three agents. Permission prompts were tested.
+- S2: pi's interrupt key. The default is `escape`, from pi's source.
+- S2: the Rex `process` output for pi during a tool run. Claude Code and Codex were checked.
+- S3: whether Claude Code sends an idle `Notification`. None was seen. The value `idle_prompt` comes from the Claude Code docs.
+- S3: the Codex hooks at runtime. This covers the payload fields (their names occur in the Codex binary), whether Codex asks to trust new hook entries, and whether Codex hooks see `REX_BLOCK`.
+- S3: pi's `/new`, `/resume`, and forks, and whether pi loads every file in `~/.pi/agent/extensions/`.
+- S3: what pi does to the transcript on resume: the same file, or a new one.

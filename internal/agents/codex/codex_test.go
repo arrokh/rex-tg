@@ -112,6 +112,9 @@ func TestParseFixture(t *testing.T) {
 	if e := evs[16]; len(e) != 1 || e[0].Phase != agents.Final || e[0].Text != "The test passes now." {
 		t.Errorf("final: %+v", e)
 	}
+	if e := evs[22]; len(e) != 1 || e[0].Kind != agents.TurnEnd || e[0].Key != "codex:S:turn-end:turn-2" {
+		t.Errorf("turn_aborted: %+v", e)
+	}
 	if e := evs[18]; len(e) != 1 || e[0].Kind != agents.TurnEnd || e[0].Text != "" {
 		t.Errorf("turn end: %+v", e)
 	}
@@ -202,6 +205,14 @@ func quoteIfNeeded(field, args string) string {
 	return fmt.Sprintf("%q", args)
 }
 
+func TestLineContextCWD(t *testing.T) {
+	line := `{"type":"response_item","payload":{"type":"custom_tool_call","name":"apply_patch","call_id":"c","input":"*** Begin Patch\n*** Update File: /w/p/a.go\n*** Add File: /elsewhere/b.go\n*** End Patch"}}`
+	evs, err := codex.New().ParseLine([]byte(line), agents.LineContext{SessionID: "S", CWD: "/w/p"})
+	if err != nil || len(evs) != 1 || evs[0].Tool.Label != "a.go, /elsewhere/b.go" {
+		t.Errorf("%+v %v", evs, err)
+	}
+}
+
 func TestParseLineEdgeCases(t *testing.T) {
 	a := codex.New()
 	if _, err := a.ParseLine([]byte(`{"type":"response_item",`), agents.LineContext{}); err == nil {
@@ -250,7 +261,7 @@ func TestIsSubagentAndInput(t *testing.T) {
 	if a.IsSubagentTranscript("/h/.codex/sessions/2026/11/10/rollout-x/subagents/y.jsonl") {
 		t.Error("codex has no subagent transcripts")
 	}
-	if in := a.Input(); in.WhileWorking != "unknown" || in.SubmitKey != "enter" || in.PasteEnterDelay != 300*time.Millisecond {
+	if in := a.Input(); in.WhileWorking != "steer" || in.SubmitKey != "enter" || in.PasteEnterDelay != 300*time.Millisecond {
 		t.Errorf("%+v", in)
 	}
 	if a.Runtime() != agents.Codex {

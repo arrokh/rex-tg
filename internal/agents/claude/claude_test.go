@@ -114,6 +114,18 @@ func TestParseFixture(t *testing.T) {
 	if e := evs[12]; len(e) != 1 || e[0].Kind != agents.Boundary || e[0].Key != "claude:S:s-1" {
 		t.Errorf("boundary: %+v", e)
 	}
+	if e := evs[22]; len(e) != 0 {
+		t.Errorf("queue-operation: %+v", e)
+	}
+	if e := evs[23]; len(e) != 1 || e[0].Kind != agents.UserPrompt || e[0].Text != "also do X" || e[0].Key != "claude:S:q-1" {
+		t.Errorf("queued_command: %+v", e)
+	}
+	if e := evs[24]; len(e) != 0 {
+		t.Errorf("other attachment: %+v", e)
+	}
+	if e := evs[25]; len(e) != 1 || e[0].Kind != agents.TurnEnd || e[0].Key != "claude:S:i-1" {
+		t.Errorf("interrupt: %+v", e)
+	}
 	if e := evs[18]; len(e) != 1 || e[0].Kind != agents.UserPrompt || e[0].Text != "Now add docs\n\nand a test" {
 		t.Errorf("multi-block prompt: %+v", e)
 	}
@@ -190,6 +202,14 @@ func TestToolLabels(t *testing.T) {
 	}
 }
 
+func TestLineContextCWD(t *testing.T) {
+	line := `{"type":"assistant","uuid":"a","message":{"content":[{"type":"tool_use","id":"t","name":"Read","input":{"file_path":"/ctx/dir/x.go"}}]}}`
+	evs, _ := claude.New().ParseLine([]byte(line), agents.LineContext{SessionID: "S", CWD: "/ctx/dir"})
+	if len(evs) != 1 || evs[0].Tool.Label != "x.go" {
+		t.Errorf("%+v", evs)
+	}
+}
+
 func TestParseLineEdgeCases(t *testing.T) {
 	a := claude.New()
 	if _, err := a.ParseLine([]byte(`{"type":"user",`), agents.LineContext{}); err == nil {
@@ -250,7 +270,7 @@ func TestIsSubagentTranscript(t *testing.T) {
 
 func TestInput(t *testing.T) {
 	in := claude.New().Input()
-	if in.WhileWorking != "unknown" || in.SubmitKey != "enter" || in.PasteEnterDelay != 300*time.Millisecond || len(in.InterruptKeys) != 1 {
+	if in.WhileWorking != "steer" || in.SubmitKey != "enter" || in.PasteEnterDelay != 300*time.Millisecond || len(in.InterruptKeys) != 1 {
 		t.Errorf("%+v", in)
 	}
 	if claude.New().Runtime() != agents.Claude {

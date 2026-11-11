@@ -162,6 +162,14 @@ func TestToolLabels(t *testing.T) {
 	}
 }
 
+func TestLineContextCWD(t *testing.T) {
+	line := `{"type":"message","id":"m","message":{"role":"assistant","content":[{"type":"toolCall","id":"c","name":"edit","arguments":{"path":"/w/p/src/a.go"}},{"type":"toolCall","id":"d","name":"read","arguments":{"path":"/other/a.go"}}],"stopReason":"toolUse"}}`
+	evs, err := pi.New().ParseLine([]byte(line), agents.LineContext{SessionID: "S", CWD: "/w/p"})
+	if err != nil || len(evs) != 2 || evs[0].Tool.Label != "src/a.go" || evs[1].Tool.Label != "/other/a.go" {
+		t.Errorf("%+v %v", evs, err)
+	}
+}
+
 func TestParseLineEdgeCases(t *testing.T) {
 	a := pi.New()
 	if _, err := a.ParseLine([]byte(`{"type":"message",`), agents.LineContext{}); err == nil {

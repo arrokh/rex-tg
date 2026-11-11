@@ -1,6 +1,6 @@
 # Agent transcripts and hooks
 
-This file records what the three agents write and which hooks they offer, as observed on this Mac on 2026-11-11. It is the reference for the adapters in [design.md](design.md#5-agent-adapters).
+This file records what the three agents write and which hooks they offer, as observed on this Mac on 2026-11-11. It is the reference for the adapters in [design.md](design.md#5-agent-adapters). The spike results are in [s2-s4-claude.md](spikes/s2-s4-claude.md), [s2-s4-codex.md](spikes/s2-s4-codex.md), [s2-s4-pi.md](spikes/s2-s4-pi.md), and [s5-rex.md](spikes/s5-rex.md).
 
 The examples below are synthetic. They copy the structure of real lines, not their content. Do not commit real transcripts as test fixtures, because they can contain private data and secrets.
 
@@ -22,6 +22,8 @@ Formats change between versions. Each adapter must ignore line types it does not
 
 Example: `~/.pi/agent/sessions/--Users-me-work-personal-dotfiles--/2026-11-10T05-32-43-796Z_01a1c3f1-….jsonl`.
 
+The file is created at the first prompt, not at launch. Its name and its header carry the launch time, so the name is not the time of the first prompt (observed in S4).
+
 Skip subagent files in the same folder tree:
 
 - `<session folder>/<run id>/run-0/session.jsonl`
@@ -30,6 +32,8 @@ Skip subagent files in the same folder tree:
 ### Lines
 
 The first line is a header. Every other line is an entry with an 8-character hex `id` and a `parentId`. The entries form a tree, because pi supports branches.
+
+At the first prompt, pi writes the header, `model_change`, `thinking_level_change`, a `system` message, and the first `user` message in one batch. The first entries keep their launch time as their timestamp (observed in S4).
 
 Line types seen in one session: `message` (1158), `custom` (15), `custom_message` (13), `thinking_level_change` (10), `compaction` (5), `model_change` (4), `context_edit` (4), `session_info` (1), `session` (1).
 
@@ -54,6 +58,7 @@ Roles seen: `assistant`, `user`, `toolResult`, `system`.
 | Reply | `type=message`, `message.role=assistant`, the `text` blocks joined |
 | Final or commentary | `stopReason`: `stop` is final, `toolUse` is commentary, `error` is an error |
 | Prompt typed on the Mac | `type=message`, `message.role=user`, the `text` blocks joined |
+| Message sent during a tool run | `type=message`, `message.role=user`. It is written after the `toolResult` line, in the same run (observed in S4). |
 | Tool call (verbose mode) | `toolCall` blocks in assistant messages |
 | Divider | `compaction` |
 | Deduplication key | `pi:<session id>:<entry id>` |
@@ -72,7 +77,11 @@ pi loads TypeScript extensions from `~/.pi/agent/extensions/`. The `rexume` exte
 
 The last call is a possible fallback for incoming text, if typing into the pane proves unreliable for pi.
 
-To check in spike S3: which events fire on `/new`, `/resume`, and forks.
+The spike extension saw these events in one run (observed in S3): `session_start` (reason `startup`), `input`, `agent_start`, `turn_start`, `tool_execution_start`, `tool_execution_end`, `turn_end`, `agent_end`, and `session_shutdown` (reason `quit`). Each one had `REX_BLOCK` and `REX_SESSION` set. The rex-tg extension (`extensions/pi/rex-tg.ts`) subscribes to `session_start`, `session_shutdown`, `agent_start`, and `agent_end`.
+
+pi's types also define the reasons `reload`, `new`, `resume`, and `fork` for both `session_start` and `session_shutdown`. No run has shown them yet. So `/new`, `/resume`, and forks are still open (S3).
+
+pi also reports its own state to Rex, through OSC 7501 (see [s2-s4-pi.md](spikes/s2-s4-pi.md)).
 
 ## Claude Code
 
@@ -84,6 +93,8 @@ To check in spike S3: which events fire on `/new`, `/resume`, and forks.
 
 Example: `/Users/me/work/personal` becomes `~/.claude/projects/-Users-me-work-personal/<session id>.jsonl`.
 
+The folder name uses the real path. A cwd under `/tmp` gives a folder that starts with `-private-tmp-`. Use the `transcript_path` from the `SessionStart` hook, and do not compute the path (observed in S2).
+
 Skip `~/.claude/projects/<project>/<session id>/subagents/*.jsonl`.
 
 ### Lines
@@ -91,6 +102,8 @@ Skip `~/.claude/projects/<project>/<session id>/subagents/*.jsonl`.
 Line types seen in one session: `assistant` (144), `attachment` (121), `user` (85), `api-request` (70), `api-request-blob` (39), `session-owner` (36), `custom-title` (36), `atis-latch` (36), `last-prompt` (35), `tools-used` (5), `queue-operation` (2), `api-request-shape` (2), `system` (1).
 
 Each `assistant` line holds one content block. Several lines share the same `message.id`. In the sample, blocks were `tool_use` (84), `thinking` (48), and `text` (12).
+
+The spike session also had these line types, which the adapter skips: `mode`, `permission-mode`, `file-history-snapshot`, `ai-title`, and `cost-state` (observed in S4). Many of these lines have no `timestamp` and no `uuid`. A rule that reads the first line's time must use the first line that has a timestamp (observed in S4).
 
 ```jsonl
 {"type":"user","uuid":"u-1","parentUuid":null,"sessionId":"S","isSidechain":false,"entrypoint":"cli","cwd":"/Users/me/work/project","timestamp":"…","message":{"role":"user","content":"Fix the failing test"}}
@@ -112,12 +125,14 @@ Top-level keys of an assistant line: `advisorModel`, `apiBlockIndex`, `cwd`, `ef
 | Session ID | `sessionId`, or the file name |
 | Title | `custom-title.customTitle` |
 | Reply | `type=assistant`, `text` blocks |
-| Final or commentary | `message.stop_reason`: `end_turn` is final, `tool_use` is commentary (to confirm in spike S4) |
-| Prompt typed on the Mac | `type=user` with string content or `text` blocks, without `isMeta`, and not command wrappers such as `<command-name>` or `<local-command-stdout>` |
+| Final or commentary | `message.stop_reason`: `end_turn` is final. The final line is complete when it is written, with no earlier stub line (observed in S4). `tool_use` is commentary. |
+| Prompt typed on the Mac | `type=user` with string content or `text` blocks, without `isMeta`, and not command wrappers such as `<command-name>`, `<local-command-stdout>`, or `<local-command-caveat>`. A multi-line paste is one string with `\n` (observed in S2). |
+| Message sent during a tool run | `queue-operation` with `operation=enqueue` (`content` is the text), when it is sent. `queue-operation` with `operation=remove` and `reason=absorbed_mid_turn`, when Claude reads it. An `attachment` line with `attachment.type=queued_command` (`attachment.prompt` is the text, `humanTurn=true`). The line is written when the text is absorbed, but its timestamp is the time of sending. There is no `user` line. Match the echo on the `queued_command` attachment (observed in S2). |
+| Interrupt | A `user` line with a `text` block that starts with `[Request interrupted`. It ends the turn and is not a prompt (observed in S2). |
 | Tool call (verbose mode) | `tool_use` blocks |
 | Divider | `system` lines with a compaction subtype, and `SessionStart` with source `clear` |
 | Deduplication key | `claude:<sessionId>:<uuid>` |
-| Skip | `isSidechain: true`, `thinking` blocks, `tool_result`, `attachment`, `api-request*`, `session-owner`, `atis-latch`, `last-prompt`, `tools-used`, `queue-operation`, other `system` lines |
+| Skip | `isSidechain: true`, `thinking` blocks, `tool_result`, `attachment` except `queued_command`, `api-request*`, `session-owner`, `atis-latch`, `last-prompt`, `tools-used`, `queue-operation`, `mode`, `permission-mode`, `file-history-snapshot`, `ai-title`, `cost-state`, other `system` lines |
 
 ### Process
 
@@ -125,9 +140,21 @@ Top-level keys of an assistant line: `advisorModel`, `apiBlockIndex`, `cwd`, `ef
 
 Claude Code also runs helper processes, such as `claude daemon run` and `claude bg-pty-host … --bg-spare`. They are not agents in a pane, and the registry ignores them.
 
+Rex `process` shows `name` as the version string, for example `2.1.322`. It shows `argv0` as `claude` and `invoked_path` as `~/.local/bin/claude`. The Rex status `app` is `claude-code`, not `claude` (observed in S2). The foreground stays Claude while a Bash tool runs (observed in S2). Claude Code does not keep the transcript open, so `lsof` cannot find the file. Use the hook instead (observed in S2).
+
 ### Hook surface
 
 Hooks are configured in `~/.claude/settings.json`. Each hook gets JSON on stdin with `session_id`, `transcript_path`, `cwd`, and `hook_event_name`. `SessionStart` also gets `source`: `startup`, `resume`, `clear`, or `compact`.
+
+What the spike showed (S2 and S3):
+
+- `SessionStart` with `clear` gives a new session ID and a new file in the same folder. With `resume`, the session ID and the file stay the same, and no old lines are copied.
+- `Notification` has `notification_type`. The value `permission_prompt` is a permission request. The idle value, `idle_prompt`, comes from the Claude Code docs. No run showed it.
+- `PermissionRequest` carries `tool_name`, `tool_input`, `permission_suggestions`, and `prompt_id`. The hook log also has `session_id`, `transcript_path`, and `cwd` for this hook.
+- `Stop` does not fire after Esc or after a denied permission. Rex status and the transcript show the end of the turn instead.
+- `UserPromptSubmit` also fires for a message sent during a tool run. That message does not start a new turn.
+- `/clear` fires `SessionEnd`, then `SessionStart` with `source` `clear`. `/exit` fires `SessionEnd` with `reason` `prompt_input_exit`.
+- Hooks saw `REX_SESSION` and `REX_BLOCK`, including after a resume into a new pane.
 
 Hooks already installed on this Mac include `moshi-hook`, `cux`, `rexume report claude`, a `herdr` script, `paseo`, and `rex __internal session-start --agent claude`. rex-tg adds its own entries for the events listed in [design.md section 6](design.md#6-panes-sessions-and-transcripts), and leaves the others alone.
 
@@ -142,6 +169,8 @@ Hooks also run in T3 Code sessions. There, `REX_BLOCK` is not set, so `rex-tg ho
 ```
 
 There is no folder per project. The `cwd` is in the first line, `session_meta`.
+
+The file is created at the first Enter, not at launch. Its name carries the process start time, or the time of `/new`. It does not carry the time of the first prompt (observed in S4). `/new` makes a new file at the next prompt, in the same process. The old file stays unchanged. A resume appends to the same file (observed in S4).
 
 ### Lines
 
@@ -161,7 +190,7 @@ Each line is `{"timestamp", "type", "payload"}`. Counts seen in one session (`ty
 
 `session_meta.payload` keys: `base_instructions`, `cli_version`, `context_window`, `creator_account_id`, `creator_user_id`, `cwd`, `git`, `history_mode`, `id`, `model_provider`, `originator`, `runtime_workspace_roots`, `session_id`, `source`, `timestamp`.
 
-`originator` tells where the session runs, for example `T3 Code` or `Codex Desktop`. In the last 30 days, no rollout on this Mac came from the Codex CLI, so spike S4 must record a CLI session first.
+`originator` tells where the session runs, for example `T3 Code` or `Codex Desktop`. The Codex CLI writes `originator` `codex-tui` and `source` `cli` (observed in S4).
 
 ```jsonl
 {"timestamp":"…","type":"session_meta","payload":{"id":"01a1c0eb-…","cwd":"/Users/me/work/project","originator":"…","cli_version":"0.167.0","source":"…"}}
@@ -185,7 +214,7 @@ The adapter reads replies from `response_item` only. It treats `task_complete` a
 
 User messages have the same issue. `response_item` with `role=user` also holds text that Codex adds itself, such as the `AGENTS.md` instructions. `item_completed` with `UserMessage` held only the real prompts in the sample. The adapter reads prompts from `item_completed`.
 
-Spike S4 must confirm both choices on a CLI rollout, because the sample came from T3 Code.
+Spike S4 confirmed both choices on a CLI rollout. In each flush, the `item_completed` `AgentMessage` line comes first, then the `response_item` message with the same ID. The `task_complete` text repeats the final answer. `response_item` with `role=user` also holds the `<environment_context>` text that Codex adds at the start of a session (observed in S4).
 
 ### Adapter rules
 
@@ -194,10 +223,12 @@ Spike S4 must confirm both choices on a CLI rollout, because the sample came fro
 | Session ID | `session_meta.payload.id` |
 | Reply | `response_item`, `payload.type=message`, `payload.role=assistant`, the `output_text` blocks joined |
 | Final or commentary | `payload.phase`: `final_answer` or `commentary` |
-| Prompt typed on the Mac | `event_msg / item_completed` with `item.type=UserMessage` |
+| Prompt typed on the Mac | `event_msg / item_completed` with `item.type=UserMessage` (confirmed in S4) |
+| Turn end | `event_msg / task_complete`. An interrupted turn has `turn_aborted` (`reason` `interrupted`) and no `task_complete` (observed in S2 and S4). |
+| Message sent during a turn | The same `turn_id`, and no new `task_started`. It is written as a `response_item` `user` line and an `item_completed` `UserMessage` (observed in S2). |
 | Tool call (verbose mode) | `response_item / function_call` and `custom_tool_call` |
 | Deduplication key | `codex:<session id>:<payload.id>` |
-| Skip | `reasoning`, tool outputs, `token_count`, `token_usage_record`, `turn_context`, `world_state`, `item_completed` except `UserMessage` |
+| Skip | `reasoning`, tool outputs, `token_count`, `token_usage_record`, `turn_context`, `world_state`, `item_completed` except `UserMessage`, `response_item` with `role=user` (it also holds injected context) |
 
 ### Hook surface
 
@@ -208,6 +239,8 @@ Spike S4 must confirm both choices on a CLI rollout, because the sample came fro
 ```
 
 Events in use on this Mac: `SessionStart`, `UserPromptSubmit`, `Stop`, `PreToolUse`, `PostToolUse`, and `PermissionRequest`.
+
+The spike ran Codex with hooks off (`--disable hooks`). So no hook payload was checked at runtime, and trust was not tested (S3). The names `hook_event_name`, `transcript_path`, `session_id`, `permission_mode`, and `tool_input` occur in the Codex 0.167.0 binary. This is a string search only.
 
 Codex trusts each hook entry by a hash. `config.toml` stores one table per trusted entry:
 
@@ -220,11 +253,13 @@ The key holds the entry's position in its list. So the installer appends new ent
 
 `config.toml` also has a `notify` program for `turn-ended`. That slot is already used by another program, so rex-tg uses hooks instead.
 
-To check in spike S3: whether the hook payload includes the session ID and the transcript path.
+Still open (S3): whether the hook payload includes the session ID and the transcript path.
 
 ### Process
 
 `/opt/homebrew/bin/codex` is a link to the Codex binary in the Homebrew Caskroom (`/opt/homebrew/Caskroom/codex/0.167.0/bin/codex`).
+
+Codex keeps the rollout file open. After a resume, `lsof` showed it on an open file descriptor (observed in S4). Its foreground process stays `codex` while a command runs (observed in S2). Its Rex `name` and `argv0` are both `codex`.
 
 ## Pairing tool calls with their results
 
@@ -238,16 +273,17 @@ A live progress view needs to know when each tool call ends and whether it faile
 
 pi results can also carry `nestedCalls`, for tools that run other tools.
 
-Each call line is written before the tool runs, and each result line after it ends. So the tailer sees "started" and "finished" as two separate lines. Spike S4 confirms the timing.
+Each call line is written before the tool runs, and each result line after it ends. So the tailer sees "started" and "finished" as two separate lines. Spike S4 confirmed this timing for all three agents.
 
 ## Rex
 
-Facts from Rex `0.0.1793981048-g01d6c4`, API revision 11:
+Facts from Rex `0.0.1793981048-g01d6c4`, API revision 11. The S2 to S5 spikes ran on the installed Rex Beta app, version 0.1.0 (bundle build 1925). See [s5-rex.md](spikes/s5-rex.md).
 
 - `rex events --all --json` prints one JSON object per line. Agent status arrives as `{"type":"session_event","payload":{"session_id":…,"event":{"type":"block_event","payload":{"block_id":…,"name":"program_status_changed","payload":{"record":{"state":…,"kind":…,"app":…,"msg":…}}}}}}`.
+- The `app` values seen are `pi`, `claude-code`, and `codex` (observed in S2).
 - Most block events are `progress_report`. The registry ignores them.
-- `rex block call -s S -b B process` returns `foreground` with `pid`, `name`, `path`, `argv0`, and `cwd`, plus `ancestors`, `child`, and `last_exit`.
+- `rex block call -s S -b B process` returns `foreground` with `pid`, `name`, `path`, `argv0`, and `cwd`, plus `ancestors`, `child`, and `last_exit`. Claude Code and Codex showed no `ancestors` key. pi showed an empty `ancestors` list (observed in S2).
 - `rex block call -s S -b B program_status` returns `records` with `state`, `kind`, `app`, `effective_app`, `msg`, `updated_at`, and `owner` (`pid`, `name`).
-- `block.event` accepts `{"type":"paste","payload":{"text":"…"}}`, as the example in `rex api describe block.event` shows. Spike S2 checks how each agent handles it.
+- `block.event` accepts `{"type":"paste","payload":{"text":"…"}}`, as the example in `rex api describe block.event` shows. Spike S2 tested it with all three agents. A paste, then Enter after a 300 ms wait, gave one prompt in each (observed).
 - `rex send` types text. `rex send-key` presses keys. `rex capture --trim` prints the screen and scrollback.
 - `rex events` keeps running until it is stopped. A Perl `alarm` wrapper did not stop it.

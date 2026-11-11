@@ -37,7 +37,7 @@ func (adapter) Input() agents.InputProfile {
 		PasteEnterDelay: 300 * time.Millisecond,
 		SubmitKey:       "enter",
 		InterruptKeys:   []string{"escape"},
-		WhileWorking:    "unknown",
+		WhileWorking:    "steer",
 	}
 }
 
@@ -98,6 +98,7 @@ type line struct {
 	IsCompactSummary bool            `json:"isCompactSummary"`
 	IsAPIError       bool            `json:"isApiErrorMessage"`
 	Message          json.RawMessage `json:"message"`
+	Attachment       json.RawMessage `json:"attachment"`
 }
 
 type message struct {
@@ -125,7 +126,7 @@ func (adapter) ParseLine(raw []byte, ctx agents.LineContext) ([]agents.Event, er
 		return nil, fmt.Errorf("claude: decode line: %w", err)
 	}
 	switch l.Type {
-	case "assistant", "user", "custom-title", "system":
+	case "assistant", "user", "custom-title", "system", "attachment":
 	default:
 		return nil, nil
 	}
@@ -139,7 +140,20 @@ func (adapter) ParseLine(raw []byte, ctx agents.LineContext) ([]agents.Event, er
 	k := keyer{base: base}
 	at := parseTime(l.Timestamp)
 
+	cwd := l.CWD
+	if cwd == "" {
+		cwd = ctx.CWD
+	}
 	switch l.Type {
+	case "attachment":
+		var a struct {
+			Type   string `json:"type"`
+			Prompt string `json:"prompt"`
+		}
+		if len(l.Attachment) == 0 || json.Unmarshal(l.Attachment, &a) != nil || a.Type != "queued_command" || !isPrompt(a.Prompt) {
+			return nil, nil
+		}
+		return []agents.Event{{Kind: agents.UserPrompt, Key: k.next(), At: at, Text: a.Prompt}}, nil
 	case "custom-title":
 		if l.CustomTitle == "" {
 			return nil, nil
@@ -185,7 +199,7 @@ func (adapter) ParseLine(raw []byte, ctx agents.LineContext) ([]agents.Event, er
 					evs = append(evs, agents.Event{Kind: agents.Thinking, Key: k.next(), At: at, Text: b.Thinking})
 				}
 			case "tool_use":
-				kind, lbl := toolLabel(b.Name, b.Input, l.CWD)
+				kind, lbl := toolLabel(b.Name, b.Input, cwd)
 				evs = append(evs, agents.Event{Kind: agents.ToolCall, Key: k.next(), At: at,
 					Tool: &agents.Tool{CallID: b.ID, Name: b.Name, Kind: kind, Label: lbl}})
 			}
@@ -207,6 +221,10 @@ func (adapter) ParseLine(raw []byte, ctx agents.LineContext) ([]agents.Event, er
 				Output: truncateBytes(resultText(b.Content), agents.MaxToolOutput),
 			}})
 		case "text":
+			if strings.HasPrefix(strings.TrimSpace(b.Text), "[Request interrupted") {
+				evs = append(evs, agents.Event{Kind: agents.TurnEnd, Key: k.next(), At: at})
+				continue
+			}
 			texts = append(texts, b.Text)
 		}
 	}

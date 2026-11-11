@@ -195,7 +195,7 @@ func (adapter) ParseLine(line []byte, ctx agents.LineContext) ([]agents.Event, e
 				}
 				textDone = true
 			case "toolCall":
-				kind, lbl := toolLabel(b.Name, b.Arguments)
+				kind, lbl := toolLabel(b.Name, b.Arguments, ctx.CWD)
 				evs = append(evs, agents.Event{Kind: agents.ToolCall, Key: k.next(), At: at,
 					Tool: &agents.Tool{CallID: b.ID, Name: b.Name, Kind: kind, Label: lbl}})
 			}
@@ -207,7 +207,7 @@ func (adapter) ParseLine(line []byte, ctx agents.LineContext) ([]agents.Event, e
 	return evs, nil
 }
 
-func toolLabel(name string, args json.RawMessage) (agents.ToolKind, string) {
+func toolLabel(name string, args json.RawMessage, cwd string) (agents.ToolKind, string) {
 	var kind agents.ToolKind
 	var l string
 	switch name {
@@ -221,6 +221,9 @@ func toolLabel(name string, args json.RawMessage) (agents.ToolKind, string) {
 		kind, l = agents.ToolSearch, argString(args, "pattern", "path")
 	default:
 		kind = agents.ToolOther
+	}
+	if kind == agents.ToolRead || kind == agents.ToolEdit {
+		l = relPath(l, cwd)
 	}
 	l = label(l)
 	if l == "" {
@@ -393,4 +396,12 @@ func (a adapter) TranscriptCandidates(home, cwd string, since time.Time) ([]stri
 		out[i] = c.path
 	}
 	return out, nil
+}
+
+func relPath(p, cwd string) string {
+	base := strings.TrimRight(cwd, "/")
+	if base != "" && strings.HasPrefix(p, base+"/") {
+		return p[len(base)+1:]
+	}
+	return p
 }

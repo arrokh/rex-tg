@@ -67,6 +67,8 @@ Each spike is a throwaway program, not product code. Each one writes its result 
 
 ### S1. Telegram topics in the private chat
 
+**Status:** Pending. It needs your bot token and your phone.
+
 1. Create a test bot with @BotFather and turn on Threaded Mode.
 2. Call `getMe` and check `has_topics_enabled` and `allows_users_to_create_topics`.
 3. Call `createForumTopic` in the private chat. Send with `message_thread_id`. Rename with `editForumTopic`.
@@ -83,6 +85,8 @@ Done when: the private-chat design is confirmed, or the fallback (a private supe
 
 ### S2. Agents in Rex panes: input, state, and process
 
+**Status:** Done, with open steps. Results: [Claude Code](spikes/s2-s4-claude.md), [Codex](spikes/s2-s4-codex.md), and [pi](spikes/s2-s4-pi.md). Open: step 6 (question prompts with a free-text choice), step 7 for pi (interrupt keys), and step 8 (a delay below 300 ms).
+
 For pi, Claude Code, and Codex each:
 
 1. Record Rex's `process` output for the pane while the agent is idle and while a tool runs.
@@ -98,6 +102,8 @@ Done when: each adapter's detection rules and input profile are filled in, and t
 
 ### S3. Hooks
 
+**Status:** Partly done. Results: [Claude Code](spikes/s2-s4-claude.md) and [pi](spikes/s2-s4-pi.md). Open: the Codex hook steps (2, 3, and `REX_BLOCK` in step 5), pi's `/new`, `/resume`, and forks (step 4), and pi's resume and extension loading (steps 4 and 6).
+
 1. Claude Code: log the stdin of `SessionStart` (each `source`), `UserPromptSubmit`, `Stop`, `PermissionRequest`, `Notification`, and `SessionEnd`.
 2. Codex: log the stdin of `SessionStart`, `UserPromptSubmit`, `Stop`, and `PermissionRequest`. Look for the session ID and the transcript path.
 3. Codex: append a test hook at the end of an event's list. Check that Codex asks to trust it once, and that the other hooks stay trusted.
@@ -109,6 +115,8 @@ Done when: the resolver, the take-over rules, and the cursor rules in design sec
 
 ### S4. When each agent writes its lines
 
+**Status:** Done. Results: [Claude Code](spikes/s2-s4-claude.md), [Codex](spikes/s2-s4-codex.md), and [pi](spikes/s2-s4-pi.md). The synthetic fixtures are in each adapter's `testdata` folder.
+
 1. Run one short task per agent with several tool calls. Watch the transcript with timestamps while the agent works.
 2. Record when each line appears: prompt, tool call, tool result, commentary, and final answer.
 3. Confirm that tool call lines are written before the tool runs. The live progress display depends on this.
@@ -119,6 +127,8 @@ Done when: the resolver, the take-over rules, and the cursor rules in design sec
 Done when: the parser rules in [agent-transcripts.md](agent-transcripts.md) are confirmed, and synthetic fixtures for each runtime exist.
 
 ### S5. Rex events and restarts
+
+**Status:** Done, with one open point. Results: [s5-rex.md](spikes/s5-rex.md). Open: an agent that resumes in a restored pane was not tested.
 
 1. Record `rex events --all --json` while you open and close panes and sessions. Note the event names.
 2. Restart the Rex server and let it restore the panes. Check whether block IDs change.

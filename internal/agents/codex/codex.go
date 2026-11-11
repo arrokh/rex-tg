@@ -39,7 +39,7 @@ func (adapter) Input() agents.InputProfile {
 		PasteEnterDelay: 300 * time.Millisecond,
 		SubmitKey:       "enter",
 		InterruptKeys:   []string{"escape"},
-		WhileWorking:    "unknown",
+		WhileWorking:    "steer",
 	}
 }
 
@@ -152,7 +152,7 @@ func (adapter) ParseLine(raw []byte, ctx agents.LineContext) ([]agents.Event, er
 			}
 			k := keyFor(p.Item.ID)
 			return []agents.Event{{Kind: agents.UserPrompt, Key: k.next(), At: at, Text: text}}, nil
-		case "task_complete":
+		case "task_complete", "turn_aborted":
 			k := keyer{base: fallback}
 			if p.TurnID != "" {
 				k.base = agents.Key(agents.Codex, ctx.SessionID, "turn-end:"+p.TurnID)
@@ -188,7 +188,7 @@ func (adapter) ParseLine(raw []byte, ctx agents.LineContext) ([]agents.Event, er
 		if p.Type == "custom_tool_call" {
 			args = p.Input
 		}
-		kind, lbl := toolLabel(p.Name, rawString(args))
+		kind, lbl := toolLabel(p.Name, rawString(args), ctx.CWD)
 		return []agents.Event{{Kind: agents.ToolCall, Key: k.next(), At: at,
 			Tool: &agents.Tool{CallID: p.CallID, Name: p.Name, Kind: kind, Label: lbl}}}, nil
 	case "function_call_output", "custom_tool_call_output":
@@ -246,14 +246,14 @@ func rawString(raw json.RawMessage) string {
 	return string(raw)
 }
 
-func toolLabel(name, args string) (agents.ToolKind, string) {
+func toolLabel(name, args, cwd string) (agents.ToolKind, string) {
 	var kind agents.ToolKind
 	var l string
 	switch name {
 	case "exec_command", "shell", "shell_command", "local_shell", "container.exec":
 		kind, l = agents.ToolShell, commandText(args)
 	case "apply_patch":
-		kind, l = agents.ToolEdit, patchFiles(args)
+		kind, l = agents.ToolEdit, patchFiles(args, cwd)
 	case "update_plan":
 		kind, l = agents.ToolPlan, "update plan"
 	case "web_search":
@@ -297,7 +297,7 @@ func commandText(args string) string {
 var patchLineRe = regexp.MustCompile(`(?m)^\*\*\* (?:Update|Add|Delete) File: (.+?)\s*$`)
 
 // patchFiles lists the files an apply_patch call touches.
-func patchFiles(args string) string {
+func patchFiles(args, cwd string) string {
 	patch := args
 	if !strings.Contains(patch, "*** ") {
 		return ""
@@ -307,7 +307,7 @@ func patchFiles(args string) string {
 	}
 	var files []string
 	for _, m := range patchLineRe.FindAllStringSubmatch(patch, -1) {
-		files = append(files, m[1])
+		files = append(files, relPath(m[1], cwd))
 	}
 	return strings.Join(files, ", ")
 }
@@ -522,4 +522,12 @@ func rolloutHasCWD(path, cwd string) bool {
 	defer f.Close()
 	m, err := readMeta(f)
 	return err == nil && m.CWD == cwd
+}
+
+func relPath(p, cwd string) string {
+	base := strings.TrimRight(cwd, "/")
+	if base != "" && strings.HasPrefix(p, base+"/") {
+		return p[len(base)+1:]
+	}
+	return p
 }

@@ -19,3 +19,7 @@
 {"type":"assistant","uuid":"a-9","sessionId":"sess-cl-1","isSidechain":true,"message":{"role":"assistant","stop_reason":"end_turn","content":[{"type":"text","text":"from a subagent"}]}}
 {"type":"attachment","uuid":"x-1","sessionId":"sess-cl-1"}
 {"type":"last-prompt","sessionId":"sess-cl-1"}
+{"type":"queue-operation","operation":"enqueue","sessionId":"sess-cl-1","timestamp":"2026-11-10T06:01:00.000Z","content":"also do X"}
+{"type":"attachment","uuid":"q-1","sessionId":"sess-cl-1","timestamp":"2026-11-10T06:01:00.100Z","attachment":{"type":"queued_command","prompt":"also do X","humanTurn":true}}
+{"type":"attachment","uuid":"q-2","sessionId":"sess-cl-1","attachment":{"type":"hook_success","prompt":"nope"}}
+{"type":"user","uuid":"i-1","sessionId":"sess-cl-1","timestamp":"2026-11-10T06:02:00.000Z","message":{"role":"user","content":[{"type":"text","text":"[Request interrupted by user for tool use]"}]}}

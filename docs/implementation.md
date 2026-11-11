@@ -48,7 +48,7 @@ Each package exports `func New() agents.Adapter`. Formats are in [agent-transcri
 - Final vs commentary: pi `stopReason` `stop` = Final, `toolUse` = Commentary, `error` = Error; Claude `message.stop_reason` `end_turn` = Final, anything else = Commentary, and lines with `isApiErrorMessage` = Error; Codex `payload.phase` `final_answer` = Final, `commentary` = Commentary.
 - Prompts: pi `role=user` text; Claude `type=user` with string content or text blocks, skipping `isMeta`, tool results, and command wrappers (`<command-name>`, `<local-command-stdout>`, `<command-message>`, `<system-reminder>`-only content); Codex `event_msg` `item_completed` with `item.type=UserMessage`.
 - Codex reads replies only from `response_item` (`message`, `role=assistant`) and emits `TurnEnd` for `event_msg` `task_complete`; it ignores `item_completed` `AgentMessage`.
-- `Input()` defaults (spike S2 may change them): pi `{PasteEnterDelay: 300ms, SubmitKey: "enter", InterruptKeys: ["escape"], WhileWorking: "steer"}` (confirmed); Claude and Codex `{300ms, "enter", ["escape"], "unknown"}` until their spikes report.
+- `Input()` values (confirmed by spike S2 for all three): `{PasteEnterDelay: 300ms, SubmitKey: "enter", InterruptKeys: ["escape"], WhileWorking: "steer"}`.
 
 ## internal/format
 
@@ -287,3 +287,127 @@ type Change struct{ Path string; Changed bool; Backup, Note string }
 ```
 
 For pi, the extension sends this stdin payload: `{"hook_event_name":"session_start","reason":"startup","session_file":"…","previous_session_file":"…","target_session_file":"…","cwd":"…","session_id":"…"}`.
+
+## Wave 2 packages
+
+### internal/config
+
+```go
+type Duration struct{ time.Duration }            // TOML text such as "2s"
+type Answer struct{ Label string; Keys []string }
+type RuntimeInput struct {
+	PasteEnterDelay Duration
+	InterruptKeys   []string
+	WhileWorking    string   // steer, queue, unknown
+	Answers         []Answer // fallback permission answers when the screen shows no numbered options
+}
+type Config struct {
+	Telegram struct{ APIBase string; RatePerSecond float64; RateBurst int }
+	Rex      struct{ CLI string; ScanInterval Duration }
+	Agents   struct {
+		PiArgv0, ClaudeArgv0, ClaudeExecGlob, CodexNames []string
+		Pi, Claude, Codex                                RuntimeInput
+	}
+	Display struct{ Mode string; Backfill int; ShowMacPrompts bool; ProgressDelay, ProgressEditInterval Duration }
+	Input   struct{ QueueExpiry, JoinWindow, JoinWindowLong, BusyAfterTyping Duration; MaxUploadMB int }
+	Voice   struct{ WhisperCLI, Model, Language string } // optional; empty WhisperCLI turns voice notes off
+	State   struct{ Dir string }                        // default ~/.local/state/rex-tg
+}
+func Default(home string) Config
+func Load(path, home string) (Config, error) // a missing file gives the defaults; unknown keys are an error
+func (c Config) DBPath() string; func (c Config) SpoolDir() string; func (c Config) LogDir() string; func (c Config) UploadDir() string; func (c Config) LockPath() string
+func (c Config) Input(rt agents.Runtime) RuntimeInput
+```
+
+Defaults come from design section 12 and the spikes: pi answers `[]`; Claude answers `1 Yes → ["1"]`, `2 Always → ["2"]`, `4 No → ["4"]`, `Esc → ["escape"]`; Codex answers `Yes → ["y"]`, `Always → ["p"]`, `No → ["escape"]`; every runtime `PasteEnterDelay 300ms`, `InterruptKeys ["escape"]`; `WhileWorking` steer for all three.
+
+### internal/registry
+
+Owns panes, sessions, and agent state. It is not pure: it reads Rex through an interface and writes through `*store.Store`, and it returns `Change` values that the daemon acts on.
+
+```go
+type Rules struct{ PiArgv0, ClaudeArgv0, ClaudeExecGlob, CodexNames []string }
+type RexAPI interface {
+	Sessions(ctx context.Context) ([]rex.Session, error)
+	Blocks(ctx context.Context, session string) ([]rex.Block, error)
+	Process(ctx context.Context, session, block string) (rex.Process, error)
+	ProgramStatus(ctx context.Context, session, block string) ([]rex.StatusRecord, error)
+}
+type HookReport struct{ Runtime agents.Runtime; Event string; At time.Time; RexSession, RexBlock string; Payload json.RawMessage }
+func ParseSpool(data []byte) (HookReport, error)
+func Detect(rules Rules, p rex.ProcInfo) (agents.Runtime, bool)
+func AgentInFront(p rex.Process, pid int, name string) bool
+
+type Options struct{ Host, Home string; Rules Rules; Adapters map[agents.Runtime]agents.Adapter; Now func() time.Time; Logger *slog.Logger }
+func New(st *store.Store, rx RexAPI, opt Options) *Registry
+func (r *Registry) Hook(ctx context.Context, rep HookReport) ([]Change, error)
+func (r *Registry) RexEvent(ctx context.Context, ev rex.Event) ([]Change, error)
+func (r *Registry) Scan(ctx context.Context) ([]Change, error)
+func (r *Registry) TranscriptSignal(ctx context.Context, convID int64, sig Signal) ([]Change, error) // from the daemon's tailers
+func (r *Registry) Agents(ctx context.Context) ([]AgentView, error)                              // for /agents
+func (r *Registry) Ready(ctx context.Context, paneID int64, now time.Time) (bool, string, error)  // may a waiting message be typed now? reason when not
+func (r *Registry) MarkTyped(ctx context.Context, paneID int64, now time.Time) error              // starts the busy time after typing
+
+type Signal struct{ State, Kind string; At time.Time } // State: working, idle, done, blocked, error
+type AgentView struct{ Pane store.Pane; Runtime agents.Runtime; Conversation *store.Conversation; Resolution string /* hook, scan, guess, unresolved */; Thread *store.Thread }
+type ChangeKind string // see below
+type Change struct {
+	Kind           ChangeKind
+	PaneID, ConversationID, ThreadID int64
+	State, StateKind, Msg string // StateChanged, Blocked
+	Divider        string        // TakeOver, Resume: for example "claude · new session (clear)"
+	Start          TailStart     // where the tailer for ConversationID starts
+}
+type TailStart struct{ FromStart, AtEnd, Backfill bool } // FromStart: byte 0; AtEnd: end of file (with Backfill: post the last N final answers)
+```
+
+Change kinds: `SessionStarted` (a resolved session now runs in a pane), `SessionStopped` (it left the pane), `TakeOver`, `Resume`, `ResumeBusy` (resumed while its topic is live elsewhere; no topic change), `TopicOffline`, `TopicLive`, `StateChanged`, `PaneGone`.
+
+Rules (design sections 4.4, 6, and 7): detection by foreground process (pi `argv0`, Claude `argv0`/invoked path basename or executable under the glob, Codex name), never by the status `app`; hook reports accepted only when the pane's foreground process is the reporting runtime; nested transcripts ignored (`Adapter.IsSubagentTranscript`); PID plus name identity; one pane per session; the guess resolver with `TranscriptCandidates`; unresolved when ambiguous; take-over, resume, resume-busy, and resume under a new ID; the tail start table; state merge (newest signal wins, a prompt or `UserPromptSubmit` means working even after a stale `done`, delivery needs an idle/done signal newer than the last working signal, silence never counts as idle, blocked blocks delivery); `MarkTyped` sets `busy_until = now + BusyAfterTyping`, cleared by a working signal or a prompt.
+
+Hook payload fields: Claude and Codex `session_id`, `transcript_path`, `cwd`, `hook_event_name`, `source` (SessionStart: startup, resume, clear, compact), `notification_type` (Claude `Notification`: `permission_prompt` means blocked); pi `hook_event_name` (session_start, session_shutdown, agent_start, agent_end), `reason` (startup, reload, new, resume, fork), `session_file`, `previous_session_file`, `target_session_file`, `cwd`, `session_id`.
+
+### internal/inbound
+
+Pure helpers for incoming messages.
+
+```go
+type RouteKind int // RouteCommand, RouteAgentText, RouteIgnore
+type Route struct{ Kind RouteKind; Command, Args, Text string }
+func RouteText(text string, inTopic bool, botUsername string) Route // design D15 and section 8.7
+
+type Action int // ActText, ActSendNow, ActForce, ActKeys, ActPromptAnswer, ActReadOnly
+type Facts struct{ FromOwner, OwnerChat, TopicLive, PaneExists, AgentInFront, PromptOpen, AlertMatches, Paused bool }
+func Check(a Action, f Facts) (ok bool, reason string) // the action × checks table in design section 9.5; Paused blocks every typing action
+
+type Joiner struct{ /* … */ }
+func NewJoiner(window, longWindow time.Duration, longChars int) *Joiner
+func (j *Joiner) Add(threadID, updateID int64, text string, at time.Time)
+func (j *Joiner) Due(now time.Time) []Joined // Joined{ThreadID int64; UpdateIDs []int64; Text string}
+
+func Normalize(s string) string
+func Hash(s string) string
+type Delivered struct{ UpdateID int64; BodyHash, Body string; DeliveredAt time.Time }
+func MatchEcho(prompt string, at time.Time, delivered []Delivered) (int64, bool) // hash within 10 min, else 40-character prefix within 30 s
+```
+
+Topic commands: `info`, `screen`, `approve`, `deny`, `esc`, `interrupt`, `key`, `force`, `mode`, `verbose`, `reasoning`, `resend`, `unlink`, `mute`, `unmute`, `help`. Main-chat commands: `start`, `agents`, `topics`, `status`, `pause`, `unpause`, `help`. `/cmd@<botUsername>` is the same command; a command addressed to another bot is ignored.
+
+### internal/sender
+
+The only component that writes to Telegram. It owns the rate budget and the priorities of design section 9.3.
+
+```go
+type Options struct{ RatePerSecond float64; Burst int; Now func() time.Time; Logger *slog.Logger }
+func New(st *store.Store, tg *telegram.Client, opt Options) *Sender
+func (s *Sender) Run(ctx context.Context) error // until ctx ends
+func (s *Sender) Wake()                         // new outbox rows exist
+func (s *Sender) Progress(threadID int64, op ProgressOp)  // ProgressOp{Kind: Show|Edit|Repost|Finish; HTML string}; latest pending edit per topic wins
+func (s *Sender) React(chatID, messageID int64, emoji string)
+func (s *Sender) Typing(chatID, threadID int64)          // dropped when no budget is free
+func (s *Sender) Call(prio Priority, fn func(ctx context.Context, tg *telegram.Client) error) error // other calls (topics, alerts, callback answers), waits for the result
+func (s *Sender) Events() <-chan Event // Event{Kind: ThreadGone|Blocked|Conflict|PartUnknown; ThreadID, OutboxID int64; Part int}
+func (s *Sender) Recover(ctx context.Context) error // at start: sending parts become unknown, with one notice each
+```
+
+Rules: outbox parts per design section 9.1 (claims, parse-error fallback to plain text, 429 waits, unknown never retried, notices with key `notice:unknown:<outbox id>:<part>`, row state from parts), documents through `SendDocument`, muted topics send answers silently, progress messages through the `progress` table (Show, Edit with "not modified" as success and "edit target gone" as a new Show, Repost as new then delete old, Finish as the last edit then the row is deleted; an unknown Show is never retried), edits and deletes retried with backoff, priorities answers > alerts > new progress > progress edits > typing.
