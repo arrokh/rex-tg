@@ -227,7 +227,7 @@ func (d *daemon) openTopic(cbID string, paneID, replyThread int64) {
 			return
 		case v.Thread != nil && v.Thread.Status != store.ThreadClosed:
 			d.answerCallback(cbID, "This session already has a topic.", false)
-			d.say(chat, replyThread, "↗ "+format.Escape(v.Thread.Name), linkMarkup("Open topic", d.topicLink(v.Thread.MessageThreadID)))
+			d.say(chat, replyThread, "↗ "+format.Escape(noAutoLink(v.Thread.Name)), linkMarkup("Open topic", d.topicLink(v.Thread.MessageThreadID)))
 			return
 		}
 		conv := *v.Conversation
@@ -241,12 +241,19 @@ func (d *daemon) openTopic(cbID string, paneID, replyThread int64) {
 		})
 		if err != nil {
 			d.log.Warn("createForumTopic", "err", err)
+			if telegram.Classify(err) == telegram.ClassUnknownOutcome {
+				// The topic may exist anyway. By now the button press may be
+				// too old to answer, so the note goes into the chat.
+				d.answerCallback(cbID, "", false)
+				d.say(chat, replyThread, "⚠️ Telegram did not answer in time. If no new topic appeared, tap Open again.", nil)
+				return
+			}
 			d.answerCallback(cbID, "Could not create the topic. Is Threaded Mode on for the bot?", true)
 			return
 		}
 		d.emit(evTopicCreated{chatID: chat, threadID: ft.MessageThreadID, name: name, convID: conv.ID, title: title})
 		d.answerCallback(cbID, "Topic created", false)
-		d.say(chat, replyThread, "🔗 Opened "+format.Escape(name), linkMarkup("Open topic", d.topicLink(ft.MessageThreadID)))
+		d.say(chat, replyThread, "🔗 Opened "+format.Escape(noAutoLink(name)), linkMarkup("Open topic", d.topicLink(ft.MessageThreadID)))
 	})
 }
 
@@ -304,13 +311,13 @@ func (d *daemon) introCard(th store.Thread, conv store.Conversation, title strin
 		}
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "🔗 <b>Linked:</b> %s", format.Escape(topicName(conv.Runtime, conv.CWD, "")))
-	fmt.Fprintf(&b, "\nSession: %s", format.Escape(format.Truncate(title, 100)))
+	fmt.Fprintf(&b, "🔗 <b>Linked:</b> %s", format.Escape(noAutoLink(topicName(conv.Runtime, conv.CWD, ""))))
+	fmt.Fprintf(&b, "\nSession: %s", format.Escape(noAutoLink(format.Truncate(title, 100))))
 	if pane != "" {
 		fmt.Fprintf(&b, "\nPane: %s", format.Escape(pane))
 	}
 	if conv.CWD != "" {
-		fmt.Fprintf(&b, "\nFolder: %s", format.Escape(d.tildePath(conv.CWD)))
+		fmt.Fprintf(&b, "\nFolder: <code>%s</code>", format.Escape(d.tildePath(conv.CWD)))
 	}
 	fmt.Fprintf(&b, "\nMode: %s · Input: waits until idle", format.Escape(th.Mode))
 	b.WriteString("\nWrite here to type into the pane. /help lists the commands.")

@@ -121,18 +121,20 @@ func (d *daemon) renderAgents(views []registry.AgentView) (string, *telegram.Inl
 		emoji, label := stateEmoji(v.Pane.State)
 		folder := folderOf(v)
 		name := string(v.Runtime)
+		shown := esc(name) // the folder in <code>: Telegram links names such as "resume.md"
 		if folder != "" {
 			name += " · " + folder
+			shown += " · <code>" + esc(folder) + "</code>"
 		}
 		switch {
 		case v.Conversation == nil:
-			fmt.Fprintf(&b, "\n%s %s · (waiting for session)", emoji, esc(name))
+			fmt.Fprintf(&b, "\n%s %s · (waiting for session)", emoji, shown)
 		default:
 			guess := ""
 			if v.Resolution == store.SourceGuess {
 				guess = " (guess)"
 			}
-			fmt.Fprintf(&b, "\n%s %s · %s%s", emoji, esc(name), label, guess)
+			fmt.Fprintf(&b, "\n%s %s · %s%s", emoji, shown, label, guess)
 		}
 		var detail []string
 		if v.Conversation != nil && v.Conversation.Title != "" {
@@ -142,7 +144,7 @@ func (d *daemon) renderAgents(views []registry.AgentView) (string, *telegram.Inl
 			detail = append(detail, "Rex: "+v.Pane.Label)
 		}
 		if len(detail) > 0 {
-			fmt.Fprintf(&b, "\n   %s", esc(strings.Join(detail, "   ")))
+			fmt.Fprintf(&b, "\n   %s", esc(noAutoLink(strings.Join(detail, "   "))))
 		}
 		btn := telegram.InlineKeyboardButton{Text: "Open " + name, CallbackData: fmt.Sprintf("o:%d", v.Pane.ID)}
 		if v.Thread != nil && v.Thread.Status != store.ThreadClosed {
@@ -280,15 +282,16 @@ func (d *daemon) topicCommand(u telegram.Update, m *telegram.Message, th store.T
 	case "approve", "deny":
 		d.spawn(func() { d.approveDeny(th, upd, r.Command == "approve") })
 	case "esc":
-		d.keysCommand(th, upd, []string{"escape"})
+		d.keysCommand(th, upd, []string{"escape"}, false)
 	case "interrupt":
-		keys := []string{"escape"}
+		keys, piVim := []string{"escape"}, false
 		if conv, err := d.st.Conversation(d.ctx, th.CurrentConversationID); err == nil {
 			if k := d.cfg.Input(conv.Runtime).InterruptKeys; len(k) > 0 {
 				keys = k
 			}
+			piVim = conv.Runtime == agents.Pi
 		}
-		d.keysCommand(th, upd, keys)
+		d.keysCommand(th, upd, keys, piVim)
 	case "key":
 		keys := strings.Fields(r.Args)
 		for _, k := range keys {
@@ -301,7 +304,7 @@ func (d *daemon) topicCommand(u telegram.Update, m *telegram.Message, th store.T
 			reply("key", "Usage: /key &lt;keys&gt;, for example /key ctrl+c or /key down enter. At most 10 keys.")
 			return
 		}
-		d.keysCommand(th, upd, keys)
+		d.keysCommand(th, upd, keys, false)
 	case "force":
 		if r.Args == "" {
 			reply("force", "Usage: /force &lt;text&gt;")
@@ -335,15 +338,15 @@ func (d *daemon) topicCommand(u telegram.Update, m *telegram.Message, th store.T
 func (d *daemon) infoText(th store.Thread) string {
 	ctx := d.ctx
 	var b strings.Builder
-	fmt.Fprintf(&b, "ℹ️ <b>%s</b>\nTopic: %s", esc(th.Name), th.Status)
+	fmt.Fprintf(&b, "ℹ️ <b>%s</b>\nTopic: %s", esc(noAutoLink(th.Name)), th.Status)
 	if conv, err := d.st.Conversation(ctx, th.CurrentConversationID); err == nil {
 		title := conv.Title
 		if title == "" {
 			title = conv.NativeID
 		}
-		fmt.Fprintf(&b, "\nSession: %s (%s)", esc(format.Truncate(title, 100)), conv.Runtime)
+		fmt.Fprintf(&b, "\nSession: %s (%s)", esc(noAutoLink(format.Truncate(title, 100))), conv.Runtime)
 		if conv.CWD != "" {
-			fmt.Fprintf(&b, "\nFolder: %s", esc(d.tildePath(conv.CWD)))
+			fmt.Fprintf(&b, "\nFolder: <code>%s</code>", esc(d.tildePath(conv.CWD)))
 		}
 	}
 	if p, ok, err := d.st.PaneByConversation(ctx, th.CurrentConversationID); err == nil && ok {
@@ -410,7 +413,9 @@ func (d *daemon) screenCommand(th store.Thread, upd int64, args string) {
 }
 
 // keysCommand presses keys in the pane after the checks of design section 9.5.
-func (d *daemon) keysCommand(th store.Thread, upd int64, keys []string) {
+// With piVim (an /interrupt in a pi pane), one more Escape is pressed when
+// pi-vim is in INSERT or VISUAL mode, because it takes the first Escape.
+func (d *daemon) keysCommand(th store.Thread, upd int64, keys []string, piVim bool) {
 	d.spawn(func() {
 		tag := fmt.Sprintf("%d:keys", upd)
 		f, pane, err := d.facts(d.ctx, th)
@@ -421,6 +426,11 @@ func (d *daemon) keysCommand(th store.Thread, upd int64, keys []string) {
 		if ok, reason := inbound.Check(inbound.ActKeys, f); !ok {
 			d.replyTopic(th, tag, "⛔ Not sent: "+format.Escape(reason)+".")
 			return
+		}
+		if piVim {
+			if screen, err := d.rx.Capture(d.ctx, pane.Session, pane.Block); err == nil {
+				keys = interruptKeys(piVimMode(screen), keys)
+			}
 		}
 		if err := d.rx.SendKeys(d.ctx, pane.Session, pane.Block, keys...); err != nil {
 			d.replyTopic(th, tag, "Could not press the keys.")

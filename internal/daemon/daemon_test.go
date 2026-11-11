@@ -185,8 +185,8 @@ func TestAgentsListsPiPane(t *testing.T) {
 
 	e.say(0, "/agents")
 	m := e.waitText(0, "Active agents (1)")
-	if !strings.Contains(m.Text, "pi · proj") {
-		t.Errorf("agents text = %q, want the runtime and folder", m.Text)
+	if !strings.Contains(m.Text, "pi · <code>proj</code>") {
+		t.Errorf("agents text = %q, want the runtime and the folder in <code>", m.Text)
 	}
 	if got := buttonData(m, "Open"); !strings.HasPrefix(got, "o:") {
 		t.Errorf("open button data = %q", got)
@@ -1817,5 +1817,162 @@ func TestStateFoldersAreRestrictedAtStart(t *testing.T) {
 		if fi, err := os.Stat(d); err != nil || fi.Mode().Perm() != 0o700 {
 			t.Errorf("%s mode = %v, %v; want 0700", d, fi.Mode().Perm(), err)
 		}
+	}
+}
+
+// vimScreen is a pane screen whose prompt editor shows a pi-vim mode label at
+// the right end of the input box's top border.
+func vimScreen(label string) string {
+	return "some answer text\n\n" + strings.Repeat("─", 60) + " " + label + "\n~/work/project (main)\n"
+}
+
+// callIndex returns the position of the first fake Rex call whose arguments
+// contain want, or -1.
+func callIndex(e *env, want string) int {
+	for i, c := range e.fake.Calls() {
+		if strings.Contains(strings.Join(c.Args, " "), want) {
+			return i
+		}
+	}
+	return -1
+}
+
+func TestVimNormalModeEntersInsertBeforeThePaste(t *testing.T) {
+	e, _, thread := piTopic(t, "pi-vim-normal")
+	e.setScreen(vimScreen("NORMAL"))
+	e.say(thread, "please check the docs")
+	e.waitFor("the paste", func() bool { return len(e.pastes()) == 1 })
+	e.waitFor("Enter", func() bool { return len(e.keys()) == 2 })
+	if got := e.keys(); got[0] != "i" || got[1] != "enter" {
+		t.Fatalf("keys = %v, want [i enter]", got)
+	}
+	insertAt, pasteAt := callIndex(e, "send-key"), callIndex(e, "block.event")
+	if insertAt < 0 || pasteAt < insertAt {
+		t.Errorf("the i key is at call %d and the paste at call %d; i must come first", insertAt, pasteAt)
+	}
+}
+
+func TestVimInsertModeTypesWithoutExtraKeys(t *testing.T) {
+	e, _, thread := piTopic(t, "pi-vim-insert")
+	e.setScreen(vimScreen("INSERT"))
+	e.say(thread, "hello")
+	e.waitFor("Enter", func() bool { return len(e.keys()) == 1 })
+	if got := e.keys(); got[0] != "enter" {
+		t.Fatalf("keys = %v, want [enter]", got)
+	}
+}
+
+func TestVimPendingCommandIsRefused(t *testing.T) {
+	e, _, thread := piTopic(t, "pi-vim-busy")
+	e.setScreen(vimScreen("NORMAL 3d_"))
+	id := e.say(thread, "hello")
+	e.waitFor("the thumbs down", func() bool { m, _ := e.message(id); return m.Reaction == "👎" })
+	e.waitText(thread, "in the middle of a vim command")
+	if len(e.pastes()) != 0 || len(e.keys()) != 0 {
+		t.Errorf("typed into a busy vim editor: %v %v", e.pastes(), e.keys())
+	}
+}
+
+func TestInterruptInVimInsertModePressesEscapeTwice(t *testing.T) {
+	e, _, thread := piTopic(t, "pi-vim-interrupt")
+	e.setScreen(vimScreen("INSERT"))
+	e.say(thread, "/interrupt")
+	e.waitText(thread, "Sent: escape escape")
+	if got := e.keys(); len(got) != 1 || got[0] != "escape escape" {
+		t.Fatalf("keys = %v, want one call with escape escape", got)
+	}
+	// /esc is a plain key press: no extra Escape.
+	e.say(thread, "/esc")
+	e.waitFor("the second key call", func() bool { return len(e.keys()) == 2 })
+	if got := e.keys()[1]; got != "escape" {
+		t.Errorf("/esc pressed %q, want escape", got)
+	}
+}
+
+func TestTopicCreateWithoutAnAnswerSaysToTapAgain(t *testing.T) {
+	e := newEnv(t)
+	e.seedOwner()
+	p := e.newPi("pi-topic-no-answer")
+	p.User("hello")
+	e.start()
+	e.hookPi(p, "startup")
+	e.waitFor("a resolved pane", func() bool {
+		pane, ok, err := e.peek().PaneByBlock(context.Background(), "local", rexBlock)
+		return err == nil && ok && pane.ConversationID != 0
+	})
+	e.say(0, "/agents")
+	list := e.waitText(0, "Active agents")
+	if !strings.Contains(list.Text, "<code>proj</code>") {
+		t.Errorf("agents text = %q, want the folder in <code>", list.Text)
+	}
+	open := buttonData(list, "Open")
+
+	e.tg.FailNext("createForumTopic", 1, 502, "Bad Gateway", 0) // the outcome is unknown
+	e.pressButton(list, open)
+	e.waitText(0, "did not answer in time")
+
+	e.pressButton(list, open) // the user taps again
+	e.waitText(0, "Opened")
+	if got := e.tg.Topics(chatID); len(got) != 1 {
+		t.Errorf("topics = %+v, want one", got)
+	}
+}
+
+func TestTopicCreateRefusedMentionsThreadedMode(t *testing.T) {
+	e := newEnv(t)
+	e.seedOwner()
+	p := e.newPi("pi-topic-refused")
+	p.User("hello")
+	e.start()
+	e.hookPi(p, "startup")
+	e.waitFor("a resolved pane", func() bool {
+		pane, ok, err := e.peek().PaneByBlock(context.Background(), "local", rexBlock)
+		return err == nil && ok && pane.ConversationID != 0
+	})
+	e.say(0, "/agents")
+	list := e.waitText(0, "Active agents")
+	e.tg.FailNext("createForumTopic", 1, 400, "Bad Request: the chat is not a forum", 0)
+	e.pressButton(list, buttonData(list, "Open"))
+	e.waitFor("the alert", func() bool {
+		for _, s := range e.callbackTexts() {
+			if strings.Contains(s, "Threaded Mode") {
+				return true
+			}
+		}
+		return false
+	})
+}
+
+func TestVimKeysAreOnlyForPi(t *testing.T) {
+	e := newEnv(t)
+	e.seedOwner()
+	e.setProcess("codex", "codex", 6262)
+	dir := filepath.Join(e.home, ".codex", "sessions", "2026", "11", "11")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "rollout-2026-11-11T11-00-00-cdx-vim.jsonl")
+	meta := fmt.Sprintf(`{"timestamp":%q,"type":"session_meta","payload":{"id":"cdx-vim","cwd":%q,"originator":"codex-tui","source":"cli"}}`, now(), paneCWD)
+	if err := os.WriteFile(path, []byte(meta+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	e.start()
+	e.spool("codex", "SessionStart", map[string]any{
+		"hook_event_name": "SessionStart", "source": "startup", "session_id": "cdx-vim", "transcript_path": path, "cwd": paneCWD,
+	})
+	thread := e.openTopic()
+
+	// A line that looks like a pi-vim label means nothing in a Codex pane.
+	e.setScreen(vimScreen("NORMAL"))
+	e.say(thread, "hello codex")
+	e.waitFor("Enter", func() bool { return len(e.keys()) == 1 })
+	if got := e.keys(); got[0] != "enter" {
+		t.Fatalf("keys = %v, want [enter] only", got)
+	}
+	e.setScreen(vimScreen("INSERT"))
+	e.say(thread, "/interrupt")
+	e.waitFor("the interrupt", func() bool { return len(e.keys()) == 2 })
+	if got := e.keys()[1]; got != "escape" {
+		t.Errorf("/interrupt pressed %q, want one escape", got)
 	}
 }

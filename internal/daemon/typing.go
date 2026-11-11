@@ -348,9 +348,9 @@ func (d *daemon) startTyping(th store.Thread, in store.Inbound, res prepResult) 
 			submit = ip.SubmitKey
 		}
 	}
-	pane, text := res.pane, in.Body
+	pane, text, piVim := res.pane, in.Body, res.rt == agents.Pi
 	d.spawn(func() {
-		err := d.typeInto(pane, text, delay, submit)
+		err := d.typeInto(pane, text, delay, submit, piVim)
 		d.emit(evTyped{thread: th.ID, in: in, err: err})
 	})
 }
@@ -363,7 +363,34 @@ var (
 	errStoppedAfter = errors.New("the text was pasted but Enter was not pressed")
 	errPaste        = errors.New("the paste failed")
 	errSubmit       = errors.New("pressing the submit key failed")
+	errVimBusy      = errors.New("the prompt editor is in the middle of a vim command")
 )
+
+// enterPiVimInsert puts the pi-vim editor in INSERT mode before a paste,
+// because pi-vim drops a paste in NORMAL mode. It reads the mode from the
+// screen and does not guess at a pending vim command. Without a readable
+// screen or a pi-vim label, it does nothing. Pressing the keys again after a
+// failure is safe: the next try reads the screen again.
+func (d *daemon) enterPiVimInsert(ctx context.Context, pane store.Pane) error {
+	screen, err := d.rx.Capture(ctx, pane.Session, pane.Block)
+	if err != nil {
+		return nil
+	}
+	keys, ok := enterInsertKeys(piVimMode(screen))
+	switch {
+	case !ok:
+		return errVimBusy
+	case len(keys) == 0:
+		return nil
+	}
+	if err := d.rx.SendKeys(ctx, pane.Session, pane.Block, keys...); err != nil {
+		return errRetryBefore
+	}
+	if !sleepCtx(ctx, vimModeSwitchWait) {
+		return ctx.Err()
+	}
+	return nil
+}
 
 // safeNow re-checks, right before a key goes out, that typing is not paused
 // and that the prepared agent process is still in front of the pane.
@@ -381,7 +408,7 @@ func (d *daemon) safeNow(pane store.Pane) (paused, inFront bool, err error) {
 // typeInto pastes the text, waits, and presses the submit key. The safety
 // checks run again before the paste and before the submit key. Errors never
 // carry Rex's output, which could hold the typed text.
-func (d *daemon) typeInto(pane store.Pane, text string, delay time.Duration, submit string) error {
+func (d *daemon) typeInto(pane store.Pane, text string, delay time.Duration, submit string, piVim bool) error {
 	ctx := d.ctx
 	paused, front, err := d.safeNow(pane)
 	switch {
@@ -391,6 +418,11 @@ func (d *daemon) typeInto(pane store.Pane, text string, delay time.Duration, sub
 		return errPausedBefore
 	case !front:
 		return errGoneBefore
+	}
+	if piVim {
+		if err := d.enterPiVimInsert(ctx, pane); err != nil {
+			return err
+		}
 	}
 	if err := d.rx.Paste(ctx, pane.Session, pane.Block, text); err != nil {
 		return errPaste
@@ -427,6 +459,11 @@ func (d *daemon) onTyped(e evTyped) {
 	case errors.Is(e.err, errGoneBefore):
 		if th, err := d.st.Thread(d.ctx, e.thread); err == nil {
 			d.refuse(th, e.in, inbound.ReasonAgentNotFront)
+		}
+		return
+	case errors.Is(e.err, errVimBusy):
+		if th, err := d.st.Thread(d.ctx, e.thread); err == nil {
+			d.refuse(th, e.in, reasonVimBusy)
 		}
 		return
 	}

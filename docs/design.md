@@ -616,6 +616,9 @@ How text is typed:
 
 - rex-tg sends a paste event to the pane: `rex api call block.event` with type `paste` and payload `{"text": "…"}`. Then it sends Enter. A paste keeps multi-line text together as one prompt, because the terminal uses bracketed paste when the program asks for it.
 - rex-tg waits between the paste and Enter. The wait is 300 ms for all three agents, and it worked in the spikes (S2). Shorter waits were not tested.
+- The pi-vim package (a modal prompt editor for pi) drops a paste in NORMAL mode (found live, spike S1). So before a paste into a pi pane, rex-tg reads the bottom 20 lines of the screen for the mode label that pi-vim draws at the right end of the input box's top border. In NORMAL mode it presses `i`; in VISUAL mode, `escape` and then `i`. When the label shows a pending command (for example `NORMAL 3d_`) or EX mode, it does not guess: the message is refused with 👎 and a reason (`internal/daemon/vim.go`).
+- In a pi pane, `/interrupt` presses one more `escape` when the screen shows INSERT or VISUAL mode, because pi-vim takes the first `escape` to leave that mode. Without the label it adds nothing: pi opens its session tree on a double `escape` by default (`doubleEscapeAction`).
+- Claude Code's `/vim` mode needs no extra keys: its prompt takes a paste in every vim mode, and Enter submits in NORMAL and INSERT mode (read from the Claude Code 2.1.322 bundle). It shows no label in NORMAL mode. Known gap: in VISUAL mode, Enter does not submit, so a message stays in the input box. Codex has no vim mode.
 - The `inbound` row is `typing` from before the paste until after Enter. If the daemon stops in between, the row stays `typing`. On start, rex-tg marks such rows `unknown` and never types them again. It tells you: "Your message may be in the input box without Enter. Check with /screen." This is the "at most once" rule for typing.
 
 Echo:
