@@ -19,6 +19,9 @@ const (
 	// hookReadTimeout is shorter than the agents' hook timeout (5 s for
 	// Claude Code), so the hook always ends first.
 	hookReadTimeout = 2 * time.Second
+	// Outside Rex the input is not used. The hook waits for its end only a
+	// short time, because some hooks block the agent while they run.
+	hookIdleReadTimeout = 200 * time.Millisecond
 )
 
 // spoolFile is the JSON shape that registry.ParseSpool reads.
@@ -44,7 +47,12 @@ func hookCmd(_ context.Context, args []string, env Env) (code int) {
 func writeSpool(args []string, env Env) error {
 	// Read the input first, also when it is not used: an agent that is still
 	// writing it to a hook that already ended gets a broken pipe.
-	payload := readHookInput(env)
+	inRex := env.Getenv("REX_BLOCK") != ""
+	timeout := hookReadTimeout
+	if !inRex {
+		timeout = hookIdleReadTimeout
+	}
+	payload := readHookInput(env, timeout)
 	if len(args) != 1 {
 		return fmt.Errorf("want one runtime")
 	}
@@ -52,10 +60,10 @@ func writeSpool(args []string, env Env) error {
 	if !rt.Valid() {
 		return fmt.Errorf("unknown runtime")
 	}
-	block := env.Getenv("REX_BLOCK")
-	if block == "" {
+	if !inRex {
 		return nil
 	}
+	block := env.Getenv("REX_BLOCK")
 	var head struct {
 		Event string `json:"hook_event_name"`
 	}
@@ -111,8 +119,8 @@ func writeSpool(args []string, env Env) error {
 }
 
 // readHookInput reads up to 1 MiB of stdin. It reads nothing from a terminal
-// and gives up after a few seconds.
-func readHookInput(env Env) []byte {
+// and gives up after the timeout.
+func readHookInput(env Env, timeout time.Duration) []byte {
 	if env.Stdin == nil || env.StdinIsTerminal() {
 		return nil
 	}
@@ -131,7 +139,7 @@ func readHookInput(env Env) []byte {
 			return nil
 		}
 		return r.data
-	case <-time.After(hookReadTimeout):
+	case <-time.After(timeout):
 		return nil
 	}
 }

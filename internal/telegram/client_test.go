@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -787,5 +788,47 @@ func TestDropAfterWriteIsUnknown(t *testing.T) {
 	_, err := c.SendMessage(context.Background(), telegram.SendMessageParams{ChatID: chat, Text: "hi"})
 	if telegram.Classify(err) != telegram.ClassUnknownOutcome {
 		t.Fatalf("class = %v (%v), want unknown outcome", telegram.Classify(err), err)
+	}
+}
+
+// A TLS handshake that never finishes cannot have posted the message.
+func TestTLSHandshakeTimeoutIsNotSent(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	var mu sync.Mutex
+	var conns []net.Conn
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			mu.Lock()
+			conns = append(conns, c) // accept and never answer
+			mu.Unlock()
+		}
+	}()
+	defer func() {
+		mu.Lock()
+		defer mu.Unlock()
+		for _, c := range conns {
+			c.Close()
+		}
+	}()
+	const token = "123456:SECRET-token-for-this-test"
+	c := telegram.New(token, telegram.WithBaseURL("https://"+ln.Addr().String()), telegram.WithTimeout(300*time.Millisecond))
+	start := time.Now()
+	_, err = c.SendMessage(context.Background(), telegram.SendMessageParams{ChatID: chat, Text: "hi"})
+	if d := time.Since(start); d > 3*time.Second {
+		t.Fatalf("took %v", d)
+	}
+	if telegram.Classify(err) != telegram.ClassNotSent {
+		t.Fatalf("class = %v (%v), want not sent", telegram.Classify(err), err)
+	}
+	if strings.Contains(err.Error(), "SECRET") {
+		t.Fatalf("the token is in the error: %v", err)
 	}
 }

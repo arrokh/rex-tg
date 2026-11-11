@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -18,8 +19,14 @@ import (
 )
 
 const (
-	pairingTTL         = 10 * time.Minute
+	pairingTTL = 10 * time.Minute
+	// pairingMaxAttempts is how many wrong codes lock one sender.
 	pairingMaxAttempts = 5
+	// pairingMaxTotal is how many wrong codes from all senders lock pairing for
+	// everyone, until a new code is made. It keeps mass guessing bounded.
+	pairingMaxTotal = 200
+	// pairingSenders holds the wrong-code count of each sender, as JSON.
+	pairingSenders = "pairing_senders"
 	// pairingAlphabet has no look-alike characters (0/O, 1/I/L).
 	pairingAlphabet = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
 )
@@ -48,6 +55,9 @@ func NewPairingCode(ctx context.Context, st *store.Store, now time.Time) (string
 	if err := st.Set(ctx, "pairing_attempts", "0"); err != nil {
 		return "", fmt.Errorf("daemon: save pairing attempts: %w", err)
 	}
+	if err := st.Delete(ctx, pairingSenders); err != nil {
+		return "", fmt.Errorf("daemon: clear pairing senders: %w", err)
+	}
 	return c, nil
 }
 
@@ -75,15 +85,25 @@ func (d *daemon) tryPair(m *telegram.Message) {
 	if err != nil || !ok || want == "" {
 		return
 	}
-	attempts := d.kvInt("pairing_attempts")
-	if attempts >= pairingMaxAttempts {
-		d.log.Warn("pairing is locked; run rex-tg login again", "from", m.From.ID)
+	// Wrong codes are counted per sender, so a stranger cannot lock the owner
+	// out. A global cap bounds mass guessing.
+	total := d.kvInt("pairing_attempts")
+	senders := d.pairingSenderCounts()
+	from := strconv.FormatInt(m.From.ID, 10)
+	if total >= pairingMaxTotal || senders[from] >= pairingMaxAttempts {
+		d.log.Warn("pairing is locked; run rex-tg pair again", "from", m.From.ID)
 		return
 	}
 	got := codeHash(r.Args)
 	if subtle.ConstantTimeCompare([]byte(got), []byte(want)) != 1 {
-		d.kvSetInt("pairing_attempts", attempts+1)
-		d.log.Warn("wrong pairing code", "from", m.From.ID, "attempts", attempts+1)
+		senders[from]++
+		d.kvSetInt("pairing_attempts", total+1)
+		if b, err := json.Marshal(senders); err == nil {
+			if err := d.st.Set(ctx, pairingSenders, string(b)); err != nil {
+				d.log.Warn("save pairing senders", "err", err)
+			}
+		}
+		d.log.Warn("wrong pairing code", "from", m.From.ID, "attempts", senders[from], "total", total+1)
 		return
 	}
 	// The code is right, so the sender is the owner: an expired code gets an
@@ -96,7 +116,7 @@ func (d *daemon) tryPair(m *telegram.Message) {
 	}
 	d.kvSetInt("owner_user_id", m.From.ID)
 	d.kvSetInt("owner_chat_id", m.Chat.ID)
-	for _, k := range []string{"pairing_code_hash", "pairing_expires_at", "pairing_attempts"} {
+	for _, k := range []string{"pairing_code_hash", "pairing_expires_at", "pairing_attempts", pairingSenders} {
 		if err := d.st.Delete(ctx, k); err != nil {
 			d.log.Warn("clear pairing value", "key", k, "err", err)
 		}
@@ -113,4 +133,16 @@ func (d *daemon) tryPair(m *telegram.Message) {
 			d.log.Warn("setMyCommands for the owner's chat", "err", err)
 		}
 	})
+}
+
+// pairingSenderCounts reads the wrong-code count of each sender (Telegram user
+// id as text). A missing or broken value means no counts.
+func (d *daemon) pairingSenderCounts() map[string]int {
+	out := map[string]int{}
+	if v, ok, err := d.st.Get(d.ctx, pairingSenders); err == nil && ok && v != "" {
+		if json.Unmarshal([]byte(v), &out) != nil || out == nil {
+			out = map[string]int{}
+		}
+	}
+	return out
 }

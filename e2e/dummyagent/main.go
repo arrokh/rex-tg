@@ -33,6 +33,8 @@ type agent struct {
 	seed                 string
 	format               string
 	echoDelay            time.Duration
+	exitFile             string
+	fixedID              string
 
 	pending atomic.Int32 // prompts submitted and not yet answered
 
@@ -52,6 +54,8 @@ func main() {
 	flag.DurationVar(&a.think, "think", 2*time.Second, "simulated work time per prompt")
 	flag.StringVar(&a.seed, "seed", "", "prompt of a turn that is already in the transcript at start")
 	flag.DurationVar(&a.echoDelay, "echo-delay", 0, "time between a submit and the user line in the transcript")
+	flag.StringVar(&a.exitFile, "exit-file", "", "exit at once when this file exists")
+	flag.StringVar(&a.fixedID, "session-id", "", "session id; when its transcript exists, the agent resumes it")
 	flag.StringVar(&a.format, "format", "pi", "transcript and hook format: pi, claude, or codex")
 	flag.Parse()
 	switch a.format {
@@ -77,8 +81,28 @@ func (a *agent) run() error {
 	}
 	a.cwd = cwd
 	a.sessionID = uuid()
+	if a.fixedID != "" {
+		a.sessionID = a.fixedID
+	}
 	now := time.Now().UTC()
 	a.sessionFile = a.transcriptPath(now)
+	resumed := false
+	if a.fixedID != "" {
+		if old := a.findTranscript(); old != "" {
+			a.sessionFile, resumed = old, true
+			a.lastEntry = "resumed" // the header is already in the file
+		}
+	}
+	if a.exitFile != "" {
+		go func() {
+			for {
+				if _, err := os.Stat(a.exitFile); err == nil {
+					os.Exit(0) // no clean-up, like a crash of the agent
+				}
+				time.Sleep(100 * time.Millisecond)
+			}
+		}()
+	}
 
 	// Raw input without echo, like a full-screen terminal program.
 	stty := exec.Command("stty", "raw", "-echo")
@@ -95,7 +119,7 @@ func (a *agent) run() error {
 	fmt.Print("\x1b[?2004h") // bracketed paste on
 	a.status("idle", "")
 	fmt.Print("dummy pi ready\r\n")
-	if a.seed != "" {
+	if a.seed != "" && !resumed {
 		// A real pi creates its file at the first prompt, and rex-tg cannot
 		// resolve the session before that. Start with one finished turn.
 		if err := a.append("user", a.seed, ""); err != nil {
@@ -117,6 +141,18 @@ func (a *agent) run() error {
 		}
 	}
 	return nil
+}
+
+// findTranscript returns the existing transcript of the fixed session id.
+func (a *agent) findTranscript() string {
+	found := ""
+	_ = filepath.WalkDir(a.home, func(p string, d os.DirEntry, err error) error {
+		if err == nil && !d.IsDir() && strings.HasSuffix(p, ".jsonl") && strings.Contains(filepath.Base(p), a.sessionID) {
+			found = p
+		}
+		return nil
+	})
+	return found
 }
 
 // status reports the program state with OSC 7501, as pi's reporter does.

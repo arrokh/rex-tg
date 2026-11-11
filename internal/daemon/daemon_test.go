@@ -126,6 +126,8 @@ func TestThreadedPrivateChatHasNoMainChat(t *testing.T) {
 	}
 }
 
+// A sender is locked after five wrong codes, even with the right code on the
+// sixth try (see pairing_test.go for the other senders).
 func TestPairingLocksAfterFiveWrongCodes(t *testing.T) {
 	e := newEnv(t)
 	var code string

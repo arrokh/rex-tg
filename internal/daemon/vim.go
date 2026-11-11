@@ -16,9 +16,9 @@ import (
 // into a pi-vim prompt in NORMAL mode and never arrived). Without pi-vim
 // there is no label, and typing works as before.
 //
-// Claude Code's /vim mode needs none of this: its prompt takes a paste in
-// every vim mode (read from the Claude Code 2.1.322 bundle). Codex has no
-// vim mode.
+// Claude Code's /vim mode takes a paste in every vim mode (read from the
+// Claude Code 2.1.322 bundle), but Enter does not submit in VISUAL mode: see
+// claude_vim.go. Codex has no vim mode.
 type vimMode int
 
 const (
@@ -53,7 +53,7 @@ const (
 )
 
 // vimStuckNote is said once per message when pi-vim does not react.
-const vimStuckNote = "⏳ The pi editor did not react to a key, so your message waits. It is typed when the editor reacts again."
+const vimStuckNote = "⏳ The vim editor did not react to a key, so your message waits. It is typed when the editor reacts again."
 
 // errVimStuck means pi-vim did not show the effect of a key in time. No more
 // keys go to that pane while its label stays the same, so keys cannot pile

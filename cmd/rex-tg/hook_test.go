@@ -8,6 +8,7 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
 	"rex-tg/internal/registry"
 )
@@ -200,5 +201,31 @@ func TestHookReadsInputOutsideRex(t *testing.T) {
 	}
 	if !in.done {
 		t.Fatal("the hook ended without reading its input")
+	}
+}
+
+// blockingReader never returns until it is closed.
+type blockingReader struct{ stop chan struct{} }
+
+func (b blockingReader) Read([]byte) (int, error) {
+	<-b.stop
+	return 0, io.EOF
+}
+
+// Outside Rex an agent that keeps stdin open must not hold the hook.
+func TestHookOutsideRexDoesNotWaitLong(t *testing.T) {
+	te := newTestEnv(t)
+	stop := make(chan struct{})
+	defer close(stop)
+	te.Stdin = blockingReader{stop}
+	start := time.Now()
+	if code := te.run("hook", "claude"); code != 0 {
+		t.Fatalf("exit %d", code)
+	}
+	if d := time.Since(start); d > time.Second {
+		t.Fatalf("the hook waited %v", d)
+	}
+	if te.stdout.Len()+te.stderr.Len() != 0 {
+		t.Fatal("printed")
 	}
 }

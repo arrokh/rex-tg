@@ -91,7 +91,7 @@ Send it after step 4. The daemon reads the code only while it runs.
 - The first valid code makes your account the owner.
 - The bot answers no one until pairing is done.
 - A code works once. It expires after 10 minutes. After it expires, run `rex-tg pair` for a new code.
-- After 5 wrong codes, pairing stops. Run `rex-tg login` again.
+- After 5 wrong codes from one Telegram account, that account cannot pair with this code. Others still can, so a stranger cannot lock you out. Run `rex-tg pair` for a new code; it clears all counts.
 
 ### 6. Check the setup
 

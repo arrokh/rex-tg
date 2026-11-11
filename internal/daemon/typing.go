@@ -368,9 +368,9 @@ func (d *daemon) startTyping(th store.Thread, in store.Inbound, res prepResult) 
 			submit = ip.SubmitKey
 		}
 	}
-	pane, text, piVim := res.pane, in.Body, res.rt == agents.Pi
+	pane, text, piVim, claudeVim := res.pane, in.Body, res.rt == agents.Pi, res.rt == agents.Claude
 	d.spawn(func() {
-		err := d.typeInto(pane, text, delay, submit, piVim)
+		err := d.typeInto(pane, text, delay, submit, piVim, claudeVim)
 		d.emit(evTyped{thread: th.ID, in: in, err: err})
 	})
 }
@@ -401,7 +401,7 @@ func (d *daemon) safeNow(pane store.Pane) (paused, inFront bool, err error) {
 // typeInto pastes the text, waits, and presses the submit key. The safety
 // checks run again before the paste and before the submit key. Errors never
 // carry Rex's output, which could hold the typed text.
-func (d *daemon) typeInto(pane store.Pane, text string, delay time.Duration, submit string, piVim bool) error {
+func (d *daemon) typeInto(pane store.Pane, text string, delay time.Duration, submit string, piVim, claudeVim bool) error {
 	ctx := d.ctx
 	paused, front, err := d.safeNow(pane)
 	switch {
@@ -421,6 +421,24 @@ func (d *daemon) typeInto(pane store.Pane, text string, delay time.Duration, sub
 			return err
 		}
 		if pressed { // that took time: check again right before the paste
+			switch paused, front, err := d.safeNow(pane); {
+			case err != nil:
+				return errRetryBefore
+			case paused:
+				return errPausedBefore
+			case !front:
+				return errGoneBefore
+			}
+		}
+	}
+	// Claude Code takes a paste in every vim mode, but Enter does not submit in
+	// VISUAL mode. Leave it with one Escape, and only when the footer shows it.
+	if claudeVim {
+		pressed, err := d.settleClaudeVim(ctx, pane)
+		if err != nil {
+			return err
+		}
+		if pressed {
 			switch paused, front, err := d.safeNow(pane); {
 			case err != nil:
 				return errRetryBefore

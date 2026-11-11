@@ -1,6 +1,6 @@
 # Spike S1: Telegram topics in the private chat
 
-Status: partly done, 2026-11-11. The steps below that need the paired bot and a phone are still open.
+Status: mostly done, 2026-11-11, in a live test with the paired bot and a phone. Three small checks are still open (end of this file).
 
 Setup: a real bot made with @BotFather, Threaded Mode turned on, rex-tg installed on the Mac, and the Telegram app on an iPhone.
 
@@ -56,11 +56,17 @@ Setup: a real bot made with @BotFather, Threaded Mode turned on, rex-tg installe
 - The daemon retries and recovers without help. A message can arrive a minute or more late during a burst.
 - The cause is outside rex-tg (the local network or the provider). It is not investigated further here.
 
+## Confirmed in the live test (2026-11-11)
+
+- Steps 3–4: `editForumTopic` renames topics in the private chat (a topic went from "pi · personal" to "[personal] Cek email dan…" when its session got a name). On a deleted topic it fails with an error that rex-tg reads as "thread not found", so the topic is closed (log "topic is gone; closing it").
+- Step 5: the topic list shows several topics as tabs (New Chat, agent topics, and a topic Telegram made from a message).
+- Step 7: the topic link `https://t.me/<bot>/<message_thread_id>` opens the topic; for a deleted topic Telegram says "Message doesn't exist" (handled, see above).
+- Steps 8–9: the waiting notice ("⏳ Waiting until the agent is idle.") and the summary line ("✅ Done · 12s · 0 tools") show as designed.
+- Step 10: Telegram accepts the reactions: 👀 showed on a typed message, and the 👍 calls of acknowledged messages logged no error.
+- Step 11: `getMyCommands` for the owner's chat returns the 21 rex-tg commands (`rex-tg doctor`).
+
 ## Still to check
 
-- Steps 3–4: `editForumTopic` and `closeForumTopic` by the bot in the private chat (`createForumTopic` works, see above).
-- Step 5: how the topic list looks with several agent topics.
-- Step 7: the topic link `https://t.me/<bot>/<message_thread_id>`.
-- Steps 8–9: progress message edits, deletes, silent sends, and the expandable quote of the summary line on the phone.
-- Step 10: whether Telegram accepts the reactions 👀, 👍, and 👎 (rex-tg logs a warning when it does not).
-- Step 11: the command menu inside a topic.
+- `closeForumTopic` in the private chat. rex-tg uses it only when linking a new topic fails, so normal use does not reach it.
+- The expandable quote of the summary line with tool rows (the turns seen so far used no tools).
+- The command menu as the phone shows it after the chat-scoped menu replaced the old one (Telegram may cache the old menu until the chat is reopened).
