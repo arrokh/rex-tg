@@ -49,6 +49,10 @@ const (
 	// FormatRich is Markdown sent with sendRichMessage (Phase 6, opt-in).
 	// Schema version 2 adds it to the CHECK constraint.
 	FormatRich = "rich"
+	// FormatImage is an image file sent from the Mac. Content is the absolute
+	// path; the sender reads the file when it sends. Schema version 4 adds it
+	// to the CHECK constraint.
+	FormatImage = "image"
 )
 
 // Progress message states.

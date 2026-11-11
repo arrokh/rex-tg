@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"time"
 
 	"rex-tg/internal/agents"
@@ -334,6 +336,11 @@ func (d *daemon) work(th store.Thread, acts []turn.Action) []store.OutboxItem {
 				continue
 			}
 			items = append(items, store.OutboxItem{ThreadID: th.ID, Key: a.Key, Kind: a.Kind, Parts: parts, Silent: a.Silent})
+			if a.Kind == "answer" && a.HTML == "" {
+				if img, ok := d.imageItem(th, a); ok {
+					items = append(items, img)
+				}
+			}
 		case turn.ShowProgress:
 			d.snd.Progress(th.ID, sender.ProgressOp{Kind: sender.Show, HTML: a.HTML})
 		case turn.EditProgress:
@@ -349,6 +356,27 @@ func (d *daemon) work(th store.Thread, acts []turn.Action) []store.OutboxItem {
 		}
 	}
 	return items
+}
+
+// imageItem makes the outbox item that sends the images a final answer names
+// (design section 9.4a), or reports that there are none.
+func (d *daemon) imageItem(th store.Thread, a turn.Post) (store.OutboxItem, bool) {
+	if !d.cfg.Display.SendImages || th.CurrentConversationID == 0 {
+		return store.OutboxItem{}, false
+	}
+	conv, err := d.st.Conversation(d.ctx, th.CurrentConversationID)
+	if err != nil {
+		return store.OutboxItem{}, false
+	}
+	home, _ := os.UserHomeDir()
+	var parts []store.PartContent
+	for _, p := range findImages(a.Markdown, home, conv.CWD) {
+		parts = append(parts, store.PartContent{Content: p, Format: store.FormatImage, Filename: filepath.Base(p)})
+	}
+	if len(parts) == 0 {
+		return store.OutboxItem{}, false
+	}
+	return store.OutboxItem{ThreadID: th.ID, Key: a.Key + ":images", Kind: "image", Parts: parts, Silent: true}, true
 }
 
 // perform carries out the actions and enqueues their posts.

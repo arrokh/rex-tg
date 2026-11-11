@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -2201,6 +2202,12 @@ func TestTopicNameFollowsThePaneAndTheSession(t *testing.T) {
 	})
 	skew.Add(int64(31 * time.Second)) // the next name check is due
 	e.waitFor("the rename", func() bool { return name() == "[proj][fix] Repair the flaky…" })
+	// The tab is the user's: only tabs of the session for /new follow their topic.
+	for _, c := range e.fake.Calls() {
+		if slices.Contains(c.Args, "rename") {
+			t.Fatalf("rex %q renamed a tab outside the session for /new", c.Args)
+		}
+	}
 
 	// A rename that fails is tried again at the next check.
 	e.fake.On([]string{"block", "ls"}, fmt.Sprintf(`{"blocks":[{"block_id":%q,"label":"api work"}]}`, rexBlock), 0)

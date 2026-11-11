@@ -110,6 +110,7 @@ const (
 	maxAttempts  = 6
 	backoffBase  = time.Second
 	backoffCap   = 30 * time.Second
+	netDownCap   = 3 * time.Second // longest pause after a request that never left the machine
 	idlePoll     = 2 * time.Second
 	eventBufSize = 256
 )
@@ -456,12 +457,13 @@ func (s *Sender) pauseFor(err error) {
 }
 
 // netDown pauses the budget after a request that never left this machine,
-// longer each time in a row, so a network outage is not hammered. Nothing was
-// posted, so the request is tried again after the pause.
+// longer each time in a row (up to netDownCap), so a network outage is not
+// hammered but a queued reply goes out within seconds after the network
+// returns. Nothing was posted, so the request is tried again after the pause.
 func (s *Sender) netDown() {
 	s.mu.Lock()
 	s.netFails++
-	s.bucket.pause(s.now(), backoff(s.netFails-1))
+	s.bucket.pause(s.now(), min(backoff(s.netFails-1), netDownCap))
 	s.mu.Unlock()
 }
 

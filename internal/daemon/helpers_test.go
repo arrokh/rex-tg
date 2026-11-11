@@ -122,6 +122,8 @@ func (e *env) options() daemon.Options {
 		Telegram:  e.tg.Client(),
 		ProcStart: func(int) (time.Time, error) { return time.Now().Add(-time.Hour), nil },
 		Timing:    testTiming,
+		// The programs of the machine that runs the tests do not count.
+		HasProgram: func(string) bool { return false },
 	}
 }
 

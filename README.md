@@ -12,7 +12,7 @@ rex-tg connects coding agents that run in Rex panes to Telegram.
 - Replies come from each agent's session file. Rex and the agent's hooks tell rex-tg whether the agent is working.
 - SQLite makes sure no reply is posted twice. A reply whose send got no answer is sent again only when the chat's message numbers prove that it never arrived.
 
-Supported agents: pi, Claude Code, and Codex, on this Mac. Not supported: T3 Code panes, and Rex servers on other computers.
+Supported agents: pi, Claude Code, and Codex, on this Mac. Claude Code started through [cux](https://github.com/inulute/cux) counts as Claude Code. Not supported: T3 Code panes, and Rex servers on other computers.
 
 > **Status: version 1 is built.** Unit tests, daemon integration tests (with a fake Telegram and a fake Rex), and an end-to-end test (with a real, isolated Rex server and dummy agents) pass. Spike S1 is still open: nobody has tried rex-tg with a real Telegram client yet, because that needs your bot. Items marked **(unverified)** depend on that check.
 
@@ -114,7 +114,7 @@ Doctor prints one line for each check. `✓` means the check passed. `!` is a wa
 ### Main chat
 
 - `/agents` lists the agents in Rex panes. Tap one to open its topic. If the session already has a topic, you get a link to it. If you deleted that topic, a new one is made for the same session.
-- `/new` starts a coding agent in a new Rex tab. Tap the agent, then tap a recent folder or send a path such as `~/work/app`. The tab goes into the Rex session named after the folder (only the name counts, so two folders with the same name share a session). If there is no such session, rex-tg makes it. The agent starts as if you typed its name in a terminal, so your `~/.zshrc` applies. When the agent is ready, its topic opens. `/new pi ~/work/app` does it in one step.
+- `/new` starts a coding agent in a new Rex tab. Tap the agent, then tap a recent folder or send a path such as `~/work/app`. When cux is installed, it is one of the agents. Every tab goes into one Rex session, `rex-tg` (set `[rex] new_session` to use another name). If there is no such session, rex-tg makes it. A tab is named after its folder and agent, such as `app · pi`. When the agent's topic gets its own name, such as the session name, the tab takes the same name. The agent starts as if you typed its name in a terminal, so your `~/.zshrc` applies. When the agent is ready, its topic opens. `/new pi ~/work/app` does it in one step.
 - If the new agent asks something before it starts, such as Claude Code's or Codex's "trust this folder?", the question comes to the chat with a button for each answer. A button moves the agent's cursor there and presses Enter, checking the screen after each key.
 - A topic is named after its Rex pane when you gave the pane a name, else after the agent's session name. The name follows changes of both.
 - When an agent exits or its pane closes, its topic says so (🔴), a running turn ends, and the topic's name gets a 🔴 until the agent runs again.
@@ -172,6 +172,7 @@ When the agent stops, the topic shows `🔴 agent stopped`. Messages you send th
 - One progress message updates while the agent works. It appears after 2 seconds without an answer. It shows the latest commentary and the recent tool calls.
 - When the turn ends, the progress message becomes one summary line. The tool rows stay in a collapsed quote.
 - The answer arrives as a new message. Long answers are split into numbered parts, such as `(1/3)`.
+- When the final answer names image files that exist on your Mac (for example "saved to ~/Desktop/screen.png"), rex-tg sends the pictures to the topic right after the answer, up to 10 per answer. Set `send_images = false` to turn this off.
 
 ### Permission prompts
 
@@ -207,16 +208,18 @@ The example lists every key with its default. The `[voice]` keys and `rich_messa
 
 [telegram]
 api_base = "https://api.telegram.org"  # Telegram Bot API address. Keep the default.
+proxy = ""                              # Proxy for Telegram: http, https, socks5, or socks5h URL. Empty uses HTTPS_PROXY or ALL_PROXY.
 rate_per_second = 1                     # Messages per second for the whole chat.
 rate_burst = 5                          # Messages that may be sent at once above that rate.
 
 [rex]
 cli = "/Applications/Rex Beta.app/Contents/Helpers/Rex Server.rex/Contents/MacOS/rex"  # Path to the rex CLI. A leading ~ is expanded.
 scan_interval = "30s"                   # How often rex-tg scans the Rex panes, as a backup to Rex events.
+new_session = "rex-tg"                  # The Rex session where /new opens its tabs. rex-tg makes it when it is missing.
 
 [agents]
 pi_argv0 = ["pi"]                       # Process names (argv0) that mean a pi pane.
-claude_argv0 = ["claude"]               # Process names (argv0) that mean a Claude Code pane.
+claude_argv0 = ["claude", "cux"]        # Process names (argv0) that mean a Claude Code pane. cux runs claude as its child.
 claude_exec_glob = ["~/.local/share/claude/versions/*"]  # Claude Code program paths. A leading ~ is expanded.
 codex_names = ["codex"]                 # Process names that mean a Codex pane.
 
@@ -274,6 +277,7 @@ show_mac_prompts = true                 # Post prompts that you type in the pane
 progress_delay = "2s"                   # Wait before the progress message appears.
 progress_edit_interval = "2s"           # Least time between two edits of the progress message.
 rich_messages = false                   # Send final answers as Telegram rich messages.
+send_images = true                      # Send the image files that a final answer names.
 
 [input]
 queue_expiry = "30m"                    # A waiting message expires after this time.
@@ -384,6 +388,12 @@ Start with `rex-tg doctor`.
 | Telegram says the bot was blocked | Unblock the bot in Telegram. |
 | `doctor` reports unknown line types | The agent changed its transcript format. rex-tg ignores those lines. The adapter may need an update. |
 | "Not sent: the pane now runs ..." | The agent is no longer running in the pane. Start it again in the pane, or open another agent with `/agents`. |
+
+### Slow or unreliable network
+
+Some networks drop the route to Telegram for a minute or two, again and again. rex-tg cannot get through while the route is down. It notices a dead connection in about 15 seconds. It retries every half second to 2 seconds, and it sends queued replies within seconds after the route returns. The log has one warning when a break starts, and one "Telegram reachable again" line when it ends.
+
+If your network blocks Telegram, set a proxy: `proxy = "socks5://127.0.0.1:1080"` under `[telegram]`. It takes an `http`, `https`, `socks5`, or `socks5h` URL. The log shows only its scheme and host, never a password. When the key is empty, rex-tg uses `HTTPS_PROXY` or `ALL_PROXY` from the environment of the daemon.
 
 ## Privacy
 

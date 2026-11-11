@@ -109,10 +109,11 @@ func newEnvE2E(t *testing.T, tag string, agentArgs ...string) (*tgtest.Server, s
 }
 
 // TestNewAgent starts the dummy pi agent twice with /new in a real, isolated
-// Rex server. The first start makes the Rex session named after the folder,
-// through the buttons and a typed path. The second, `/new pi <folder>`, adds
-// a tab to that session. Each agent gets its own topic, and the first one
-// answers a prompt.
+// Rex server. The first start makes the Rex session "rex-tg", through the
+// buttons and a typed path. The second, `/new pi <folder>`, adds a tab to
+// that session. Each tab is named after the folder and the agent, each
+// agent gets its own topic, and the first one answers a prompt. A tab can be
+// renamed, as rex-tg does when its topic gets a new name.
 func TestNewAgent(t *testing.T) {
 	t.Parallel()
 	tg, sock, project := newEnvE2E(t, "new")
@@ -149,30 +150,45 @@ func TestNewAgent(t *testing.T) {
 		return botMessageContaining(tg, chatID, second, "Linked:") != nil
 	})
 	eventually(t, 10*time.Second, "the note about the new tab", func() bool {
-		return botMessageContaining(tg, chatID, 0, "a new tab of the Rex session") != nil
+		m := botMessageContaining(tg, chatID, 0, "a new tab")
+		return m != nil && strings.Contains(m.Text, "of the Rex session <b>rex-tg</b>")
 	})
 
-	// Rex has one session named after the folder, with a "pi" tab for each agent.
+	// Rex has one session "rex-tg", with a tab for each agent.
 	var ls struct {
 		Sessions []rex.Session `json:"sessions"`
 	}
 	if out, err := rexCmd(sock, "ls", "--json").Output(); err != nil || json.Unmarshal(out, &ls) != nil {
 		t.Fatalf("rex ls: %v\n%s", err, out)
 	}
-	if len(ls.Sessions) != 1 || ls.Sessions[0].Label != "my app" {
-		t.Fatalf("sessions: %+v, want one named \"my app\"", ls.Sessions)
+	if len(ls.Sessions) != 1 || ls.Sessions[0].Label != "rex-tg" {
+		t.Fatalf("sessions: %+v, want one named \"rex-tg\"", ls.Sessions)
 	}
-	var wins struct {
-		Windows []struct {
-			Label string `json:"label"`
-		} `json:"windows"`
+	type window struct {
+		ID    string `json:"window_id"`
+		Label string `json:"label"`
 	}
-	out, err := rexCmd(sock, "window", "ls", "-s", ls.Sessions[0].ID, "--json").Output()
-	if err != nil || json.Unmarshal(out, &wins) != nil {
-		t.Fatalf("rex window ls: %v\n%s", err, out)
+	tabs := func() []window {
+		var wins struct {
+			Windows []window `json:"windows"`
+		}
+		out, err := rexCmd(sock, "window", "ls", "-s", ls.Sessions[0].ID, "--json").Output()
+		if err != nil || json.Unmarshal(out, &wins) != nil {
+			t.Fatalf("rex window ls: %v\n%s", err, out)
+		}
+		return wins.Windows
 	}
-	if len(wins.Windows) != 2 || wins.Windows[0].Label != "pi" || wins.Windows[1].Label != "pi" {
-		t.Fatalf("tabs: %+v, want two named pi", wins.Windows)
+	wins := tabs()
+	if len(wins) != 2 || wins[0].Label != "my app · pi" || wins[1].Label != "my app · pi" {
+		t.Fatalf("tabs: %+v, want two named \"my app · pi\"", wins)
+	}
+
+	rx := rex.New(rexBin, rex.WithServer("unix://"+sock))
+	if err := rx.RenameWindow(context.Background(), ls.Sessions[0].ID, wins[1].ID, "[my app] Fix the login"); err != nil {
+		t.Fatal(err)
+	}
+	if wins = tabs(); wins[0].Label != "my app · pi" || wins[1].Label != "[my app] Fix the login" {
+		t.Fatalf("tabs after the rename: %+v", wins)
 	}
 }
 

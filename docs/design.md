@@ -246,7 +246,7 @@ Summary of the three formats (details in [agent-transcripts.md](agent-transcript
 
 | | pi | Claude Code | Codex |
 | --- | --- | --- | --- |
-| Detect in a pane | `argv0` is `pi`; the process name is `node` | `argv0` is `claude`, or the invoked path ends in `/.local/bin/claude`. The executable is `~/.local/share/claude/versions/<version>`, so the process name is the version string, for example `2.1.322` (S2) | the executable is the Codex binary (Homebrew Caskroom); name `codex` |
+| Detect in a pane | `argv0` is `pi`; the process name is `node` | `argv0` is `claude`, or the invoked path ends in `/.local/bin/claude`. The executable is `~/.local/share/claude/versions/<version>`, so the process name is the version string, for example `2.1.322` (S2). `argv0` `cux` also counts: cux (a Claude account switcher) runs `claude` as its child in the same process group, so Rex reports cux as the foreground process. Claude's hooks still report the pane through `REX_BLOCK`. | the executable is the Codex binary (Homebrew Caskroom); name `codex` |
 | Transcript | `~/.pi/agent/sessions/--<cwd>--/<time>_<id>.jsonl` | `~/.claude/projects/<cwd folder>/<session_id>.jsonl`. Use the hook's `transcript_path`, because the folder name uses the real path (S2) | `~/.codex/sessions/YYYY/MM/DD/rollout-<time>-<id>.jsonl` |
 | Reply lines | `type=message`, `role=assistant`, `text` blocks | `type=assistant`, `text` block (one block per line) | `response_item`, `payload.type=message`, `role=assistant` |
 | Final or commentary | `stopReason`: `stop` = final, `toolUse` = commentary | `stop_reason`: `end_turn` = final | `payload.phase`: `final_answer` or `commentary` |
@@ -343,7 +343,7 @@ Rules:
 - **Agent exits, or its pane closes.** The topic becomes `offline`. rex-tg posts why: "🔴 pi stopped: its Rex pane was closed.", "…: it exited, and the pane is still open.", or "…: another session took its pane." A turn that was running ends within 2 seconds with a "🔴 Stopped" summary, so "typing…" stops (the agent's last lines are read by then; an answer gets 5 seconds). The topic's name gets a 🔴 in front until the agent runs again; then rex-tg posts "🟢 pi is running again." and the 🔴 goes away. Messages that you send while it is offline are refused with a reason.
 - **Deleted topic.** Telegram does not tell the bot that you deleted a topic. rex-tg finds out in two ways, and then the topic becomes `closed`: a send or a rename fails with "message thread not found", or you tap the agent in `/agents`. That button reports the tap to rex-tg instead of opening a link, and rex-tg first sets the topic's name with `editForumTopic` (Telegram answers `TOPIC_NOT_MODIFIED` when the name is the same). When the topic is gone and the pane and the session still exist, rex-tg makes a new topic for the session, with the intro card and the backfill (found live, spike S1).
 - **Unlink.** `/unlink` closes the topic in rex-tg. The topic stays in Telegram as history.
-- **Topic name.** A short name, at most 32 characters, cut at the end of a word: the name that you gave the Rex pane, else the session name, else the project folder, else the runtime. Rex's default pane name `shell` (and shell or agent program names) do not count. Every 30 seconds, rex-tg compares each live topic's name with its pane and session and renames the topic with `editForumTopic` when it changed. A take-over renames at once.
+- **Topic name.** A short name, at most 32 characters, cut at the end of a word: the name that you gave the Rex pane, else the session name, else the project folder, else the runtime. Rex's default pane name `shell` (and shell or agent program names) do not count. Every 30 seconds, rex-tg compares each live topic's name with its pane and session and renames the topic with `editForumTopic` when it changed. A take-over renames at once. When the topic of a live agent gets a new name and the agent's pane is in the Rex session for `/new` (`rex.new_session`, section 8.7), rex-tg gives the pane's tab the same name (`rex window rename`). Tabs in other sessions are yours, and keep their names.
 
 ## 8. Telegram display
 
@@ -493,9 +493,9 @@ rex-tg registers the menu twice: for the default scope, and for the owner's chat
 
 Start an agent with `/new`:
 
-1. The bot asks for the agent: pi, Claude Code, or Codex.
+1. The bot asks for the agent: pi, Claude Code, or Codex, and cux when it is installed (on the PATH, or in `~/.local/bin`, `/opt/homebrew/bin`, or `/usr/local/bin`, because launchd gives the daemon a short PATH). cux starts Claude Code with one of several Claude accounts, so its pane is a Claude Code pane (section 6).
 2. The bot asks for the folder. Its buttons offer up to 6 folders where agent sessions ran, the most recently used first. In a linked topic, the folder of the topic's agent comes first. You can also send a path: `~/work/app`, an absolute path, or a path from your home folder (`work/app`).
-3. rex-tg looks for the Rex session that has the folder's name, for example `rex-tg` for `~/work/personal/rex-tg`. It adds a tab named after the agent to that session (`rex window new --focus=false`, so the tab that the Rex app shows stays the same). When no session has that name, it makes one (`rex new`). Only the name counts, so two folders with the same name share a session. Rex takes at most 128 characters and no control characters in a name, so rex-tg leaves those out. Starts run one at a time, so two starts in one folder make one session.
+3. Every agent that `/new` starts goes into one Rex session, `rex-tg` (`rex.new_session`, section 12). rex-tg finds it by name, ignoring case and the spaces around it, and adds a tab to it (`rex window new --focus=false`, so the tab that the Rex app shows stays the same). When no session has that name, it makes one (`rex new`). The tab is named after the folder and the agent, such as `rex-tg · pi`. Once the agent's topic gets its own name, such as the session name, the tab takes that name too (section 7). Rex takes at most 128 characters and no control characters in a name, and rex would read a name that starts with `-` as an option, so rex-tg leaves those out. Starts run one at a time, so two starts make one session.
 4. The tab runs the agent's `launch` command (section 12) through your login shell with its interactive startup files (`--interactive`), as when you type the command in a terminal. So the PATH and the shell functions from `~/.zshrc` apply. Rex passes each word of the command as it is: spaces and `$` are not read by the shell.
 5. When the agent reports its session (its hook at start), rex-tg opens its topic, as the Open button of `/agents` does. If the agent exits first, rex-tg shows the exit code and the end of the pane's screen. If no report comes within 90 seconds, rex-tg shows the screen and points to `/agents`.
 6. Before its session starts, an agent may ask a question on its screen, such as "trust this folder?" of Claude Code and Codex in a folder they do not know yet. It has no topic then, so rex-tg posts the question in the chat with a button for each answer. It looks for a list of answers with a cursor (`❯` or `›`) in the bottom 30 lines, with at least two answers, on two screen reads in a row. A button moves the cursor to that answer with Down or Up, one key at a time, and reads the screen after each key; when the cursor is on the answer, it presses Enter. Claude Code 2.1.322 shows its trust answers without numbers, with "No, exit" first and the cursor on it, so a number key would be a guess; Codex 0.167.1 also takes Up, Down, and Enter. Before each key, rex-tg checks that typing is not paused and that the pane's foreground process is the agent that `/new` started. If a key shows no effect, it presses nothing more and says so. If you answer on the Mac, the buttons go. While a question is open, rex-tg keeps waiting for the agent, up to 10 minutes.
@@ -575,8 +575,11 @@ stateDiagram-v2
 
 Timeouts:
 
-- `getUpdates` waits up to 50 seconds, with an HTTP timeout of 60 seconds. It asks only for `message`, `edited_message`, and `callback_query` updates.
+- `getUpdates` waits up to 25 seconds, with an HTTP timeout of 35 seconds. It asks only for `message`, `edited_message`, and `callback_query` updates.
 - Sends, edits, and deletes have an HTTP timeout of 15 seconds. A send that times out is `unknown`.
+- Connecting and the TLS handshake time out after 5 seconds each. TCP keepalive (5 s idle, 3 probes 3 s apart) ends a dead connection in about 15 seconds, so a silent outage does not hold a long poll for its whole timeout. Connections still use `SO_LINGER` 0 and HTTP/1.1 only.
+- After a network failure, the poll loop (and the startup `getMe`) retries after 0.5 s, doubling to 2 s. After an API error, it retries after 1 s, doubling to 30 s, and waits at least `retry_after` for a 429. The first failure of an outage is logged as a warning, later ones as debug, and one info line says when Telegram is reachable again and how long it was down.
+- `telegram.proxy` (optional) sends all Telegram traffic through an `http`, `https`, `socks5`, or `socks5h` proxy. When empty, `HTTPS_PROXY` and `ALL_PROXY` apply.
 
 Telegram errors:
 
@@ -590,7 +593,7 @@ Telegram errors:
 | 400 "message thread not found" | The topic was deleted. Mark it `closed`. |
 | 403 "bot was blocked by the user" | Stop sending. `/status` and `rex-tg doctor` report it. |
 | 409 Conflict on `getUpdates` | Another program polls with the same token. Stop polling and report it. |
-| No connection, or the TLS handshake fails (the request was not written) | Not sent: retried after a growing pause (1 to 30 seconds). |
+| No connection, or the TLS handshake fails (the request was not written) | Not sent: retried after a growing pause (1 to 3 seconds). |
 | Timeout, dropped connection, or 5xx after the request was written | A send is `unknown` and is checked: sent again when the message numbers prove it never arrived, else one notice with a `🔁 Send again` button. An edit or delete is retried with backoff. |
 | 400 `TOPIC_CLOSED` or `TOPIC_ID_INVALID` | Like "message thread not found": the topic is `closed`. |
 | Any other 400 | The part is `failed`, and a notice says why. |
@@ -610,6 +613,22 @@ All topics are in one private chat, so they share one budget. The Telegram FAQ s
 ### 9.4 Text length
 
 Telegram counts the length of a message in UTF-16 code units, after it parses the formatting. rex-tg counts the same way, not in bytes or in runes, so emoji and other non-ASCII text cannot push a part over the limit.
+
+### 9.4a Images in answers
+
+When the final answer of an agent names image files that exist on the Mac, rex-tg sends them to the topic right after the answer. This is a separate outbox item (kind `image`, key `<answer key>:images`), sent silently, because the answer already notified you. Only final answers count. Progress, tool output, and backfill do not.
+
+What counts as a name:
+
+- The target of a Markdown image or link, also `<...>` targets and `file://` URLs.
+- An inline code span whose whole text is a path. It may contain spaces.
+- A bare word that looks like a path, such as `~/Desktop/a.png`, `./a.png`, or `out/a.png`. Trailing `.`, `,`, `;`, `:`, and `)` are not part of it.
+
+The extension must be one of `.png .jpg .jpeg .gif .webp .heic .heif .bmp .tif .tiff`. `~` is the home folder. A relative path is resolved against the agent's folder. The file must exist, be a regular file (a symlink is followed), and be between 1 byte and 50 MB. Paths that repeat count once. At most 10 images go out per answer.
+
+The sender reads the file when it sends. A file that is gone or unreadable fails that part, and the usual notice says why. It goes out as a photo when it is a PNG or JPEG of at most 10 MB, with width plus height of at most 10000 and a longer side of at most 20 times the shorter. Every other file goes out as a document. The caption is the file name. An upload gets 4 s per MB on top of the usual 15 s timeout, so a large file on a slow link does not end with an unknown outcome. When Telegram refuses a photo with 400, nothing was posted, so the same file goes out as a document in the same attempt. Every other outcome follows the rules of 9.1.
+
+Privacy: rex-tg sends only files that the final answer names, only to the owner's chat. It never searches for files. Set `[display] send_images = false` to turn this off.
 
 ### 9.5 Incoming messages
 
@@ -806,7 +825,7 @@ What each table holds. The notes that were in the old inline comments are kept h
 - `thread`: one Telegram topic, and the session it shows now. `current_conversation_id` changes on take-over and resume. `mode`, `verbose`, and `reasoning` are the display settings (sections 8.3 and 8.4). `muted` = 1 means answers are sent without sound. `closed_at` is set when the topic is closed, and cleared when it is reopened. The outbox rows of a topic closed for more than 30 days are deleted (see Housekeeping).
 - `cursor`: the read position in one transcript file. `dev_ino` detects a replaced file. `offset` is the byte offset after the last complete line. `last_event_at` is the timestamp of the newest line read (the replay guard in section 6).
 - `outbox`: one outgoing message. The unique key (`thread_id`, `event_key`) is the "no duplicates" rule. `event_key` looks like `pi:<session id>:<entry id>`. `kind` is `answer`, `block`, `tool`, `prompt`, `notice`, `divider`, or `backfill`. `body` is normalized Markdown, after secret removal. `silent` = 1 means the message is sent without sound.
-- `outbox_part`: one part of an outgoing message. `content` is the text to send. `format` is `html`, `plain`, or `document`. `filename` is set for documents only.
+- `outbox_part`: one part of an outgoing message. `content` is the text to send. `format` is `html`, `plain`, `document`, `rich`, or `image`. For `image`, `content` is the absolute path of the file. `filename` is set for documents and images.
 - `progress`: the live progress message of the running turn. At most one per topic. `turn_key` is the session and the key of the turn's first event. `tg_message_id` is set once the message exists. `rows` is a JSON array.
 - `alert`: a permission prompt or question with answer buttons (section 8.6). `screen_hash` is a hash of the prompt text on the screen. `options` holds the button labels and keys, in order.
 - `inbound`: one incoming Telegram update. `update_id` makes each update count once. `kind` is `text`, `command`, `callback`, or `other`. `body_hash` is used to match the echo in the transcript. For text, `state` goes from `queued` to `typing`, then `delivered`, then `acked`. A `typing` row becomes `unknown` after a crash. `refused` and `expired` are the other end states. A handled command or button press is `done`. `reason` says why a message was refused or expired. `acked_event_key` is the transcript line that confirmed it.
@@ -860,17 +879,19 @@ Config example:
 ```toml
 [telegram]
 # The token is in the Keychain. The owner is saved by pairing (rex-tg login).
+# proxy = "socks5://127.0.0.1:1080"  # optional; empty uses HTTPS_PROXY / ALL_PROXY
 rate_per_second = 1
 rate_burst = 5
 
 [rex]
 cli = "/Applications/Rex Beta.app/Contents/Helpers/Rex Server.rex/Contents/MacOS/rex"
 scan_interval = "30s"
+new_session = "rex-tg"       # the Rex session where /new opens its tabs
 
 [agents]
 # Detection rules (section 5). Spike S2 confirms them.
 pi_argv0 = ["pi"]
-claude_argv0 = ["claude"]
+claude_argv0 = ["claude", "cux"]   # cux runs claude as its child
 claude_exec_glob = ["~/.local/share/claude/versions/*"]
 codex_names = ["codex"]
 

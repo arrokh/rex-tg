@@ -24,8 +24,12 @@ func TestDefaults(t *testing.T) {
 	if c.Telegram.RatePerSecond != 1 || c.Telegram.RateBurst != 5 {
 		t.Errorf("telegram = %+v", c.Telegram)
 	}
-	if c.Rex.ScanInterval.Duration != 30*time.Second {
-		t.Errorf("scan = %v", c.Rex.ScanInterval)
+	if c.Rex.ScanInterval.Duration != 30*time.Second || c.Rex.NewSession != "rex-tg" {
+		t.Errorf("rex = %+v", c.Rex)
+	}
+	// cux runs claude as its child, so a pane with cux in front is Claude Code.
+	if got := strings.Join(c.Agents.ClaudeArgv0, " "); got != "claude cux" {
+		t.Errorf("claude_argv0 = %q", got)
 	}
 	if got := c.Agents.ClaudeExecGlob[0]; got != "/h/.local/share/claude/versions/*" {
 		t.Errorf("glob = %q", got)
@@ -95,6 +99,7 @@ rate_burst = 9
 [rex]
 cli = "~/bin/rex"
 scan_interval = "10s"
+new_session = "agents"
 
 [agents]
 pi_argv0 = ["pi", "pi2"]
@@ -130,7 +135,7 @@ dir = "~/st"
 	if c.Telegram.RatePerSecond != 2.5 || c.Telegram.RateBurst != 9 {
 		t.Errorf("telegram = %+v", c.Telegram)
 	}
-	if c.Rex.CLI != "/h/bin/rex" || c.Rex.ScanInterval.Duration != 10*time.Second {
+	if c.Rex.CLI != "/h/bin/rex" || c.Rex.ScanInterval.Duration != 10*time.Second || c.Rex.NewSession != "agents" {
 		t.Errorf("rex = %+v", c.Rex)
 	}
 	if len(c.Agents.PiArgv0) != 2 || c.Agents.ClaudeExecGlob[0] != "/h/vers/*" {
@@ -178,7 +183,13 @@ func TestLoadErrors(t *testing.T) {
 		{"blank launch", "[agents.pi]\nlaunch = [\" \"]\n", "agents.pi.launch"},
 		{"syntax", "[rex\n", "parse"},
 		{"relative state dir", "[state]\ndir = \"state\"\n", "absolute"},
+		{"proxy scheme", "[telegram]\nproxy = \"ftp://p.example:21\"\n", "socks5h"},
+		{"proxy no host", "[telegram]\nproxy = \"socks5://\"\n", "host"},
+		{"proxy not a url", "[telegram]\nproxy = \"nonsense\"\n", "telegram.proxy"},
 		{"plain http api", "[telegram]\napi_base = \"http://api.telegram.org\"\n", "https"},
+		{"empty new session", "[rex]\nnew_session = \" \"\n", "rex.new_session"},
+		{"new session read as an option", "[rex]\nnew_session = \"-x\"\n", "rex.new_session"},
+		{"new session with a newline", "[rex]\nnew_session = \"a\\nb\"\n", "rex.new_session"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -201,6 +212,25 @@ func TestDurationText(t *testing.T) {
 	}
 	if err := d.UnmarshalText([]byte("x")); err == nil {
 		t.Error("want error")
+	}
+}
+
+func TestProxyConfig(t *testing.T) {
+	c, err := Load(write(t, "[telegram]\n"), "/h")
+	if err != nil || c.TelegramProxy() != nil {
+		t.Fatalf("default: %v, %v", c.TelegramProxy(), err)
+	}
+	for _, p := range []string{"http://h:8080", "https://h", "socks5://u:" + "pw@127.0.0.1:1080", "socks5h://h:1080"} {
+		c, err := Load(write(t, "[telegram]\nproxy = \""+p+"\"\n"), "/h")
+		if err != nil || c.TelegramProxy() == nil || c.TelegramProxy().Hostname() == "" {
+			t.Errorf("%s: %v", p, err)
+		}
+	}
+	// The fake password is split, so secret scanners do not read a whole
+	// URL with a password (AGENTS.md).
+	_, err = Load(write(t, "[telegram]\nproxy = \"ftp://u:"+"secretpw@h\"\n"), "/h")
+	if err == nil || strings.Contains(err.Error(), "secretpw") {
+		t.Errorf("err = %v, must not hold the password", err)
 	}
 }
 

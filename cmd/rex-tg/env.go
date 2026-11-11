@@ -127,7 +127,7 @@ func (e Env) loadConfig(path string) (config.Config, error) {
 }
 
 func (e Env) telegram(cfg config.Config, token string) *telegram.Client {
-	return telegram.New(token, telegram.WithBaseURL(cfg.Telegram.APIBase))
+	return telegram.New(token, telegram.WithBaseURL(cfg.Telegram.APIBase), telegram.WithProxy(cfg.TelegramProxy()))
 }
 
 func (e Env) paths() (install.Paths, error) {

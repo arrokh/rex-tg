@@ -19,7 +19,7 @@ CORE_TESTS := TestPairing TestAgentsListsPiPane TestOpenTopicWithIntroAndBackfil
 	TestPermissionAlert TestPiVimReachesInsertBeforeThePaste TestClaudeVisualModeIsLeftBeforeThePaste \
 	TestUnknownReplyIsCheckedAndSentOnce TestFailedTypingIsNeverRetried TestRestartRecovery \
 	TestPaneClosedTakesTopicOffline TestAgentDyingMidTurnEndsTheTurn TestDeletedTopicIsMadeAgainFromAgents \
-	TestNewStartsAnAgentAndOpensItsTopic
+	TestNewStartsAnAgentAndOpensItsTopic TestFinalAnswerImageIsSentAfterTheAnswer
 empty :=
 space := $(empty) $(empty)
 CORE_RUN := ^($(subst $(space),|,$(strip $(CORE_TESTS))))$$

@@ -113,6 +113,8 @@ type rexClient interface {
 	Sessions(ctx context.Context) ([]rex.Session, error)
 	NewSession(ctx context.Context, label string, tab rex.Tab) (rex.Started, error)
 	NewWindow(ctx context.Context, session string, tab rex.Tab) (rex.Started, error)
+	Blocks(ctx context.Context, session string) ([]rex.Block, error)
+	RenameWindow(ctx context.Context, session, window, label string) error
 }
 
 var _ rexClient = (*rex.Client)(nil)
@@ -132,6 +134,9 @@ type daemon struct {
 	snd      *sender.Sender
 	adapters map[agents.Runtime]agents.Adapter
 	rules    registry.Rules // how a process is told to be an agent
+	// hasProgram reports whether a program that /new can start (cux) is
+	// installed; see installed.
+	hasProgram func(name string) bool
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -201,6 +206,7 @@ func newDaemon(cfg config.Config, home string, log *slog.Logger, now func() time
 		opening:     map[int64]bool{},
 		newFlows:    map[string]*newFlow{},
 	}
+	d.hasProgram = func(name string) bool { return installed(home, name) }
 	jw := cfg.InputSettings.JoinWindow.Duration
 	if jw <= 0 {
 		jw = 300 * time.Millisecond

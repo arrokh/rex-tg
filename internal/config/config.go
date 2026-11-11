@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/BurntSushi/toml"
 
@@ -65,15 +66,21 @@ type RuntimeInput struct {
 type Config struct {
 	Telegram struct {
 		APIBase       string  `toml:"api_base"`
+		Proxy         string  `toml:"proxy"`
 		RatePerSecond float64 `toml:"rate_per_second"`
 		RateBurst     int     `toml:"rate_burst"`
 	} `toml:"telegram"`
 	Rex struct {
 		CLI          string   `toml:"cli"`
 		ScanInterval Duration `toml:"scan_interval"`
+		// NewSession is the Rex session where /new opens its tabs. rex-tg
+		// makes it when it does not exist.
+		NewSession string `toml:"new_session"`
 	} `toml:"rex"`
 	Agents struct {
-		PiArgv0        []string     `toml:"pi_argv0"`
+		PiArgv0 []string `toml:"pi_argv0"`
+		// ClaudeArgv0 are the programs that count as Claude Code: claude
+		// itself, and cux, which runs claude as its child.
 		ClaudeArgv0    []string     `toml:"claude_argv0"`
 		ClaudeExecGlob []string     `toml:"claude_exec_glob"`
 		CodexNames     []string     `toml:"codex_names"`
@@ -90,6 +97,9 @@ type Config struct {
 		// RichMessages sends final answers with Telegram's sendRichMessage
 		// (Bot API 10.1) instead of HTML parts. Off by default.
 		RichMessages bool `toml:"rich_messages"`
+		// SendImages sends the image files that a final answer names to the
+		// topic, right after the answer. On by default.
+		SendImages bool `toml:"send_images"`
 	} `toml:"display"`
 	// InputSettings holds the [input] table. It is not called Input because
 	// Config.Input(rt) is a method.
@@ -122,9 +132,10 @@ func Default(home string) Config {
 
 	c.Rex.CLI = "/Applications/Rex Beta.app/Contents/Helpers/Rex Server.rex/Contents/MacOS/rex"
 	c.Rex.ScanInterval = Duration{30 * time.Second}
+	c.Rex.NewSession = "rex-tg"
 
 	c.Agents.PiArgv0 = []string{"pi"}
-	c.Agents.ClaudeArgv0 = []string{"claude"}
+	c.Agents.ClaudeArgv0 = []string{"claude", "cux"}
 	c.Agents.ClaudeExecGlob = []string{filepath.Join(home, ".local/share/claude/versions/*")}
 	c.Agents.CodexNames = []string{"codex"}
 	base := func(answers ...Answer) RuntimeInput {
@@ -155,6 +166,7 @@ func Default(home string) Config {
 	c.Display.Mode = "progress"
 	c.Display.Backfill = 3
 	c.Display.ShowMacPrompts = true
+	c.Display.SendImages = true
 	c.Display.ProgressDelay = secs(2)
 	c.Display.ProgressEditInterval = secs(2)
 
@@ -242,6 +254,9 @@ func (c Config) validate() error {
 	if c.State.Dir == "" {
 		return errors.New("state.dir must not be empty")
 	}
+	if err := checkLabel(c.Rex.NewSession); err != nil {
+		return fmt.Errorf("rex.new_session %q: %w", c.Rex.NewSession, err)
+	}
 	// The hooks run in the agents' folders and the daemon under launchd: a
 	// relative folder would mean a different place for each of them.
 	if !filepath.IsAbs(c.State.Dir) {
@@ -253,7 +268,35 @@ func (c Config) validate() error {
 	if err != nil || u.Host == "" || (u.Scheme != "https" && !(u.Scheme == "http" && isLoopback(u.Hostname()))) {
 		return fmt.Errorf("telegram.api_base %q: want an https URL (http only for a local test server)", c.Telegram.APIBase)
 	}
+	if c.Telegram.Proxy != "" {
+		if _, err := ParseProxy(c.Telegram.Proxy); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+// TelegramProxy returns the parsed telegram.proxy, or nil when it is empty.
+func (c Config) TelegramProxy() *url.URL {
+	if c.Telegram.Proxy == "" {
+		return nil
+	}
+	u, _ := ParseProxy(c.Telegram.Proxy) // validated when the config loads
+	return u
+}
+
+// ParseProxy parses the value of telegram.proxy. The error never contains
+// the URL, because it may hold a password.
+func ParseProxy(s string) (*url.URL, error) {
+	u, err := url.Parse(s)
+	if err != nil || u.Host == "" || u.Hostname() == "" {
+		return nil, errors.New("telegram.proxy: want a URL with a host, such as socks5://127.0.0.1:1080")
+	}
+	switch u.Scheme {
+	case "http", "https", "socks5", "socks5h":
+		return u, nil
+	}
+	return nil, fmt.Errorf("telegram.proxy: scheme %q is not supported; use http, https, socks5, or socks5h", u.Scheme)
 }
 
 func isLoopback(host string) bool {
@@ -291,4 +334,21 @@ func (c Config) Input(rt agents.Runtime) RuntimeInput {
 		return c.Agents.Codex
 	}
 	return RuntimeInput{}
+}
+
+// checkLabel checks a Rex session name: Rex takes at most 128 characters
+// and no control characters, and rex would read a name that starts with "-"
+// as an option.
+func checkLabel(l string) error {
+	switch {
+	case strings.TrimSpace(l) == "":
+		return errors.New("want a name")
+	case strings.HasPrefix(strings.TrimSpace(l), "-"):
+		return errors.New("must not start with -")
+	case len([]rune(l)) > 128:
+		return errors.New("longer than 128 characters")
+	case strings.ContainsFunc(l, unicode.IsControl):
+		return errors.New("has a control character")
+	}
+	return nil
 }

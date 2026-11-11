@@ -133,6 +133,18 @@ func TestNewWindow(t *testing.T) {
 	}
 }
 
+func TestRenameWindow(t *testing.T) {
+	c, f := newClient(t)
+	f.On([]string{"window", "rename"}, "", 0)
+	if err := c.RenameWindow(context.Background(), "session:s", "window:w", "[app] Fix the login"); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"--autostart=false", "window", "rename", "-s", "session:s", "window:w", "[app] Fix the login"}
+	if args := lastArgs(t, f); !reflect.DeepEqual(args, want) {
+		t.Fatalf("args %q, want %q", args, want)
+	}
+}
+
 // A name that starts with "-" would be read as an option, so it never
 // reaches rex; neither does a relative folder or an empty command.
 func TestNewTabRejectsWhatRexWouldMisread(t *testing.T) {
@@ -152,8 +164,11 @@ func TestNewTabRejectsWhatRexWouldMisread(t *testing.T) {
 			_, err := c.NewWindow(ctx, "s", rex.Tab{Label: "pi", CWD: "work", Command: []string{"pi"}})
 			return err
 		},
-		"no command": func() error { _, err := c.NewSession(ctx, "app", rex.Tab{Label: "pi", CWD: "/work"}); return err },
-		"no session": func() error { _, err := c.NewWindow(ctx, "", ok); return err },
+		"no command":              func() error { _, err := c.NewSession(ctx, "app", rex.Tab{Label: "pi", CWD: "/work"}); return err },
+		"no session":              func() error { _, err := c.NewWindow(ctx, "", ok); return err },
+		"new tab name":            func() error { return c.RenameWindow(ctx, "s", "w", "-x") },
+		"no tab":                  func() error { return c.RenameWindow(ctx, "s", "", "x") },
+		"no session to rename in": func() error { return c.RenameWindow(ctx, "", "w", "x") },
 	}
 	for name, call := range cases {
 		if err := call(); err == nil {

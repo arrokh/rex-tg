@@ -32,6 +32,24 @@ func TestClaudeSessionStartedWithTailStart(t *testing.T) {
 	wantKinds(t, e.claudeHook("b1", "UserPromptSubmit", "c1", "", e.at(6)), StateChanged)
 }
 
+// cux starts claude as its child, so cux is in front of the pane. Claude's
+// hooks from that pane count, and the pane's agent process is cux: typing
+// checks that cux is still in front.
+func TestCuxPaneReportsClaudeSessions(t *testing.T) {
+	e := newEnv(t)
+	e.rx.setBlock(sess1, "b1", cuxProc(200, cwdA))
+	wantKinds(t, e.claudeHook("b1", "SessionStart", "c1", "startup", e.at(5)), SessionStarted)
+	p := e.pane("b1")
+	if p.ConversationID != e.conv(agents.Claude, "c1").ID || p.PID != 200 || p.ProcessName != "cux" {
+		t.Fatalf("pane = %+v", p)
+	}
+	proc, err := e.rx.Process(e.ctx, sess1, "b1")
+	if err != nil || !AgentInFront(proc, p.PID, p.ProcessName) {
+		t.Fatalf("cux is not in front: %+v, %v", proc, err)
+	}
+	wantKinds(t, e.claudeHook("b1", "UserPromptSubmit", "c1", "", e.at(6)), StateChanged)
+}
+
 func TestNestedAgentReportRejected(t *testing.T) {
 	e := newEnv(t)
 	// A codex exec started by Claude inherits REX_BLOCK, and codex is in front.

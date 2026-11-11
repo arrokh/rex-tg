@@ -43,6 +43,7 @@ type Message struct {
 	Deleted   bool
 	Filename  string // documents only
 	File      []byte // documents only
+	Photo     bool   // sent with sendPhoto
 }
 
 // Topic is a forum topic.
@@ -421,7 +422,11 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 	recorded := params
 	if docData != nil {
 		recorded = copyMap(params)
-		recorded["document"] = map[string]any{"filename": docName, "size": float64(len(docData))}
+		key := "document"
+		if method == "sendPhoto" {
+			key = "photo"
+		}
+		recorded[key] = map[string]any{"filename": docName, "size": float64(len(docData))}
 	}
 	s.calls = append(s.calls, Call{Method: method, Params: recorded, At: time.Now()})
 	delay := s.delays[method]
@@ -538,7 +543,7 @@ func parseRequest(r *http.Request) (params map[string]any, docName string, docDa
 			if rerr != nil {
 				return nil, "", nil, rerr
 			}
-			if k == "document" {
+			if k == "document" || k == "photo" {
 				docName, docData = fh[0].Filename, append([]byte{}, b...)
 			}
 		}
@@ -796,6 +801,26 @@ func (s *Server) handle(method string, p map[string]any, docName string, docData
 			Silent: flag(p, "disable_notification"), Filename: docName, File: docData})
 		out := s.wire(m)
 		out.Document = &telegram.Document{FileID: fid, FileName: docName, MimeType: "application/octet-stream", FileSize: int64(len(docData))}
+		return out, nil
+	case "sendPhoto":
+		if chat == 0 {
+			return nil, bad("chat_id is empty")
+		}
+		if docData == nil {
+			return nil, bad("there is no photo in the request")
+		}
+		thread := num(p, "message_thread_id")
+		if s.threadGone(chat, thread) {
+			return nil, bad("message thread not found")
+		}
+		s.nextFile++
+		fid := "photo" + strconv.Itoa(s.nextFile)
+		fpath := "photos/file_" + strconv.Itoa(s.nextFile) + "_" + docName
+		s.files[fid] = &file{fid, fpath, docData}
+		m := s.addMsg(&Message{ChatID: chat, ThreadID: thread, FromBot: true, Text: str(p, "caption"),
+			Silent: flag(p, "disable_notification"), Filename: docName, File: docData, Photo: true})
+		out := s.wire(m)
+		out.Photo = []telegram.PhotoSize{{FileID: fid, FileUniqueID: "u" + fid, FileSize: int64(len(docData))}}
 		return out, nil
 	case "getFile":
 		f := s.files[str(p, "file_id")]

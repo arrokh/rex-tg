@@ -877,3 +877,24 @@ func TestOnMessageReportsEveryMessageNumber(t *testing.T) {
 		t.Fatalf("numbers after removal: %v", got)
 	}
 }
+
+func TestSendPhotoRoundTrip(t *testing.T) {
+	s, c := setup(t)
+	ctx := context.Background()
+	data := []byte("fake picture bytes")
+	m, err := c.SendPhoto(ctx, chat, 5, "a.png", data, "a.png", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(m.Photo) == 0 || m.Caption != "a.png" || m.Document != nil {
+		t.Fatalf("message = %+v", m)
+	}
+	st := s.Messages(chat)[0]
+	if !st.Photo || !bytes.Equal(st.File, data) || st.ThreadID != 5 || !st.Silent || st.Text != "a.png" {
+		t.Fatalf("stored = %+v", st)
+	}
+	s.FailNext("sendPhoto", 1, 400, "Bad Request: PHOTO_INVALID_DIMENSIONS", 0)
+	if _, err := c.SendPhoto(ctx, chat, 5, "a.png", data, "", false); telegram.Classify(err) != telegram.ClassBadRequest {
+		t.Fatalf("refused photo: %v", err)
+	}
+}

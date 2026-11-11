@@ -305,6 +305,8 @@ func (s *Sender) sendPart(ctx context.Context, p store.Part) {
 		var m telegram.Message
 		m, serr = s.tg.SendDocument(ctx, p.ChatID, p.MessageThreadID, p.Filename, []byte(p.Content), "", silent)
 		id, v = m.MessageID, s.judge(serr, p.ThreadID)
+	case store.FormatImage:
+		id, v, serr = s.sendImage(ctx, p, silent)
 	default:
 		serr, v = fmt.Errorf("unknown part format %q", p.Format), vFailed
 	}

@@ -33,7 +33,13 @@ const (
 	DefaultDownloadTimeout = 60 * time.Second
 
 	longPollSlack = 10 * time.Second
-	maxBodyBytes  = 8 << 20
+
+	dialTimeout       = 5 * time.Second
+	handshakeTimeout  = 5 * time.Second
+	keepAliveIdle     = 5 * time.Second
+	keepAliveInterval = 3 * time.Second
+	keepAliveCount    = 3
+	maxBodyBytes      = 8 << 20
 )
 
 // ErrTooLarge is returned by DownloadFile when the file exceeds the limit.
@@ -47,6 +53,7 @@ type Client struct {
 	timeout         time.Duration
 	downloadTimeout time.Duration
 	onMessage       atomic.Pointer[func(chatID, messageID int64)]
+	proxy           *url.URL
 }
 
 // OnMessage sets a function that gets the chat and the number of every
@@ -74,10 +81,27 @@ func (c *Client) note(m *Message) {
 // when the network comes back, because its connection is closed: the check
 // of a send whose outcome is unknown relies on that (package sender). With
 // HTTP/2, such a request could still be on its way in a shared connection.
-func newTransport() *http.Transport {
-	d := &net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}
+//
+// Dial and handshake time out after 5 s, and TCP keepalive finds a dead
+// connection (an idle pooled one, or a long poll) in about 15 s, so rex-tg
+// is back soon after a route to Telegram returns. A non-nil proxy replaces
+// the proxy from the environment.
+func newTransport(proxy *url.URL) *http.Transport {
+	d := &net.Dialer{
+		Timeout: dialTimeout,
+		KeepAliveConfig: net.KeepAliveConfig{
+			Enable:   true,
+			Idle:     keepAliveIdle,
+			Interval: keepAliveInterval,
+			Count:    keepAliveCount,
+		},
+	}
+	proxyFn := http.ProxyFromEnvironment
+	if proxy != nil {
+		proxyFn = http.ProxyURL(proxy)
+	}
 	return &http.Transport{
-		Proxy: http.ProxyFromEnvironment,
+		Proxy: proxyFn,
 		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 			conn, err := d.DialContext(ctx, network, addr)
 			if err != nil {
@@ -92,7 +116,7 @@ func newTransport() *http.Transport {
 		MaxIdleConns:          10,
 		MaxIdleConnsPerHost:   4,
 		IdleConnTimeout:       60 * time.Second,
-		TLSHandshakeTimeout:   10 * time.Second,
+		TLSHandshakeTimeout:   handshakeTimeout,
 		ExpectContinueTimeout: time.Second,
 	}
 }
@@ -102,6 +126,11 @@ type Option func(*Client)
 
 // WithBaseURL sets the API base URL (default https://api.telegram.org).
 func WithBaseURL(u string) Option { return func(c *Client) { c.base = strings.TrimRight(u, "/") } }
+
+// WithProxy sends all requests through the proxy (http, https, socks5, or
+// socks5h). nil keeps the proxy from the environment. It has no effect with
+// WithHTTPClient.
+func WithProxy(u *url.URL) Option { return func(c *Client) { c.proxy = u } }
 
 // WithHTTPClient sets the HTTP client. Timeouts are applied through contexts.
 func WithHTTPClient(hc *http.Client) Option {
@@ -136,12 +165,14 @@ func New(token string, opts ...Option) *Client {
 	c := &Client{
 		token:           token,
 		base:            DefaultBaseURL,
-		hc:              &http.Client{Transport: newTransport()},
 		timeout:         DefaultTimeout,
 		downloadTimeout: DefaultDownloadTimeout,
 	}
 	for _, o := range opts {
 		o(c)
+	}
+	if c.hc == nil {
+		c.hc = &http.Client{Transport: newTransport(c.proxy)}
 	}
 	return c
 }
@@ -480,6 +511,29 @@ func (c *Client) GetMyCommands(ctx context.Context, scope *BotCommandScope) ([]B
 
 // SendDocument uploads data as a document (multipart/form-data).
 func (c *Client) SendDocument(ctx context.Context, chatID, threadID int64, filename string, data []byte, caption string, silent bool) (Message, error) {
+	return c.upload(ctx, "sendDocument", "document", chatID, threadID, filename, data, caption, silent)
+}
+
+// SendPhoto uploads data as a photo (multipart/form-data). Telegram checks
+// the size and the shape of the picture and may answer 400 (for example
+// PHOTO_INVALID_DIMENSIONS); then nothing was posted.
+func (c *Client) SendPhoto(ctx context.Context, chatID, threadID int64, filename string, data []byte, caption string, silent bool) (Message, error) {
+	return c.upload(ctx, "sendPhoto", "photo", chatID, threadID, filename, data, caption, silent)
+}
+
+// uploadRate is the slowest upload speed that an upload is given time for:
+// 256 KiB/s, so 10 MB get 40 s on top of the call timeout. A request that
+// times out has an unknown outcome, so a large file on a slow link must not
+// hit the timeout of a short message.
+const uploadRate = 256 << 10
+
+// uploadTimeout is the timeout of an upload of n bytes.
+func uploadTimeout(base time.Duration, n int) time.Duration {
+	return base + time.Duration(n)*time.Second/uploadRate
+}
+
+// upload sends a multipart request with one file in the given form field.
+func (c *Client) upload(ctx context.Context, method, fileField string, chatID, threadID int64, filename string, data []byte, caption string, silent bool) (Message, error) {
 	var buf bytes.Buffer
 	mw := multipart.NewWriter(&buf)
 	field := func(k, v string) { _ = mw.WriteField(k, v) }
@@ -494,21 +548,21 @@ func (c *Client) SendDocument(ctx context.Context, chatID, threadID int64, filen
 		field("disable_notification", "true")
 	}
 	h := textproto.MIMEHeader{}
-	h.Set("Content-Disposition", fmt.Sprintf(`form-data; name="document"; filename="%s"`,
+	h.Set("Content-Disposition", fmt.Sprintf(`form-data; name="%s"; filename="%s"`, fileField,
 		strings.NewReplacer(`\`, `\\`, `"`, `\"`, "\r", "", "\n", "").Replace(filename)))
 	h.Set("Content-Type", "application/octet-stream")
 	part, err := mw.CreatePart(h)
 	if err != nil {
-		return Message{}, fmt.Errorf("telegram sendDocument: build request: %w", err)
+		return Message{}, fmt.Errorf("telegram %s: build request: %w", method, err)
 	}
 	if _, err := part.Write(data); err != nil {
-		return Message{}, fmt.Errorf("telegram sendDocument: build request: %w", err)
+		return Message{}, fmt.Errorf("telegram %s: build request: %w", method, err)
 	}
 	if err := mw.Close(); err != nil {
-		return Message{}, fmt.Errorf("telegram sendDocument: build request: %w", err)
+		return Message{}, fmt.Errorf("telegram %s: build request: %w", method, err)
 	}
 	var m Message
-	err = c.call(ctx, "sendDocument", c.timeout, mw.FormDataContentType(), buf.Bytes(), &m)
+	err = c.call(ctx, method, uploadTimeout(c.timeout, buf.Len()), mw.FormDataContentType(), buf.Bytes(), &m)
 	if err == nil {
 		c.note(&m)
 	}

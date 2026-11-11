@@ -41,6 +41,11 @@ type Options struct {
 	// Timing shortens the daemon's fixed waits in tests. Zero keeps the
 	// production values.
 	Timing Timing
+	// HasProgram reports whether a program is installed, for the agents
+	// that /new offers (cux). Nil looks on the PATH and in the usual
+	// folders of user programs. Tests set it, so the programs of the
+	// machine that runs them do not count.
+	HasProgram func(name string) bool
 }
 
 // Run runs the daemon until ctx ends. It returns nil when ctx ended, and an
@@ -91,7 +96,10 @@ func Run(ctx context.Context, opt Options) error {
 
 	tg := opt.Telegram
 	if tg == nil {
-		tg = telegram.New(opt.Token, telegram.WithBaseURL(cfg.Telegram.APIBase))
+		if u := cfg.TelegramProxy(); u != nil {
+			log.Info("Telegram goes through a proxy", "proxy", u.Scheme+"://"+u.Host) // never the password
+		}
+		tg = telegram.New(opt.Token, telegram.WithBaseURL(cfg.Telegram.APIBase), telegram.WithProxy(cfg.TelegramProxy()))
 	}
 	// Every message number that a call returns goes into the store: the
 	// bot's own messages and those of updates. The sender checks a reply
@@ -115,6 +123,9 @@ func Run(ctx context.Context, opt Options) error {
 		CheckDelay:    timing.CheckDelay,
 	})
 	d := newDaemon(cfg, home, log, now, st, tg, rx, snd, opt.ProcStart, timing)
+	if opt.HasProgram != nil {
+		d.hasProgram = opt.HasProgram
+	}
 	return d.run(ctx)
 }
 

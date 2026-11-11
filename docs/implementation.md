@@ -96,6 +96,8 @@ func Classify(err error) Class
 - Errors: an `*APIError{Method, Code, Description, RetryAfter}` when Telegram answers `ok: false`. Network errors, timeouts, and 5xx answers come back as `*UnknownOutcomeError`, because the request may have taken effect.
 - `Class` values: `ClassNone`, `ClassRateLimited` (429), `ClassParseEntities`, `ClassNotModified`, `ClassEditTargetGone`, `ClassDeleteTargetGone`, `ClassThreadNotFound`, `ClassBlocked` (403), `ClassConflict` (409), `ClassBadRequest` (other 4xx), `ClassUnknownOutcome`.
 - Default timeouts: 15 s per call; `GetUpdates` uses its long-poll timeout plus 10 s. The token never appears in errors or logs.
+- `WithProxy(*url.URL)` sets a proxy (nil keeps `HTTP(S)_PROXY` and `ALL_PROXY` from the environment). `config.ParseProxy` accepts `http`, `https`, `socks5`, and `socks5h` URLs with a host, and its errors never hold the URL.
+- Dial and TLS handshake time out after 5 s. TCP keepalive is 5 s idle, 3 s interval, 3 probes. The daemon polls with a 25 s long poll and retries network failures after 0.5 s to 2 s (API errors: 1 s to 30 s, and `retry_after`). The sender pauses at most 3 s after a request that never left the machine.
 - The default transport speaks HTTP/1.1 only, and its connections drop unsent data when they close (`SO_LINGER` 0), so a request that timed out cannot reach Telegram later (design 9.1).
 - `tgtest.New(t)` starts an `httptest` server that implements the methods above, keeps chats, topics, and messages in memory (one message number counter per chat, shared by both sides, as Telegram does), records every call with its time, can fail or delay the next calls of a method, can handle a call and then lose its answer (`LoseAnswerNext`), sends the bot its own "topic created" message as an update, and lets a test push updates that a pending `getUpdates` returns at once.
 
@@ -113,11 +115,12 @@ func (c *Client) Paste(ctx, session, block, text string) error       // block.ev
 func (c *Client) SendKeys(ctx, session, block string, keys ...string) error
 func (c *Client) NewSession(ctx, label string, tab Tab) (Started, error)   // `rex new --cwd=… --window=… --interactive --json LABEL -- CMD…`
 func (c *Client) NewWindow(ctx, session string, tab Tab) (Started, error)  // `rex window new --session=… --cwd=… --interactive --focus=false --json TAB -- CMD…`
+func (c *Client) RenameWindow(ctx, session, window, label string) error   // `rex window rename -s SESSION WINDOW LABEL`
 func (c *Client) Events(ctx) (<-chan Event, <-chan error)           // `rex events --all --json`
 ```
 
 - `Process`: `Foreground ProcInfo`, `Ancestors []ProcInfo`, `Child *ProcInfo`, `LastExit *Exit`; `ProcInfo{PID int, Name, Path, InvokedPath, Argv0, CWD string}`; `Exit{Code int, Error string}` from `{"exit_code":127,"error":"exit status 127"}`, set while a pane stays open after its program ended.
-- `Tab{Label, CWD string; Command []string}` and `Started{SessionID, WindowID, BlockID string}`. `NewSession` and `NewWindow` refuse a name that starts with `-` (rex would read it as an option), a relative folder, and an empty command, before running rex. They are never retried: after a failure the tab may exist anyway.
+- `Tab{Label, CWD string; Command []string}` and `Started{SessionID, WindowID, BlockID string}`. `NewSession` and `NewWindow` refuse a name that starts with `-` (rex would read it as an option), a relative folder, and an empty command, before running rex. They are never retried: after a failure the tab may exist anyway. `RenameWindow` refuses a tab or a name that starts with `-`, and an empty session.
 - `StatusRecord{ID, State, Kind, App, EffectiveApp, Title, Msg string; UpdatedAt time.Time; Owner *ProcOwner}`.
 - `Event{Type EventType; SessionID, BlockID string; Status *StatusRecord; Received time.Time; Raw json.RawMessage}` with types `SessionCreated`, `SessionRemoved`, `BlockCreated`, `BlockClosed`, `ProgramStatusChanged`, `ProcessChanged`, `PwdChanged`, `TitleChanged`, `OtherEvent`. `progress_report` and client join/leave events are dropped.
 - `rextest.New(t)` builds or provides a fake `rex` binary that answers commands from a scenario, logs every call (arguments and stdin), and can stream scripted events.
@@ -129,7 +132,7 @@ SQLite at a path given by the caller. Opens with WAL, `foreign_keys=ON`, `busy_t
 The schema is design section 10, with these additions:
 
 - `outbox.silent INTEGER NOT NULL DEFAULT 0`.
-- `outbox_part.content TEXT NOT NULL` (the text to send), `outbox_part.format TEXT NOT NULL` (`html`, `plain`, or `document`), `outbox_part.filename TEXT` (documents only).
+- `outbox_part.content TEXT NOT NULL` (the text to send), `outbox_part.format TEXT NOT NULL` (`html`, `plain`, `document`, `rich`, or `image`), `outbox_part.filename TEXT` (documents only).
 - `thread.muted INTEGER NOT NULL DEFAULT 0`.
 - `pane.state_at INTEGER`.
 
@@ -319,7 +322,7 @@ type RuntimeInput struct {
 }
 type Config struct {
 	Telegram struct{ APIBase string; RatePerSecond float64; RateBurst int }
-	Rex      struct{ CLI string; ScanInterval Duration }
+	Rex      struct{ CLI string; ScanInterval Duration; NewSession string } // NewSession: the session for /new, default "rex-tg"
 	Agents   struct {
 		PiArgv0, ClaudeArgv0, ClaudeExecGlob, CodexNames []string
 		Pi, Claude, Codex                                RuntimeInput
@@ -335,7 +338,7 @@ func (c Config) DBPath() string; func (c Config) SpoolDir() string; func (c Conf
 func (c Config) Input(rt agents.Runtime) RuntimeInput
 ```
 
-Defaults come from design section 12 and the spikes: pi answers `[]`; Claude answers `1 Yes → ["1"]`, `2 Always → ["2"]`, `4 No → ["4"]`, `Esc → ["escape"]`; Codex answers `Yes → ["y"]`, `Always → ["p"]`, `No → ["escape"]`; every runtime `PasteEnterDelay 300ms`, `InterruptKeys ["escape"]`; `WhileWorking` steer for all three.
+Defaults come from design section 12 and the spikes: `ClaudeArgv0 ["claude", "cux"]` (cux runs claude as its child, so cux is the pane's foreground process); `Rex.NewSession "rex-tg"`, which must be a name that Rex takes (not empty, no leading `-`, no control characters, at most 128 characters); pi answers `[]`; Claude answers `1 Yes → ["1"]`, `2 Always → ["2"]`, `4 No → ["4"]`, `Esc → ["escape"]`; Codex answers `Yes → ["y"]`, `Always → ["p"]`, `No → ["escape"]`; every runtime `PasteEnterDelay 300ms`, `InterruptKeys ["escape"]`; `WhileWorking` steer for all three.
 
 ### internal/registry
 
@@ -453,6 +456,8 @@ type Options struct {
 	Telegram  *telegram.Client                // nil: telegram.New(Token, telegram.WithBaseURL(Config.Telegram.APIBase))
 	Now       func() time.Time                // nil: time.Now
 	ProcStart func(pid int) (time.Time, error) // nil: the registry default
+	Timing    Timing                          // zero values: the production waits
+	HasProgram func(name string) bool         // nil: the PATH, ~/.local/bin, /opt/homebrew/bin, /usr/local/bin (cux for /new); tests set it
 }
 var ErrAlreadyRunning error
 func Run(ctx context.Context, opt Options) error                                   // until ctx ends
@@ -473,7 +478,7 @@ Flows (design sections in brackets):
 6. **Opening a topic** [4.1]: the `o:<pane id>` button resolves the pane's session (an unresolved pane answers "Waiting for the session file…"); `createForumTopic` through `sender.Call`; `store.LinkTopic`; the intro card (design 8.7); the backfill; the tailer starts at the end of the file; a turn tracker is created with the topic's settings.
 7. **Sender events**: `ThreadGone` closes the topic in the store and stops its tailer; `Blocked` and `Conflict` stop the daemon with an error after logging.
 8. **Housekeeping**: `store.Prune` once a day; spool files older than 24 h are deleted; uploads older than 7 days are deleted.
-9. **Starting an agent** [8.7]: `/new [agent [folder]]` and its buttons (`nw:<token>:a:<runtime>`, `nw:<token>:d:<index>`, `nw:<token>:x`). The core keeps each request in memory under a random 12-character token, from before its question is sent, and ends it after 10 minutes; the first button press names the question's message when Telegram's answer to the send was lost. A worker lists the folder buttons (`store.RecentFolders`, only folders that exist) and hands them to the core before it shows them. A typed folder is taken before routing: a reply to the question, or the newest question in the same chat and topic; in a linked topic only a path that starts with `~`, or the absolute path of an existing folder. The start runs in a worker, one at a time: `rex.Sessions`, then `NewWindow` into the session named after the folder, or `NewSession`; then it polls `registry.Agents` every `Timing.NewAgentPoll` until the new block has a session and the core opens its topic (flow 6), or `rex.Process` shows that the program exited, or `Timing.NewAgentWait` passed. While it waits, it reads the screen: a list of answers with a cursor, seen on two reads in a row, is posted as a startup question with buttons `nw:<token>:o:<question>:<answer>`, which the core passes to the waiting worker. That worker presses Up or Down until the cursor is on the answer (reading the screen after each key, `Timing.VimPoll` × 15 at most), then Enter, with `registry.Detect` and the pause flag checked before each key (`startup.go`). An open question keeps the wait going, up to 10 minutes.
+9. **Starting an agent** [8.7]: `/new [agent [folder]]` and its buttons (`nw:<token>:a:<agent>`, `nw:<token>:d:<index>`, `nw:<token>:x`). The agents are pi, claude, and codex, with their `launch` commands, and cux (runtime Claude, command `cux`) when `HasProgram("cux")`; the request keeps the list that its buttons show. The core keeps each request in memory under a random 12-character token, from before its question is sent, and ends it after 10 minutes; the first button press names the question's message when Telegram's answer to the send was lost. A worker lists the folder buttons (`store.RecentFolders`, only folders that exist) and hands them to the core before it shows them. A typed folder is taken before routing: a reply to the question, or the newest question in the same chat and topic; in a linked topic only a path that starts with `~`, or the absolute path of an existing folder. The start runs in a worker, one at a time: `rex.Sessions`, then `NewWindow` into the session named `Rex.NewSession` (case and outer spaces ignored), or `NewSession`, with the tab named `<folder> · <agent>`; then it polls `registry.Agents` every `Timing.NewAgentPoll` until the new block has a session and the core opens its topic (flow 6), or `rex.Process` shows that the program exited, or `Timing.NewAgentWait` passed. While it waits, it reads the screen: a list of answers with a cursor, seen on two reads in a row, is posted as a startup question with buttons `nw:<token>:o:<question>:<answer>`, which the core passes to the waiting worker. That worker presses Up or Down until the cursor is on the answer (reading the screen after each key, `Timing.VimPoll` × 15 at most), then Enter, with `registry.Detect` and the pause flag checked before each key (`startup.go`). An open question keeps the wait going, up to 10 minutes. Tab names: after a topic rename succeeds (`rename`, live topics only), `syncTab` looks up the pane's Rex session; when its name is `Rex.NewSession`, it finds the pane's tab (`rex.Blocks` → `WindowID`) and calls `RenameWindow` with the topic name. A failure is logged; the next topic rename tries again.
 10. **Phase 6**: photos and documents up to `InputSettings.MaxUploadMB` (default 20) are downloaded to `UploadDir()/<thread id>/` and their path (plus the caption) is delivered like text; voice notes are transcribed when `Voice.WhisperCLI` is set (ffmpeg to 16 kHz WAV, then `<whisper_cli> -m <model> -l <language> -nt -f <wav>`), answered with "🎤 <text>" and delivered like text, else answered "Voice notes need whisper.cpp; see the README."; stickers and others answer "Only text is supported for now."; `/pause` stops all typing (KV `paused`) until `/unpause`; `/mute` and `/unmute` set `thread.muted`.
 
 ### cmd/rex-tg
@@ -486,6 +491,16 @@ Commands: `daemon [--config F] [--log-stderr]`, `hook <runtime>`, `login [--toke
 - `daemon`: logs JSON to `LogDir()/rex-tg.log` through lumberjack (10 MB, 3 backups), plus stderr with `--log-stderr`; reads the token with `keychain.Get`; stops cleanly on SIGINT and SIGTERM.
 - `doctor` checks and prints one line each: the Rex CLI path and `whoami`, the token, `getMe` with `has_topics_enabled`, the pairing, the hooks and files from `install.Inspect`, the launchd agent, the database, the folder modes, and whether a daemon holds the lock.
 - `status` opens the store read-only and prints topics, queued and unknown messages, and open alerts.
+
+### Images in answers
+
+`telegram.(*Client).SendPhoto(ctx, chatID, threadID int64, filename string, data []byte, caption string, silent bool) (Message, error)` uploads with multipart field `photo`, like `SendDocument` (both share one upload helper), and notes the message number. `tgtest` has `sendPhoto` (a message with `Photo` set and a caption, counted like any send).
+
+Schema version 4 rebuilds `outbox_part` so that `format` also allows `image`. It keeps all columns (including `floor_id` and `checked`), all rows, and the index `outbox_part_state`.
+
+`daemon/images.go`: `findImages(markdown, home, cwd) []string` returns the existing image files that an answer names (absolute, no repeats, at most 10, 1 byte to 50 MB). In `work`, a `turn.Post` of kind `answer` also makes an outbox item of kind `image` (key `<answer key>:images`, silent, one `image` part per file, `Content` the path, `Filename` the base name) when `Display.SendImages` is on. It goes into the same `CommitBatch` as the answer.
+
+`sender/image.go`: `sendImage` reads the file at send time. A missing, unreadable, or over 50 MB file fails the part with a short reason. A PNG or JPEG of at most 10 MB whose `image.DecodeConfig` gives width plus height of at most 10000 and a side ratio of at most 20 goes out with `SendPhoto`; all others with `SendDocument`. The caption is the file name. A 400 error on the photo falls back to `SendDocument` in the same attempt. Other outcomes use `judge` and `finishPart` as for any part.
 
 ### Rich messages (Phase 6, opt-in)
 

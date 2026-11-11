@@ -376,6 +376,19 @@ func (c *Client) NewWindow(ctx context.Context, session string, tab Tab) (Starte
 	return Started{SessionID: session, WindowID: r.WindowID, BlockID: r.BlockIDs[0]}, nil
 }
 
+// RenameWindow gives a tab a new name. It runs `rex window rename -s SESSION
+// WINDOW LABEL`.
+func (c *Client) RenameWindow(ctx context.Context, session, window, label string) error {
+	switch {
+	case session == "" || badName(window):
+		return &Error{Command: "window rename", Err: fmt.Errorf("invalid tab %q", window)}
+	case badName(label):
+		return &Error{Command: "window rename", Err: fmt.Errorf("invalid tab name %q", label)}
+	}
+	_, err := c.run(ctx, "window rename", nil, "window", "rename", "-s", session, window, label)
+	return err
+}
+
 // badName reports a name that the rex command line would read wrongly: one
 // that starts with "-" is read as an option.
 func badName(s string) bool { return s == "" || strings.HasPrefix(s, "-") }

@@ -83,6 +83,29 @@ UPDATE outbox_part SET checked = 1
 WHERE state = 'unknown' AND (floor_id IS NULL OR outbox_id IN (SELECT id FROM outbox WHERE kind = 'part-notice'));
 `
 
+// schemaV4 allows the "image" part format. As in schemaV2, the outbox_part
+// table is rebuilt with all its columns (including floor_id and checked from
+// version 3), all rows, and its index.
+const schemaV4 = `
+CREATE TABLE outbox_part_new (
+  outbox_id     INTEGER NOT NULL REFERENCES outbox (id),
+  part          INTEGER NOT NULL,
+  state         TEXT NOT NULL CHECK (state IN ('pending', 'sending', 'sent', 'unknown', 'failed')),
+  content       TEXT NOT NULL,
+  format        TEXT NOT NULL CHECK (format IN ('html', 'plain', 'document', 'rich', 'image')),
+  filename      TEXT,
+  tg_message_id INTEGER,
+  floor_id      INTEGER,
+  checked       INTEGER NOT NULL DEFAULT 0 CHECK (checked IN (0, 1)),
+  PRIMARY KEY (outbox_id, part)
+) STRICT;
+INSERT INTO outbox_part_new (outbox_id, part, state, content, format, filename, tg_message_id, floor_id, checked)
+  SELECT outbox_id, part, state, content, format, filename, tg_message_id, floor_id, checked FROM outbox_part;
+DROP TABLE outbox_part;
+ALTER TABLE outbox_part_new RENAME TO outbox_part;
+CREATE INDEX outbox_part_state ON outbox_part (state);
+`
+
 // ErrNotFound is returned (wrapped) when a row does not exist.
 var ErrNotFound = errors.New("store: not found")
 
@@ -106,6 +129,7 @@ var migrations = []migration{
 	{version: 1, sql: schemaV1},
 	{version: 2, sql: schemaV2},
 	{version: 3, sql: schemaV3},
+	{version: 4, sql: schemaV4},
 }
 
 // Store is an open database.

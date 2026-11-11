@@ -22,6 +22,7 @@ func TestDetect(t *testing.T) {
 		{"claude by invoked path", rex.ProcInfo{Name: "2.1.322", Argv0: "2.1.322", InvokedPath: "/h/.local/bin/claude"}, agents.Claude, true},
 		{"claude by glob", rex.ProcInfo{Name: "2.1.400", Argv0: "2.1.400", Path: "/h/.local/share/claude/versions/2.1.400"}, agents.Claude, true},
 		{"outside glob", rex.ProcInfo{Name: "2.1.400", Argv0: "2.1.400", Path: "/opt/other/2.1.400"}, "", false},
+		{"cux runs claude", cuxProc(7, "/w"), agents.Claude, true},
 		{"codex by name", rex.ProcInfo{Name: "codex", Argv0: "codex"}, agents.Codex, true},
 		{"tr3x is not supported", rex.ProcInfo{Name: "tr3x", Argv0: "claude"}, "", false},
 		{"tr3x by argv0", rex.ProcInfo{Name: "x", Argv0: "tr3x", InvokedPath: "/h/.local/bin/claude"}, "", false},

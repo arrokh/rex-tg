@@ -97,9 +97,10 @@ func (f *fakeRex) removeBlock(s, b string) {
 	delete(f.procs, b)
 }
 
+// rules are the default rules (config.Default) with test paths.
 var rules = Rules{
 	PiArgv0:        []string{"pi"},
-	ClaudeArgv0:    []string{"claude"},
+	ClaudeArgv0:    []string{"claude", "cux"},
 	ClaudeExecGlob: []string{"/h/.local/share/claude/versions/*"},
 	CodexNames:     []string{"codex"},
 }
@@ -107,6 +108,12 @@ var rules = Rules{
 func claudeProc(pid int, cwd string) rex.ProcInfo {
 	return rex.ProcInfo{PID: pid, Name: "2.1.322", Argv0: "claude", Path: "/h/.local/share/claude/versions/2.1.322",
 		InvokedPath: "/h/.local/bin/claude", CWD: cwd}
+}
+
+// cuxProc is cux in front of a pane: it runs claude as its child, in the
+// same process group, so Rex reports cux as the foreground.
+func cuxProc(pid int, cwd string) rex.ProcInfo {
+	return rex.ProcInfo{PID: pid, Name: "cux", Argv0: "cux", Path: "/h/.local/bin/cux", InvokedPath: "/h/.local/bin/cux", CWD: cwd}
 }
 func piProc(pid int, cwd string) rex.ProcInfo {
 	return rex.ProcInfo{PID: pid, Name: "node", Argv0: "pi", Path: "/usr/local/bin/node", CWD: cwd}

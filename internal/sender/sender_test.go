@@ -960,8 +960,14 @@ func TestNotSentIsRetriedWithoutNotice(t *testing.T) {
 	for _, d := range e.clk.slept() {
 		waited += d
 	}
-	if waited < 7*time.Second { // 1 s + 2 s + 4 s of backoff
+	// 1 s + 2 s + 3 s: the pause grows but stops at 3 s.
+	if waited < 6*time.Second {
 		t.Errorf("waited %v in total, want the growing backoff (%v)", waited, e.clk.slept())
+	}
+	for _, d := range e.clk.slept() {
+		if d > 3500*time.Millisecond {
+			t.Errorf("slept %v, want at most the 3 s cap (%v)", d, e.clk.slept())
+		}
 	}
 }
 

@@ -67,10 +67,10 @@ func TestMigrationBackup(t *testing.T) {
 	noErr(t, s.Set(ctx, "keep", "me"))
 	noErr(t, s.Close())
 
-	next := append(append([]migration{}, migrations...), migration{version: 3, sql: `CREATE TABLE extra (x INTEGER) STRICT;`})
+	next := append(append([]migration{}, migrations...), migration{version: 99, sql: `CREATE TABLE extra (x INTEGER) STRICT;`})
 	s, err = open(path, next)
 	noErr(t, err)
-	if v := must(s.version(ctx)); v != 3 {
+	if v := must(s.version(ctx)); v != 99 {
 		t.Fatalf("version = %d", v)
 	}
 	noErr(t, s.Close())
@@ -176,7 +176,7 @@ var latestVersion = migrations[len(migrations)-1].version
 
 func TestFreshDatabaseIsTheLatestVersion(t *testing.T) {
 	s := newStore(t)
-	if v := must(s.version(ctx)); v != latestVersion || v != 3 {
+	if v := must(s.version(ctx)); v != latestVersion || v != 4 {
 		t.Fatalf("version = %d", v)
 	}
 }
@@ -300,5 +300,61 @@ func TestMigrateV2ToV3SeedsMessageNumbers(t *testing.T) {
 	}
 	if ps := must(s.PartsToCheck(ctx)); len(ps) != 1 || ps[0].OutboxID != lost {
 		t.Fatalf("parts to check: %+v", ps)
+	}
+}
+
+// Version 4 allows image parts and keeps every column of every part,
+// including the floor and the checked flag of version 3.
+func TestMigrateV3ToV4KeepsParts(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "db")
+	s, err := open(path, migrations[:3])
+	noErr(t, err)
+	s.now = func() time.Time { return t0 }
+	th, _ := topic(t, s, 5)
+	if _, _, err := s.Enqueue(ctx, OutboxItem{ThreadID: th.ID, Key: "i", Kind: "image",
+		Parts: []PartContent{{Content: "/x.png", Format: FormatImage, Filename: "x.png"}}}); err == nil {
+		t.Fatal("v3 accepted an image part")
+	}
+	unk, _, err := s.Enqueue(ctx, OutboxItem{ThreadID: th.ID, Key: "u", Kind: "answer",
+		Parts: []PartContent{{Content: "a", Format: FormatHTML}, {Content: "b", Format: FormatDocument, Filename: "b.md"}}})
+	noErr(t, err)
+	ok, err := s.ClaimPart(ctx, unk, 0, 42)
+	noErr(t, err)
+	if !ok {
+		t.Fatal("claim failed")
+	}
+	noErr(t, s.MarkPartUnknown(ctx, unk, 0))
+	noErr(t, s.MarkPartChecked(ctx, unk, 0))
+	noErr(t, s.MarkPartSent(ctx, unk, 1, 77))
+	noErr(t, s.Close())
+
+	s, err = Open(path)
+	noErr(t, err)
+	defer s.Close()
+	s.now = func() time.Time { return t0 }
+	if v := must(s.version(ctx)); v != latestVersion {
+		t.Fatalf("version = %d", v)
+	}
+	if _, err := os.Stat(path + ".bak-3"); err != nil {
+		t.Fatalf("backup missing: %v", err)
+	}
+	p0 := must(s.Part(ctx, unk, 0))
+	if p0.State != OutboxUnknown || !p0.HasFloor || p0.Floor != 42 || !p0.Checked || p0.Content != "a" {
+		t.Fatalf("part 0 after migration: %+v", p0)
+	}
+	p1 := must(s.Part(ctx, unk, 1))
+	if p1.State != OutboxSent || p1.Format != FormatDocument || p1.Filename != "b.md" || p1.HasFloor {
+		t.Fatalf("part 1 after migration: %+v", p1)
+	}
+	var n int
+	noErr(t, s.db.QueryRowContext(ctx, `SELECT count(*) FROM sqlite_master WHERE type='index' AND name='outbox_part_state'`).Scan(&n))
+	if n != 1 {
+		t.Fatal("index outbox_part_state missing")
+	}
+	id, _, err := s.Enqueue(ctx, OutboxItem{ThreadID: th.ID, Key: "i", Kind: "image",
+		Parts: []PartContent{{Content: "/x.png", Format: FormatImage, Filename: "x.png"}}})
+	noErr(t, err)
+	if p := must(s.Part(ctx, id, 0)); p.Format != FormatImage || p.Content != "/x.png" {
+		t.Fatalf("image part: %+v", p)
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -23,10 +24,11 @@ import (
 )
 
 // /new starts a coding agent in a new Rex tab (design section 8.7). It asks
-// for the agent and the folder. The tab goes into the Rex session that is
-// named after the folder; when there is none, rex-tg makes that session.
-// Once the agent reports its session, its topic opens, as with the Open
-// button of /agents.
+// for the agent and the folder. Every tab goes into one Rex session, named
+// by rex.new_session ("rex-tg"); when there is none, rex-tg makes it. A tab
+// is named "<folder> · <agent>" at first, and later takes the name of its
+// topic (see syncTab). Once the agent reports its session, its topic opens,
+// as with the Open button of /agents.
 //
 // The core keeps each request in memory under a random token, which its
 // buttons carry. The request exists before its question is sent, so its
@@ -66,8 +68,9 @@ type newFlow struct {
 	chat, thread int64 // where the question is; thread 0 is the main chat
 	linked       bool  // the question is in a topic that is linked to an agent
 	step         newStep
-	rt           agents.Runtime
-	folders      []string // the folder buttons, by index
+	offered      []newAgent // the agent buttons
+	agent        newAgent   // the chosen agent, from newPickFolder on
+	folders      []string   // the folder buttons, by index
 	expires      time.Time
 	answers      chan startupAnswer // newWaiting: button presses for the agent's startup question
 }
@@ -98,23 +101,87 @@ func runtimeName(rt agents.Runtime) string {
 	return string(rt)
 }
 
+// newAgent is an agent that /new can start.
+type newAgent struct {
+	key     string         // its name in /new and in button data: pi, claude, cux, codex
+	rt      agents.Runtime // the runtime that the pane runs
+	command []string       // what the new tab runs
+}
+
+// name is the agent's name in messages and buttons.
+func (a newAgent) name() string {
+	if a.key == string(a.rt) {
+		return runtimeName(a.rt)
+	}
+	return a.key
+}
+
+// newAgents lists the agents that /new offers: pi, Claude Code, and Codex,
+// and cux when it is installed. cux starts Claude Code with one of several
+// Claude accounts and runs it as its child, so its pane counts as Claude
+// Code (agents.claude_argv0).
+func (d *daemon) newAgents() []newAgent {
+	list := []newAgent{
+		{key: "pi", rt: agents.Pi, command: d.cfg.Input(agents.Pi).Launch},
+		{key: "claude", rt: agents.Claude, command: d.cfg.Input(agents.Claude).Launch},
+	}
+	if d.hasProgram("cux") {
+		list = append(list, newAgent{key: "cux", rt: agents.Claude, command: []string{"cux"}})
+	}
+	return append(list, newAgent{key: "codex", rt: agents.Codex, command: d.cfg.Input(agents.Codex).Launch})
+}
+
+// installed reports whether a program is on the PATH, or in a folder where
+// user programs usually are. launchd starts the daemon with a short PATH,
+// while /new starts agents through the login shell, which knows more.
+func installed(home, name string) bool {
+	if _, err := exec.LookPath(name); err == nil {
+		return true
+	}
+	for _, dir := range []string{filepath.Join(home, ".local", "bin"), "/opt/homebrew/bin", "/usr/local/bin"} {
+		if fi, err := os.Stat(filepath.Join(dir, name)); err == nil && fi.Mode().IsRegular() && fi.Mode()&0o111 != 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// agentKeys is "pi|claude|codex", for help texts.
+func agentKeys(list []newAgent) string {
+	keys := make([]string, len(list))
+	for i, a := range list {
+		keys[i] = a.key
+	}
+	return strings.Join(keys, "|")
+}
+
 // parseNewArgs reads "/new [agent [folder]]". The folder is the rest of the
-// text, so it may contain spaces. bad is the first word when it names no
-// agent.
-func parseNewArgs(args string) (rt agents.Runtime, folder, bad string) {
+// text, so it may contain spaces. ok is false when there is no agent; bad is
+// the first word when it names none of list.
+func parseNewArgs(args string, list []newAgent) (a newAgent, ok bool, folder, bad string) {
 	args = strings.TrimSpace(args)
 	if args == "" {
-		return "", "", ""
+		return newAgent{}, false, "", ""
 	}
 	word, rest := args, ""
 	if i := strings.IndexFunc(args, unicode.IsSpace); i >= 0 {
 		word, rest = args[:i], args[i:]
 	}
-	rt = agents.Runtime(strings.ToLower(word))
-	if !rt.Valid() {
-		return "", "", word
+	a, ok = findAgent(list, word)
+	if !ok {
+		return newAgent{}, false, "", word
 	}
-	return rt, strings.TrimSpace(rest), ""
+	return a, true, strings.TrimSpace(rest), ""
+}
+
+// findAgent returns the agent of list with this key, ignoring case.
+func findAgent(list []newAgent, key string) (newAgent, bool) {
+	for _, a := range list {
+		if strings.EqualFold(a.key, key) {
+			return a, true
+		}
+	}
+	return newAgent{}, false
 }
 
 // folderPath turns a typed folder into a clean absolute path. "~" is the home
@@ -165,28 +232,38 @@ func isDir(path string) bool {
 	return err == nil && fi.IsDir()
 }
 
-// maxSessionLabel is the longest session name that Rex takes, in characters.
-const maxSessionLabel = 128
+// maxLabel is the longest session or tab name that Rex takes, in characters.
+const maxLabel = 128
 
-// sessionLabel is the name of the Rex session for a folder: the folder's own
-// name, in the form that Rex takes. Rex refuses control characters and names
-// longer than 128 characters, and a name that starts with "-" would be read
-// as an option of rex.
-func sessionLabel(dir string, rt agents.Runtime) string {
+// cleanLabel puts a name in the form that Rex takes for a tab: Rex refuses
+// control characters and names longer than 128 characters, and a name that
+// starts with "-" would be read as an option of rex. It may return "".
+func cleanLabel(s string) string {
 	l := strings.Map(func(r rune) rune {
 		if unicode.IsControl(r) {
 			return -1
 		}
 		return r
-	}, folderBase(dir))
+	}, s)
 	l = strings.TrimSpace(strings.TrimLeft(strings.TrimSpace(l), "-"))
-	if r := []rune(l); len(r) > maxSessionLabel {
-		l = strings.TrimSpace(string(r[:maxSessionLabel]))
-	}
-	if l == "" {
-		return string(rt)
+	if r := []rune(l); len(r) > maxLabel {
+		l = strings.TrimSpace(string(r[:maxLabel]))
 	}
 	return l
+}
+
+// tabLabel is the first name of the tab of a new agent: "<folder> · <agent>",
+// such as "app · pi", or the agent alone when the folder has no name.
+func tabLabel(dir, agent string) string {
+	suffix := " · " + agent
+	f := cleanLabel(folderBase(dir))
+	if f == "" {
+		return agent
+	}
+	if r := []rune(f); len(r)+len([]rune(suffix)) > maxLabel {
+		f = strings.TrimSpace(string(r[:maxLabel-len([]rune(suffix))]))
+	}
+	return f + suffix
 }
 
 // findSession returns the first Rex session with this name, ignoring case
@@ -210,13 +287,24 @@ func newQuestion(token string, f newFlow, tilde func(string) string) (string, *t
 		if f.linked {
 			text += "\nTo send /new to the agent of this topic, send //new."
 		}
-		var row []telegram.InlineKeyboardButton
-		for _, rt := range agents.Runtimes {
-			row = append(row, telegram.InlineKeyboardButton{Text: runtimeName(rt), CallbackData: "nw:" + token + ":a:" + string(rt)})
+		// Up to three buttons fit in a row on a phone; more go two by two.
+		per := len(f.offered)
+		switch {
+		case per > 3:
+			per = 2
+		case per == 0:
+			per = 1
 		}
-		return text, &telegram.InlineKeyboardMarkup{InlineKeyboard: [][]telegram.InlineKeyboardButton{row, cancel}}
+		var rows [][]telegram.InlineKeyboardButton
+		for i, a := range f.offered {
+			if i%per == 0 {
+				rows = append(rows, nil)
+			}
+			rows[len(rows)-1] = append(rows[len(rows)-1], telegram.InlineKeyboardButton{Text: a.name(), CallbackData: "nw:" + token + ":a:" + a.key})
+		}
+		return text, &telegram.InlineKeyboardMarkup{InlineKeyboard: append(rows, cancel)}
 	}
-	text := "🆕 <b>New " + format.Escape(runtimeName(f.rt)) + "</b>\nWhich folder? "
+	text := "🆕 <b>New " + format.Escape(f.agent.name()) + "</b>\nWhich folder? "
 	if len(f.folders) > 0 {
 		text += "Tap one, or send a path, such as " + newExample + "."
 	} else {
@@ -274,24 +362,25 @@ func (d *daemon) newCommand(chat, thread int64, linked bool, args string) {
 		d.say(chat, thread, newPausedText, nil)
 		return
 	}
-	rt, folder, bad := parseNewArgs(args)
+	list := d.newAgents()
+	a, picked, folder, bad := parseNewArgs(args, list)
 	if bad != "" {
-		d.say(chat, thread, "There is no agent named <code>"+esc(format.Truncate(bad, 40))+"</code>. Use /new, or /new pi|claude|codex [folder].", nil)
+		d.say(chat, thread, "There is no agent named <code>"+esc(format.Truncate(bad, 40))+"</code>. Use /new, or /new "+agentKeys(list)+" [folder].", nil)
 		return
 	}
 	d.newSeq++
-	f := &newFlow{seq: d.newSeq, chat: chat, thread: thread, linked: linked, step: newPickAgent, expires: d.now().Add(newExpiry)}
+	f := &newFlow{seq: d.newSeq, chat: chat, thread: thread, linked: linked, step: newPickAgent, offered: list, expires: d.now().Add(newExpiry)}
 	token := newToken()
-	if rt != "" && folder != "" {
+	if picked && folder != "" {
 		if dir, ok := d.checkFolder(chat, thread, folder); ok {
-			f.step, f.rt = newStarting, rt
+			f.step, f.agent = newStarting, a
 			d.newFlows[token] = f
-			d.spawn(func() { d.launch(token, 0, chat, thread, rt, dir) })
+			d.spawn(func() { d.launch(token, 0, chat, thread, a, dir) })
 		}
 		return
 	}
-	if rt != "" {
-		f.step, f.rt = newPickFolder, rt
+	if picked {
+		f.step, f.agent = newPickFolder, a
 	}
 	d.newFlows[token] = f
 	q := *f
@@ -331,7 +420,7 @@ func (d *daemon) checkFolder(chat, thread int64, text string) (string, bool) {
 	return dir, true
 }
 
-// newButton handles a button of a /new question (core): "nw:<token>:a:<runtime>"
+// newButton handles a button of a /new question (core): "nw:<token>:a:<agent>"
 // picks the agent, "nw:<token>:d:<index>" the folder, "nw:<token>:x" cancels.
 func (d *daemon) newButton(cb *telegram.CallbackQuery, parts []string) {
 	chat, msg := cb.Message.Chat.ID, cb.Message.MessageID
@@ -380,8 +469,8 @@ func (d *daemon) newButton(cb *telegram.CallbackQuery, parts []string) {
 		d.editAsync(chat, msg, "✖ Cancelled. No agent was started.", nil)
 		return
 	case kind == "a" && len(parts) == 3 && f.step == newPickAgent:
-		if rt := agents.Runtime(parts[2]); rt.Valid() {
-			f.rt, f.step, f.folders = rt, newPickFolder, nil
+		if a, ok := findAgent(f.offered, parts[2]); ok {
+			f.agent, f.step, f.folders = a, newPickFolder, nil
 			f.expires = d.now().Add(newExpiry)
 			d.answerCallback(cb.ID, "", false)
 			q := *f
@@ -462,8 +551,8 @@ func (d *daemon) startFlow(token string, f *newFlow, dir string) {
 		return
 	}
 	f.step = newStarting
-	msg, chat, thread, rt := f.msg, f.chat, f.thread, f.rt
-	d.spawn(func() { d.launch(token, msg, chat, thread, rt, dir) })
+	msg, chat, thread, a := f.msg, f.chat, f.thread, f.agent
+	d.spawn(func() { d.launch(token, msg, chat, thread, a, dir) })
 }
 
 // expireNewFlows ends the /new questions that waited too long (core).
@@ -481,7 +570,7 @@ func (d *daemon) expireNewFlows(now time.Time) {
 // launch starts the agent in a new Rex tab, then waits for it (worker). msg
 // is the message to show the progress in; 0 sends a new one. token names the
 // request ("" for /new with all its arguments).
-func (d *daemon) launch(token string, msg, chat, thread int64, rt agents.Runtime, dir string) {
+func (d *daemon) launch(token string, msg, chat, thread int64, a newAgent, dir string) {
 	defer d.emit(evNewDone{token})
 	show := func(html string) {
 		if msg == 0 {
@@ -492,7 +581,7 @@ func (d *daemon) launch(token string, msg, chat, thread int64, rt agents.Runtime
 		}
 		d.editMessage(chat, msg, html, nil)
 	}
-	name := format.Escape(runtimeName(rt))
+	name := format.Escape(a.name())
 	where := d.shownPath(dir)
 	if !isDir(dir) {
 		show("⚠️ The folder " + where + " is gone, so " + name + " was not started. Send /new again.")
@@ -500,13 +589,13 @@ func (d *daemon) launch(token string, msg, chat, thread int64, rt agents.Runtime
 	}
 	show("⏳ Starting " + name + " in " + where + "…")
 
-	st, in, err := d.startTab(rt, dir)
+	st, in, err := d.startTab(a, dir)
 	if errors.Is(err, errNoRex) {
 		show("⚠️ Could not reach Rex, so " + name + " was not started.")
 		return
 	}
 	if err != nil {
-		d.log.Warn("new: start agent", "runtime", rt, "err", err)
+		d.log.Warn("new: start agent", "agent", a.key, "err", err)
 		if errors.Is(err, context.DeadlineExceeded) {
 			show("⚠️ Rex did not answer in time. " + name + " may have started anyway: check /agents before you try again.")
 		} else {
@@ -514,21 +603,20 @@ func (d *daemon) launch(token string, msg, chat, thread int64, rt agents.Runtime
 		}
 		return
 	}
-	d.log.Info("new: agent started", "runtime", rt, "session", st.SessionID, "block", st.BlockID)
+	d.log.Info("new: agent started", "agent", a.key, "session", st.SessionID, "block", st.BlockID)
 	show("✅ Started " + name + " in " + where + ", in " + in + ".\nIts topic opens when " + name + " reports its session.")
 	answers := make(chan startupAnswer, 1)
 	d.emit(evNewWaiting{token: token, answers: answers})
-	d.awaitAgent(chat, thread, rt, st, token, answers)
+	d.awaitAgent(chat, thread, a, st, token, answers)
 }
 
 // errNoRex: Rex did not list its sessions, so nothing was started.
 var errNoRex = errors.New("rex sessions not listed")
 
-// startTab opens a tab that runs the agent, in the Rex session named after
-// the folder, or in a new session of that name (worker). in says where, as
-// HTML. Starts run one at a time, so two starts in one folder make one
-// session.
-func (d *daemon) startTab(rt agents.Runtime, dir string) (st rex.Started, in string, err error) {
+// startTab opens a tab that runs the agent, in the Rex session for /new
+// (rex.new_session), or in a new session of that name (worker). in says
+// where, as HTML. Starts run one at a time, so two starts make one session.
+func (d *daemon) startTab(a newAgent, dir string) (st rex.Started, in string, err error) {
 	d.newMu.Lock()
 	defer d.newMu.Unlock()
 	sessions, err := d.rx.Sessions(d.ctx)
@@ -536,14 +624,14 @@ func (d *daemon) startTab(rt agents.Runtime, dir string) (st rex.Started, in str
 		d.log.Warn("new: list sessions", "err", err)
 		return rex.Started{}, "", errNoRex
 	}
-	label := sessionLabel(dir, rt)
-	tab := rex.Tab{Label: string(rt), CWD: dir, Command: d.cfg.Input(rt).Launch}
+	label := strings.TrimSpace(d.cfg.Rex.NewSession)
+	tab := rex.Tab{Label: tabLabel(dir, a.key), CWD: dir, Command: a.command}
 	if s, ok := findSession(sessions, label); ok {
 		st, err = d.rx.NewWindow(d.ctx, s.ID, tab)
-		return st, "a new tab of the Rex session <b>" + esc(s.Label) + "</b>", err
+		return st, "a new tab <b>" + esc(tab.Label) + "</b> of the Rex session <b>" + esc(s.Label) + "</b>", err
 	}
 	st, err = d.rx.NewSession(d.ctx, label, tab)
-	return st, "the new Rex session <b>" + esc(label) + "</b>", err
+	return st, "the tab <b>" + esc(tab.Label) + "</b> of the new Rex session <b>" + esc(label) + "</b>", err
 }
 
 // awaitAgent waits until the new agent reports its session, then has the
@@ -552,8 +640,8 @@ func (d *daemon) startTab(rt agents.Runtime, dir string) (st rex.Started, in str
 // startup question on the screen goes to the chat with its answers as
 // buttons (see startup.go), and keeps the wait going, up to newExpiry. The
 // presses come through answers.
-func (d *daemon) awaitAgent(chat, thread int64, rt agents.Runtime, st rex.Started, token string, answers <-chan startupAnswer) {
-	name := format.Escape(runtimeName(rt))
+func (d *daemon) awaitAgent(chat, thread int64, a newAgent, st rex.Started, token string, answers <-chan startupAnswer) {
+	name, rt := format.Escape(a.name()), a.rt
 	start := time.Now()
 	deadline := start.Add(d.timing.NewAgentWait)
 	poll := time.NewTicker(d.timing.NewAgentPoll)

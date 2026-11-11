@@ -131,10 +131,13 @@ func (d *daemon) startup(ctx context.Context) error {
 // getMe checks the token, saves the bot's user name, and warns when topics
 // are off. It retries on network errors.
 func (d *daemon) getMe(ctx context.Context) error {
-	backoff := time.Second
+	var out outage
 	for {
 		me, err := d.tg.GetMe(ctx)
 		if err == nil {
+			if down, tries, ok := out.recovered(d.now()); ok {
+				d.log.Info("Telegram reachable again", "down", down.Round(time.Second), "failed_tries", tries)
+			}
 			d.botUser = me.Username
 			if e := d.st.Set(ctx, "bot_username", me.Username); e != nil {
 				d.log.Warn("save bot username", "err", e)
@@ -148,14 +151,16 @@ func (d *daemon) getMe(ctx context.Context) error {
 		if errors.As(err, &ae) && (ae.Code == 401 || ae.Code == 404) {
 			return fmt.Errorf("daemon: getMe: %w", err)
 		}
-		d.log.Warn("getMe failed; retrying", "err", err)
+		wait := out.fail(d.now(), err)
+		if out.fails == 1 {
+			d.log.Warn("getMe failed; retrying", "err", err)
+		} else {
+			d.log.Debug("getMe failed; retrying", "err", err, "tries", out.fails)
+		}
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-time.After(backoff):
-		}
-		if backoff < 30*time.Second {
-			backoff *= 2
+		case <-time.After(wait):
 		}
 	}
 }
@@ -164,10 +169,10 @@ func (d *daemon) getMe(ctx context.Context) error {
 // batch before it asks for the next one.
 func (d *daemon) pollLoop(ctx context.Context) {
 	offset := d.kvInt("tg_offset")
-	backoff := time.Second
+	var out outage
 	allowed := []string{"message", "edited_message", "callback_query"}
 	for ctx.Err() == nil {
-		ups, err := d.tg.GetUpdates(ctx, offset, 50, allowed)
+		ups, err := d.tg.GetUpdates(ctx, offset, longPollSeconds, allowed)
 		if err != nil {
 			if ctx.Err() != nil {
 				return
@@ -176,16 +181,20 @@ func (d *daemon) pollLoop(ctx context.Context) {
 				d.emit(evFatal{errors.New("daemon: another program polls with the same bot token (409 Conflict)")})
 				return
 			}
-			d.log.Warn("getUpdates failed", "err", err)
-			if !sleepCtx(ctx, backoff) {
-				return
+			wait := out.fail(d.now(), err)
+			if out.fails == 1 {
+				d.log.Warn("getUpdates failed", "err", err)
+			} else {
+				d.log.Debug("getUpdates failed", "err", err, "tries", out.fails)
 			}
-			if backoff < 30*time.Second {
-				backoff *= 2
+			if !sleepCtx(ctx, wait) {
+				return
 			}
 			continue
 		}
-		backoff = time.Second
+		if down, tries, ok := out.recovered(d.now()); ok {
+			d.log.Info("Telegram reachable again", "down", down.Round(time.Second), "failed_tries", tries)
+		}
 		if len(ups) == 0 {
 			continue
 		}
@@ -203,6 +212,67 @@ func (d *daemon) pollLoop(ctx context.Context) {
 			return
 		}
 	}
+}
+
+// longPollSeconds is the getUpdates long-poll time. It is short, so a poll
+// on a connection that died silently ends soon.
+const longPollSeconds = 25
+
+// Pauses between failed Telegram calls. After a network failure the next
+// try comes fast, because the route often returns within seconds. After an
+// answer with an error, Telegram is reachable and gets more time.
+const (
+	netRetryBase = 500 * time.Millisecond
+	netRetryCap  = 2 * time.Second
+	apiRetryBase = time.Second
+	apiRetryCap  = 30 * time.Second
+)
+
+// retryDelay returns the pause before try number fails+1, given that the
+// last `fails` calls (fails >= 1) in a row failed with err. A 429 waits at
+// least its retry_after.
+func retryDelay(err error, fails int) time.Duration {
+	n := min(max(fails-1, 0), 10)
+	switch telegram.Classify(err) {
+	case telegram.ClassNotSent, telegram.ClassUnknownOutcome:
+		var ae *telegram.APIError
+		if !errors.As(err, &ae) { // a 5xx answer is an API error too
+			return min(netRetryBase<<n, netRetryCap)
+		}
+	}
+	d := min(apiRetryBase<<n, apiRetryCap)
+	var ae *telegram.APIError
+	if errors.As(err, &ae) && ae.RetryAfter > d {
+		d = ae.RetryAfter
+	}
+	return d
+}
+
+// outage tracks a run of failed calls to Telegram, to log it once when it
+// starts and once when it ends.
+type outage struct {
+	fails int
+	since time.Time
+}
+
+// fail records a failure and returns the pause before the next try.
+func (o *outage) fail(now time.Time, err error) time.Duration {
+	if o.fails == 0 {
+		o.since = now
+	}
+	o.fails++
+	return retryDelay(err, o.fails)
+}
+
+// recovered reports the length and the failed tries of the outage that just
+// ended, and resets it. ok is false when there was none.
+func (o *outage) recovered(now time.Time) (down time.Duration, tries int, ok bool) {
+	if o.fails == 0 {
+		return 0, 0, false
+	}
+	down, tries = now.Sub(o.since), o.fails
+	*o = outage{}
+	return down, tries, true
 }
 
 func sleepCtx(ctx context.Context, d time.Duration) bool {

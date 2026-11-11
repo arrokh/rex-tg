@@ -5,11 +5,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
 	"rex-tg/internal/format"
 	"rex-tg/internal/registry"
+	"rex-tg/internal/rex"
 	"rex-tg/internal/sender"
 	"rex-tg/internal/store"
 	"rex-tg/internal/telegram"
@@ -190,6 +192,9 @@ func (d *daemon) rename(th store.Thread, conv store.Conversation) {
 			if err := d.st.SetThreadName(d.ctx, th.ID, name); err != nil {
 				d.log.Warn("rename topic", "err", err)
 			}
+			if th.Status != store.ThreadOffline {
+				d.syncTab(conv, name)
+			}
 		case telegram.ClassThreadNotFound:
 			d.emit(evSender{sender.Event{Kind: sender.ThreadGone, ThreadID: th.ID}}) // the user deleted it
 		default:
@@ -198,6 +203,44 @@ func (d *daemon) rename(th store.Thread, conv store.Conversation) {
 			}
 		}
 	})
+}
+
+// syncTab gives the Rex tab of an agent the name of its topic (worker), so
+// a tab and its topic keep one name. Only tabs of the session for /new
+// (rex.new_session) are renamed: rex-tg made them, and the other tabs are
+// the user's. A failure is only logged: the next rename of the topic tries
+// again.
+func (d *daemon) syncTab(conv store.Conversation, name string) {
+	label := cleanLabel(name)
+	want := strings.TrimSpace(d.cfg.Rex.NewSession)
+	if label == "" || want == "" {
+		return
+	}
+	p, ok, err := d.st.PaneByConversation(d.ctx, conv.ID)
+	if err != nil || !ok || p.Session == "" || p.Block == "" || !p.GoneAt.IsZero() {
+		return
+	}
+	sessions, err := d.rx.Sessions(d.ctx)
+	if err != nil {
+		d.log.Warn("rename tab: list sessions", "err", err)
+		return
+	}
+	i := slices.IndexFunc(sessions, func(s rex.Session) bool { return s.ID == p.Session })
+	if i < 0 || !strings.EqualFold(strings.TrimSpace(sessions[i].Label), want) {
+		return
+	}
+	blocks, err := d.rx.Blocks(d.ctx, p.Session)
+	if err != nil {
+		d.log.Warn("rename tab: list panes", "err", err)
+		return
+	}
+	j := slices.IndexFunc(blocks, func(b rex.Block) bool { return b.ID == p.Block })
+	if j < 0 || blocks[j].WindowID == "" {
+		return
+	}
+	if err := d.rx.RenameWindow(d.ctx, p.Session, blocks[j].WindowID, label); err != nil {
+		d.log.Warn("rename tab", "window", blocks[j].WindowID, "err", err)
+	}
 }
 
 // topicOffline shows in the topic that its agent stopped: a notice that says
