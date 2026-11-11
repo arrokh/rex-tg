@@ -346,6 +346,83 @@ func TestUnknownBlockIgnored(t *testing.T) {
 	}
 }
 
+// Claude Code saves a long paste wrapped in <pasted_content id="…"> tags (seen
+// live). The prompt text is what was pasted, without the tags: rex-tg pastes
+// long Telegram messages, and the echo check compares the prompt with the
+// message it typed.
+func TestPastedTextIsUnwrapped(t *testing.T) {
+	const pre = `{"type":"user","uuid":"u1","sessionId":"S","timestamp":"2026-11-11T10:00:00.000Z","message":{"role":"user","content":`
+	cases := []struct {
+		name, content, want string
+	}{
+		{"only a paste", `"\n\n<pasted_content id=\"b2ba\">\nline one\n\nline two\n</pasted_content id=\"b2ba\">\n"`, "line one\n\nline two"},
+		{"text around it", `"see this:\n\n<pasted_content id=\"a1\">\nX\n</pasted_content id=\"a1\">\nthanks"`, "see this:\n\nX\nthanks"},
+		{"two pastes", `"<pasted_content id=\"a1\">\nA\n</pasted_content id=\"a1\"> and <pasted_content id=\"b2\">\nB\n</pasted_content id=\"b2\">"`, "A and B"},
+		{"a tag inside the paste stays", `"<pasted_content id=\"a1\">\nkeep <pasted_content id=\"zz\">q</pasted_content id=\"zz\"> as text\n</pasted_content id=\"a1\">"`, `keep <pasted_content id="zz">q</pasted_content id="zz"> as text`},
+		{"an unclosed tag stays", `"show <pasted_content id=\"a1\"> as text"`, `show <pasted_content id="a1"> as text`},
+		{"a block list", `[{"type":"text","text":"<pasted_content id=\"c3\">\nhi\n</pasted_content id=\"c3\">"}]`, "hi"},
+		{"an empty id stays", `"<pasted_content id=\"\">x</pasted_content id=\"\">"`, `<pasted_content id="">x</pasted_content id="">`},
+		{"with a reminder", `"<pasted_content id=\"e5\">\nhi\n</pasted_content id=\"e5\">\n\n<system-reminder>ctx</system-reminder>"`, "hi"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			evs, err := claude.New().ParseLine([]byte(pre+c.content+`}}`), agents.LineContext{SessionID: "S"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got string
+			for _, e := range evs {
+				if e.Kind == agents.UserPrompt {
+					got = e.Text
+				}
+			}
+			if got != c.want {
+				t.Fatalf("prompt = %q, want %q", got, c.want)
+			}
+		})
+	}
+	t.Run("a queued prompt", func(t *testing.T) {
+		line := `{"type":"attachment","uuid":"q1","sessionId":"S","timestamp":"2026-11-11T10:00:00.000Z","attachment":{"type":"queued_command","prompt":"<pasted_content id=\"d4\">\nqueued\n</pasted_content id=\"d4\">","humanTurn":true}}`
+		evs, err := claude.New().ParseLine([]byte(line), agents.LineContext{SessionID: "S"})
+		if err != nil || len(evs) != 1 || evs[0].Text != "queued" {
+			t.Fatalf("events = %+v, err = %v; want one prompt %q", evs, err, "queued")
+		}
+	})
+}
+
+// Claude Code writes a background task's notification, and a message from
+// another session, as a user line (seen live). Its "origin" (or, for a queued
+// line, "commandMode") tells it apart from what a person typed: such a prompt
+// is Auto. Older lines without these fields are Auto when they start with
+// <task-notification>.
+func TestAutomaticPrompts(t *testing.T) {
+	const ts = `"uuid":"u1","sessionId":"S","timestamp":"2026-11-11T10:00:00.000Z"`
+	cases := []struct {
+		name, line string
+		auto       bool
+	}{
+		{"typed", `{"type":"user",` + ts + `,"origin":{"kind":"human"},"message":{"role":"user","content":"hello"}}`, false},
+		{"no origin", `{"type":"user",` + ts + `,"message":{"role":"user","content":"hello"}}`, false},
+		{"task notification", `{"type":"user",` + ts + `,"origin":{"kind":"task-notification","producer":"session-task"},"message":{"role":"user","content":"<task-notification>\n<task-id>b1</task-id>\n</task-notification>"}}`, true},
+		{"peer", `{"type":"user",` + ts + `,"origin":{"kind":"peer"},"message":{"role":"user","content":"from another session"}}`, true},
+		{"old notification", `{"type":"user",` + ts + `,"message":{"role":"user","content":"<task-notification>\n<task-id>b1</task-id>\n</task-notification>"}}`, true},
+		{"queued typed", `{"type":"attachment",` + ts + `,"attachment":{"type":"queued_command","prompt":"also do X","commandMode":"prompt","origin":{"kind":"human"}}}`, false},
+		{"queued notification", `{"type":"attachment",` + ts + `,"attachment":{"type":"queued_command","prompt":"<task-notification>\n<task-id>b2</task-id>\n</task-notification>","commandMode":"task-notification","origin":{"kind":"task-notification"}}}`, true},
+		{"queued notification without origin", `{"type":"attachment",` + ts + `,"attachment":{"type":"queued_command","prompt":"<task-notification>x</task-notification>","commandMode":"task-notification"}}`, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			evs, err := claude.New().ParseLine([]byte(c.line), agents.LineContext{SessionID: "S"})
+			if err != nil || len(evs) != 1 || evs[0].Kind != agents.UserPrompt {
+				t.Fatalf("events = %+v, err = %v; want one prompt", evs, err)
+			}
+			if evs[0].Auto != c.auto {
+				t.Fatalf("Auto = %v, want %v", evs[0].Auto, c.auto)
+			}
+		})
+	}
+}
+
 // <system-reminder> blocks in a user line are context for the model, not part
 // of what the user typed: they never reach the prompt text.
 func TestRemindersAreNotPartOfThePrompt(t *testing.T) {

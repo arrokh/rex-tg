@@ -213,7 +213,7 @@ func (t *Tracker) Event(ev agents.Event, echo bool, now time.Time) []Action {
 			t.startTurn(now)
 		}
 		t.unblock()
-		if !echo && t.set.ShowMacPrompts {
+		if !echo && !ev.Auto && t.set.ShowMacPrompts {
 			out = t.post(out, Post{Key: ev.Key, Kind: "prompt", Markdown: macPrompt(r(ev.Text))})
 		}
 

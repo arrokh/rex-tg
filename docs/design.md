@@ -425,7 +425,7 @@ Set per topic with `/mode`:
 | `⏳ Waiting until the agent is idle` | your message is queued (D11), with buttons `⚡ Send now` and `✖ Cancel`. The notice is deleted when the message leaves the queue: it was typed (👀, then 👍), refused or expired (👎 and a reply that says why), or typing failed. `✖ Cancel` turns it into `✖ Cancelled`. |
 | `⛔ Not sent: the pane now runs zsh, not pi.` | the safety check refused it |
 | "typing…" | the agent is working; refreshed about every 5 seconds, only in the topic you used last |
-| `💻 You (on Mac): …` | a prompt you typed in the pane on the Mac |
+| `💻 You (on Mac): …` | a prompt you typed in the pane on the Mac. A prompt that the agent's own program wrote, such as Claude Code's notice that a background task ended, is not shown. |
 | `── pi · new session ──` | a new session took over the topic |
 
 Telegram allows only a fixed set of reaction emoji. Hermes uses 👀, 👍, and 👎. ✅ is probably not in the set, so rex-tg does not use it as a reaction. Spike S1 checks the set.
@@ -679,6 +679,7 @@ Echo:
 
 - rex-tg matches the prompt in the transcript to your message by a hash of the normalized text, within 10 minutes.
 - If no hash matches, the first prompt within 30 seconds of the delivery counts as the echo when its normalized text starts with the same 40 characters. Agents sometimes change a prompt slightly when they store it.
+- Both checks compare the texts without paths to image files (`.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`) and without `[Image #N]` markers. For a photo from Telegram, rex-tg types the caption and the file's path. Claude Code attaches the image and stores `[Image #N]` and the caption instead of the path (seen live, 2026-11-12). An agent that does not attach images keeps the path.
 - An echo is not posted to the topic again. It only turns 👀 into 👍.
 - A message sent during a run has no `user` line in Claude Code. Its echo is the `queued_command` attachment (spike S2). Codex writes a `user` line and a `UserMessage` item for it. pi writes a `user` line after the tool result.
 

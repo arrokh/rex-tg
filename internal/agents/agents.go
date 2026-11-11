@@ -139,6 +139,11 @@ type Event struct {
 	Text  string
 	Phase Phase
 	Tool  *Tool
+	// Auto marks a UserPrompt that no person typed: the agent's own program
+	// wrote it, such as a background task's notification. It starts a turn
+	// like a prompt, but it is never posted as typed on the Mac and never
+	// matched with a message from Telegram.
+	Auto bool
 }
 
 // Header is the identity of a session, read from the start of its transcript.

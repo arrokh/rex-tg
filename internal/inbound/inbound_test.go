@@ -313,6 +313,15 @@ func TestMatchEcho(t *testing.T) {
 		{"hash beats earlier prefix", p40 + "Q", []inbound.Delivered{d(1, p40+"R", 20*time.Second), d(2, p40+"Q", 5*time.Second)}, 2, true},
 		{"no items", "x", nil, 0, false},
 		{"empty prompt", "", []inbound.Delivered{d(1, "", time.Second)}, 1, true},
+		// Claude Code turns a pasted image path into an "[Image #N]" marker
+		// at the start (seen live); an agent that does not attach images keeps the
+		// path. Both are the photo.
+		{"claude image marker", "[Image #3]the red button", []inbound.Delivered{d(1, "the red button\n/tmp/up/7/12-photo.jpg", time.Second)}, 1, true},
+		{"claude image without caption", "[Image #1]", []inbound.Delivered{d(1, "/tmp/up/7/5-photo.jpg", time.Second)}, 1, true},
+		{"image path kept", "look\n/tmp/up/7/5-shot.PNG", []inbound.Delivered{d(1, "look\n/tmp/up/7/5-shot.PNG", time.Second)}, 1, true},
+		{"image marker with a long caption", "[Image #2]" + p40 + "!", []inbound.Delivered{d(1, p40+"?\n/tmp/up/7/6-photo.jpg", 5*time.Second)}, 1, true},
+		{"other file paths still count", "read /tmp/up/7/9-a.pdf", []inbound.Delivered{d(1, "read /tmp/up/7/9-b.pdf", time.Second)}, 0, false},
+		{"a different caption", "[Image #3]yes", []inbound.Delivered{d(1, "no\n/tmp/up/7/12-photo.jpg", time.Second)}, 0, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -454,7 +454,9 @@ func (d *daemon) onBatch(ev evBatch) {
 			echo := false
 			switch e.Kind {
 			case agents.UserPrompt:
-				echo = d.echo(th, e, now)
+				if !e.Auto { // no person typed it, so it is no Telegram message
+					echo = d.echo(th, e, now)
+				}
 				d.signal(conv.ID, registry.Signal{State: "working", Kind: "prompt", At: at})
 			case agents.AssistantText:
 				if e.Phase == agents.Final {

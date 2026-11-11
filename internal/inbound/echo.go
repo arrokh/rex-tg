@@ -3,6 +3,7 @@ package inbound
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -39,9 +40,27 @@ func Normalize(s string) string {
 	return strings.TrimSuffix(strings.Join(out, "\n"), "\n")
 }
 
-// Hash returns the hex SHA-256 of Normalize(s).
+var (
+	// imageMarker is how Claude Code shows an image it attached from a
+	// pasted path, at the start of the prompt (seen live).
+	imageMarker = regexp.MustCompile(`\[Image #\d+\]`)
+	// imagePath is an absolute path to an image file. rex-tg types one for a
+	// photo from Telegram; Claude Code replaces it with an image marker.
+	imagePath = regexp.MustCompile(`(?i)/\S+\.(?:png|jpe?g|gif|webp)\b`)
+)
+
+// echoText is s as the echo check compares it: without image paths and
+// image markers, so a photo matches whether the agent kept its path or
+// attached the image (Claude Code), and then normalized.
+func echoText(s string) string {
+	s = imageMarker.ReplaceAllString(s, "")
+	return Normalize(imagePath.ReplaceAllString(s, ""))
+}
+
+// Hash returns the hex SHA-256 of s as the echo check compares it: Normalize
+// after image paths and "[Image #N]" markers are removed.
 func Hash(s string) string {
-	sum := sha256.Sum256([]byte(Normalize(s)))
+	sum := sha256.Sum256([]byte(echoText(s)))
 	return hex.EncodeToString(sum[:])
 }
 
@@ -64,8 +83,9 @@ func prefix(s string) string {
 // MatchEcho finds the delivered message that a transcript prompt seen at
 // time at belongs to. It first looks for an equal hash among items delivered
 // in the 10 minutes before at (oldest first). Otherwise it takes the first
-// item delivered in the 30 seconds before at whose normalized body starts with
-// the same 40 characters as the normalized prompt. It returns the update ID.
+// item delivered in the 30 seconds before at whose body starts with the same
+// 40 characters as the prompt. Both compare the texts without image paths and
+// image markers (see Hash). It returns the update ID.
 func MatchEcho(prompt string, at time.Time, delivered []Delivered) (int64, bool) {
 	items := make([]Delivered, len(delivered))
 	copy(items, delivered)
@@ -80,12 +100,12 @@ func MatchEcho(prompt string, at time.Time, delivered []Delivered) (int64, bool)
 			return d.UpdateID, true
 		}
 	}
-	p := prefix(Normalize(prompt))
+	p := prefix(echoText(prompt))
 	if p == "" {
 		return 0, false
 	}
 	for _, d := range items {
-		if within(d, prefixWindow) && prefix(Normalize(d.Body)) == p {
+		if within(d, prefixWindow) && prefix(echoText(d.Body)) == p {
 			return d.UpdateID, true
 		}
 	}

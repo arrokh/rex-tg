@@ -97,8 +97,28 @@ type line struct {
 	IsMeta           bool            `json:"isMeta"`
 	IsCompactSummary bool            `json:"isCompactSummary"`
 	IsAPIError       bool            `json:"isApiErrorMessage"`
+	Origin           *origin         `json:"origin"`
 	Message          json.RawMessage `json:"message"`
 	Attachment       json.RawMessage `json:"attachment"`
+}
+
+// origin says who wrote a user line: "human" for a person, or, for example,
+// "task-notification" or "peer" (seen live). Older lines have none.
+type origin struct {
+	Kind string `json:"kind"`
+}
+
+// automatic reports whether a prompt line was written by Claude Code itself
+// or another session, not typed by a person. commandMode is the queued
+// line's mode ("prompt" when typed).
+func automatic(o *origin, commandMode, text string) bool {
+	if o != nil && o.Kind != "" && o.Kind != "human" {
+		return true
+	}
+	if commandMode != "" && commandMode != "prompt" {
+		return true
+	}
+	return strings.HasPrefix(text, "<task-notification>")
 }
 
 type message struct {
@@ -151,13 +171,19 @@ func (adapter) ParseLine(raw []byte, ctx agents.LineContext) ([]agents.Event, er
 	switch l.Type {
 	case "attachment":
 		var a struct {
-			Type   string `json:"type"`
-			Prompt string `json:"prompt"`
+			Type        string  `json:"type"`
+			Prompt      string  `json:"prompt"`
+			CommandMode string  `json:"commandMode"`
+			Origin      *origin `json:"origin"`
 		}
-		if len(l.Attachment) == 0 || json.Unmarshal(l.Attachment, &a) != nil || a.Type != "queued_command" || !isPrompt(a.Prompt) {
+		if len(l.Attachment) == 0 || json.Unmarshal(l.Attachment, &a) != nil || a.Type != "queued_command" {
 			return nil, nil
 		}
-		return []agents.Event{{Kind: agents.UserPrompt, Key: k.next(), At: at, Text: a.Prompt}}, nil
+		if text := strings.TrimSpace(unwrapPastes(a.Prompt)); isPrompt(text) {
+			return []agents.Event{{Kind: agents.UserPrompt, Key: k.next(), At: at, Text: text,
+				Auto: automatic(a.Origin, a.CommandMode, text)}}, nil
+		}
+		return nil, nil
 	case "custom-title":
 		if l.CustomTitle == "" {
 			return nil, nil
@@ -230,15 +256,17 @@ func (adapter) ParseLine(raw []byte, ctx agents.LineContext) ([]agents.Event, er
 				continue
 			}
 			// Claude Code adds <system-reminder> blocks to user lines; they
-			// are context for the model, not what the user typed.
-			if t := stripReminders(b.Text); t != "" {
+			// are context for the model, not what the user typed. It wraps
+			// a long paste in tags, which the user did not type either.
+			if t := strings.TrimSpace(unwrapPastes(stripReminders(b.Text))); t != "" {
 				texts = append(texts, t)
 			}
 		}
 	}
 	if !l.IsMeta && !l.IsCompactSummary {
 		if text := strings.Join(texts, "\n\n"); isPrompt(text) {
-			evs = append(evs, agents.Event{Kind: agents.UserPrompt, Key: k.next(), At: at, Text: text})
+			evs = append(evs, agents.Event{Kind: agents.UserPrompt, Key: k.next(), At: at, Text: text,
+				Auto: automatic(l.Origin, "", text)})
 		}
 	}
 	return evs, nil
@@ -260,6 +288,46 @@ func stripReminders(s string) string {
 		s = s[:i] + s[i+j+len(closing):]
 	}
 	return strings.TrimSpace(s)
+}
+
+// unwrapPastes replaces each complete span
+// <pasted_content id="X">…</pasted_content id="X"> in s with the text inside
+// it, without the newline after the opening tag and before the closing one.
+// Claude Code saves a long paste that way (seen live). The closing tag must
+// have the same id, so a tag inside the pasted text stays as it is, and so
+// does a tag without its closing tag.
+func unwrapPastes(s string) string {
+	const openTag, closeTag = `<pasted_content id="`, `</pasted_content id="`
+	var b strings.Builder
+	for {
+		i := strings.Index(s, openTag)
+		if i < 0 {
+			break
+		}
+		rest := s[i+len(openTag):]
+		q := strings.Index(rest, `">`)
+		id := ""
+		if q >= 0 {
+			id = rest[:q]
+		}
+		end := closeTag + id + `">`
+		j := -1
+		if q > 0 && !strings.ContainsAny(id, "\"<>\n") {
+			j = strings.Index(rest[q+2:], end)
+		}
+		if j < 0 { // not a complete span: keep the text and look further on
+			b.WriteString(s[:i+len(openTag)])
+			s = rest
+			continue
+		}
+		body := rest[q+2:]
+		inner := strings.TrimSuffix(strings.TrimPrefix(body[:j], "\n"), "\n")
+		b.WriteString(s[:i])
+		b.WriteString(inner)
+		s = body[j+len(end):]
+	}
+	b.WriteString(s)
+	return b.String()
 }
 
 var wrapperPrefixes = []string{

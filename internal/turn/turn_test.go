@@ -462,6 +462,21 @@ func TestMacPromptVersusEcho(t *testing.T) {
 	}
 }
 
+// A prompt that the agent's own program wrote (a background task's
+// notification) is not something the user typed on the Mac: it is never
+// posted, but it still starts a turn, so the agent's answer to it is sent.
+func TestAutoPromptStartsATurnUnseen(t *testing.T) {
+	x := newH(t, turn.Config{}, turn.Settings{Mode: "progress", ShowMacPrompts: true})
+	e := prompt("n1", "<task-notification>done</task-notification>")
+	e.Auto = true
+	if as := x.k.Event(e, false, at(0)); len(as) != 0 {
+		t.Fatalf("auto prompt posted: %+v", as)
+	}
+	if types(x.tick(0)) != "Typing" {
+		t.Errorf("auto prompt did not start a turn")
+	}
+}
+
 func TestTypingCadence(t *testing.T) {
 	x := newH(t, turn.Config{}, progress)
 	if got := x.tick(0); got != nil {
