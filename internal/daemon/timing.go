@@ -1,0 +1,41 @@
+package daemon
+
+import "time"
+
+// Timing holds the daemon's fixed waits. A zero field keeps its production
+// value. Tests shorten them, so they do not sleep through real-time waits;
+// nothing else should set them.
+type Timing struct {
+	Tick         time.Duration // main loop tick (250 ms)
+	Prep         time.Duration // least time between two readiness checks of a topic (500 ms)
+	TailPoll     time.Duration // transcript poll when no file event comes (500 ms)
+	TailerGrace  time.Duration // how long the tailer of an ended session keeps reading (2 s)
+	TailRestart  time.Duration // pause before a follower that failed starts again (5 s)
+	VimPoll      time.Duration // screen read interval after a vim key; vimPolls reads (40 ms)
+	VimRetry     time.Duration // pause before the next try after a vim editor did not react (3 s)
+	Spool        time.Duration // spool folder poll when no file event comes (1 s)
+	AnswerGrace  time.Duration // a turn's wait for its answer after idle (5 s)
+	StoppedGrace time.Duration // a turn's wait for the last lines after its agent stopped (2 s)
+	Typing       time.Duration // "typing…" refresh (5 s)
+}
+
+// withDefaults fills the zero fields with the production values.
+func (t Timing) withDefaults() Timing {
+	def := func(v *time.Duration, d time.Duration) {
+		if *v <= 0 {
+			*v = d
+		}
+	}
+	def(&t.Tick, 250*time.Millisecond)
+	def(&t.Prep, 500*time.Millisecond)
+	def(&t.TailPoll, 500*time.Millisecond)
+	def(&t.TailerGrace, 2*time.Second)
+	def(&t.TailRestart, 5*time.Second)
+	def(&t.VimPoll, 40*time.Millisecond)
+	def(&t.VimRetry, 3*time.Second)
+	def(&t.Spool, time.Second)
+	def(&t.AnswerGrace, 5*time.Second)
+	def(&t.StoppedGrace, 2*time.Second)
+	def(&t.Typing, 5*time.Second)
+	return t
+}

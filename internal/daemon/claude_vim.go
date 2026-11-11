@@ -82,7 +82,7 @@ func (d *daemon) settleClaudeVim(ctx context.Context, pane store.Pane) (pressed 
 		return false, errRetryBefore
 	}
 	for range vimPolls {
-		if !sleepCtx(ctx, vimPollEvery) {
+		if !sleepCtx(ctx, d.timing.VimPoll) {
 			return true, ctx.Err()
 		}
 		screen, err := d.rx.Capture(ctx, pane.Session, pane.Block)

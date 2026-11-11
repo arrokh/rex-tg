@@ -25,14 +25,6 @@ import (
 	"rex-tg/internal/turn"
 )
 
-const (
-	tickInterval = 250 * time.Millisecond
-	prepInterval = 500 * time.Millisecond
-	// tailerGrace is how long a tailer of a stopped session keeps reading, so
-	// the last lines written before the agent exited still arrive.
-	tailerGrace = 2 * time.Second
-)
-
 // Core events. Workers and producers send them with emit; only the core loop
 // handles them.
 type (
@@ -88,16 +80,31 @@ type (
 	evFatal      struct{ err error }
 )
 
+// rexClient is the part of the Rex client that the daemon calls itself (the
+// registry gets the full client). It is a *rex.Client, except in unit tests,
+// which use an in-memory pane.
+type rexClient interface {
+	Whoami(ctx context.Context) (rex.Whoami, error)
+	Events(ctx context.Context) (<-chan rex.Event, <-chan error)
+	Process(ctx context.Context, session, block string) (rex.Process, error)
+	Capture(ctx context.Context, session, block string) (string, error)
+	Paste(ctx context.Context, session, block, text string) error
+	SendKeys(ctx context.Context, session, block string, keys ...string) error
+}
+
+var _ rexClient = (*rex.Client)(nil)
+
 // daemon is the wiring. Fields marked "core" are touched only by the core
 // goroutine; the others are safe for concurrent use.
 type daemon struct {
 	cfg      config.Config
+	timing   Timing // fixed waits, with defaults filled in
 	home     string
 	log      *slog.Logger
 	now      func() time.Time
 	st       *store.Store
 	tg       *telegram.Client
-	rx       *rex.Client
+	rx       rexClient
 	reg      *registry.Registry
 	snd      *sender.Sender
 	adapters map[agents.Runtime]agents.Adapter
@@ -110,7 +117,7 @@ type daemon struct {
 
 	paused    atomic.Bool
 	answering sync.Map // alert ids whose answer is being sent
-	vimStuck  sync.Map // pane id -> the pi-vim label that showed no reaction to a key
+	vimStuck  sync.Map // pane id -> vimStuckMark: the vim label that showed no reaction to a key
 	botUser   string   // set before the workers start
 	scanQueue atomic.Bool
 
@@ -142,12 +149,12 @@ type daemon struct {
 }
 
 func newDaemon(cfg config.Config, home string, log *slog.Logger, now func() time.Time, st *store.Store,
-	tg *telegram.Client, rx *rex.Client, snd *sender.Sender, procStart func(int) (time.Time, error)) *daemon {
+	tg *telegram.Client, rx *rex.Client, snd *sender.Sender, procStart func(int) (time.Time, error), timing Timing) *daemon {
 	adapters := map[agents.Runtime]agents.Adapter{
 		agents.Pi: pi.New(), agents.Claude: claude.New(), agents.Codex: codex.New(),
 	}
 	d := &daemon{
-		cfg: cfg, home: home, log: log, now: now, st: st, tg: tg, rx: rx, snd: snd, adapters: adapters,
+		cfg: cfg, timing: timing, home: home, log: log, now: now, st: st, tg: tg, rx: rx, snd: snd, adapters: adapters,
 		events:      make(chan any, 256),
 		regq:        newJobQueue(),
 		tailers:     map[int64]*tailer{},
@@ -238,7 +245,7 @@ func (d *daemon) run(parent context.Context) error {
 }
 
 func (d *daemon) loop(ctx context.Context) error {
-	tick := time.NewTicker(tickInterval)
+	tick := time.NewTicker(d.timing.Tick)
 	defer tick.Stop()
 	for {
 		select {

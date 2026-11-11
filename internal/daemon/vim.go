@@ -5,7 +5,6 @@ import (
 	"errors"
 	"regexp"
 	"strings"
-	"time"
 
 	"rex-tg/internal/store"
 )
@@ -44,12 +43,12 @@ var piVimLabel = regexp.MustCompile(`^\s*─[─\s]*─\s+(NORMAL|INSERT|VISUAL|
 // prompt editor and its status lines sit there.
 const vimLines = 20
 
-// pi-vim timing. Each key is one step, and the screen is read after it.
+// pi-vim steps. Each key is one step, and the screen is read after it, every
+// Timing.VimPoll (so a key's effect may take about 600 ms to show). After
+// errVimStuck the next try comes after Timing.VimRetry.
 const (
-	vimMaxKeys   = 6                     // keys in one try
-	vimPolls     = 15                    // screen reads while waiting for a key's effect
-	vimPollEvery = 40 * time.Millisecond // so a key's effect may take about 600 ms to show
-	vimRetryWait = 3 * time.Second       // pause before the next try after errVimStuck
+	vimMaxKeys = 6  // keys in one try
+	vimPolls   = 15 // screen reads while waiting for a key's effect
 )
 
 // vimStuckNote is said once per message when pi-vim does not react.
@@ -188,7 +187,7 @@ func (d *daemon) settlePiVim(ctx context.Context, pane store.Pane, want vimMode)
 // editor. It returns was when no other label showed in time.
 func (d *daemon) waitVimChange(ctx context.Context, pane store.Pane, was vimState) (vimState, error) {
 	for range vimPolls {
-		if !sleepCtx(ctx, vimPollEvery) {
+		if !sleepCtx(ctx, d.timing.VimPoll) {
 			return was, ctx.Err()
 		}
 		screen, err := d.rx.Capture(ctx, pane.Session, pane.Block)

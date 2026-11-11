@@ -293,7 +293,7 @@ func (d *daemon) spoolLoop(ctx context.Context) {
 			})
 		}
 	}
-	tk := time.NewTicker(time.Second)
+	tk := time.NewTicker(d.timing.Spool)
 	defer tk.Stop()
 	for {
 		d.processSpool(ctx, dir)

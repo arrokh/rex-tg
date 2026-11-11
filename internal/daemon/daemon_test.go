@@ -159,10 +159,12 @@ func TestAlreadyRunning(t *testing.T) {
 	e.stop()
 
 	// The lock is free again after the first daemon ended.
+	before := len(e.tg.Calls("setMyCommands"))
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	done := make(chan error, 1)
 	go func() { done <- daemon.Run(ctx, e.options()) }()
-	e.waitFor("the third run to start", func() bool { return len(e.tg.Calls("setMyCommands")) > 1 })
+	e.waitFor("the third run to start", func() bool { return len(e.tg.Calls("setMyCommands")) > before })
 	cancel()
 	select {
 	case err := <-done:
@@ -504,6 +506,7 @@ func TestResendAfterUnknownSend(t *testing.T) {
 	e, p, thread := piTopic(t, "pi-resend")
 	p.User("go")
 	e.waitText(thread, "go")
+	e.waitText(thread, "⏱") // the progress message is out, so the next send is the answer
 	e.tg.FailNext("sendMessage", 1, 502, "bad gateway", 0)
 	p.Final("the lost answer")
 	notice := e.waitText(thread, "may not have arrived")
@@ -756,7 +759,11 @@ func working(e *env, p *piLog, thread int64) {
 }
 
 func TestRapidMessagesAreJoined(t *testing.T) {
-	e, _, thread := piTopic(t, "pi-join")
+	// The two messages must reach the daemon within the join window; under
+	// load, 50 ms is too short to be sure.
+	e, _, thread := piTopicCfg(t, "pi-join", func(e *env) {
+		e.cfg.InputSettings.JoinWindow.Duration = 500 * time.Millisecond
+	})
 	first := e.say(thread, "first part")
 	second := e.say(thread, "second part")
 	e.waitFor("one paste", func() bool { return len(e.pastes()) == 1 })
@@ -1235,9 +1242,9 @@ func TestVoiceNoteWithWhisper(t *testing.T) {
 	writeScript(t, filepath.Join(bin, "ffmpeg"), `for a; do last="$a"; done; cp "$5" "$last"`)
 	argsFile := filepath.Join(bin, "whisper.args")
 	writeScript(t, filepath.Join(bin, "whisper"), fmt.Sprintf(`echo "$@" > %s; echo " run the   tests "`, argsFile))
-	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
+	t.Setenv("PATH", bin+":"+os.Getenv("PATH")) // so this test does not run in parallel
 
-	e := newEnv(t)
+	e := newEnvSerial(t)
 	e.cfg.Voice.WhisperCLI = filepath.Join(bin, "whisper")
 	e.cfg.Voice.Model = "/models/base.bin"
 	e.cfg.Voice.Language = "en"
@@ -1645,8 +1652,10 @@ func TestProgressEditsAreSpacedByTheInterval(t *testing.T) {
 		t.Fatalf("only %d edits of the progress message", len(times))
 	}
 	for i := 1; i < len(times); i++ {
-		if gap := times[i].Sub(times[i-1]); gap < 450*time.Millisecond {
-			t.Errorf("edit %d came %v after the one before; want >= 500ms", i, gap)
+		// The fake server sees arrival times, which jitter under load; a
+		// broken spacing would show gaps of one tick (20 ms).
+		if gap := times[i].Sub(times[i-1]); gap < 350*time.Millisecond {
+			t.Errorf("edit %d came %v after the one before; want about 500ms", i, gap)
 		}
 	}
 }
@@ -1866,53 +1875,37 @@ func piVimMachine(e *env, start string) {
 	})
 }
 
-// From every pi-vim state, the message is typed: Escape cancels what is
-// pending, i enters INSERT, and only then the text is pasted.
+// The daemon brings pi-vim to INSERT before it pastes: here an Escape cancels
+// the pending command, i enters INSERT, and only then the text goes in. The
+// unit tests in vim_settle_test.go cover every other start state.
 func TestPiVimReachesInsertBeforeThePaste(t *testing.T) {
-	cases := []struct {
-		start string
-		keys  string
-	}{
-		{"NORMAL", "i enter"},
-		{"INSERT", "enter"},
-		{"NORMAL 3d_", "escape i enter"},
-		{"EX w_", "escape i enter"},
-		{"VISUAL 3_", "escape escape i enter"},
+	e, _, thread := piTopic(t, "pi-vim-pending")
+	piVimMachine(e, "NORMAL 3d_")
+	id := e.say(thread, "please check the docs")
+	e.waitFor("the paste", func() bool { return len(e.pastes()) == 1 })
+	e.waitFor("Enter", func() bool { return len(e.keys()) == 3 })
+	if got := strings.Join(e.keys(), " "); got != "escape i enter" {
+		t.Fatalf("keys = %q, want escape i enter", got)
 	}
-	for _, c := range cases {
-		t.Run(c.start, func(t *testing.T) {
-			e, _, thread := piTopic(t, "pi-vim-"+strings.NewReplacer(" ", "-", "_", "").Replace(c.start))
-			piVimMachine(e, c.start)
-			id := e.say(thread, "please check the docs")
-			e.waitFor("the paste", func() bool { return len(e.pastes()) == 1 })
-			want := strings.Fields(c.keys)
-			e.waitFor("Enter", func() bool { return len(e.keys()) == len(want) })
-			if got := strings.Join(e.keys(), " "); got != c.keys {
-				t.Fatalf("keys = %q, want %q", got, c.keys)
-			}
-			if c.start != "INSERT" {
-				var lastVimKey, pasteAt int
-				for i, k := range e.fake.Calls() {
-					args := strings.Join(k.Args, " ")
-					if strings.Contains(args, "send-key") && !strings.HasSuffix(args, " enter") {
-						lastVimKey = i
-					}
-					if strings.Contains(args, "block.event") {
-						pasteAt = i
-					}
-				}
-				if pasteAt < lastVimKey {
-					t.Errorf("the paste (call %d) came before the last vim key (call %d)", pasteAt, lastVimKey)
-				}
-			}
-			if got := e.fake.ScreenState(); got != "INSERT" {
-				t.Errorf("pi-vim ended in %q, want INSERT", got)
-			}
-			e.waitFor("the eyes reaction", func() bool { m, _ := e.message(id); return m.Reaction == "👀" })
-			if e.hasText(thread, "Not sent") {
-				t.Errorf("the message was refused:\n%s", e.dump())
-			}
-		})
+	var lastVimKey, pasteAt int
+	for i, k := range e.fake.Calls() {
+		args := strings.Join(k.Args, " ")
+		if strings.Contains(args, "send-key") && !strings.HasSuffix(args, " enter") {
+			lastVimKey = i
+		}
+		if strings.Contains(args, "block.event") {
+			pasteAt = i
+		}
+	}
+	if pasteAt < lastVimKey {
+		t.Errorf("the paste (call %d) came before the last vim key (call %d)", pasteAt, lastVimKey)
+	}
+	if got := e.fake.ScreenState(); got != "INSERT" {
+		t.Errorf("pi-vim ended in %q, want INSERT", got)
+	}
+	e.waitFor("the eyes reaction", func() bool { m, _ := e.message(id); return m.Reaction == "👀" })
+	if e.hasText(thread, "Not sent") {
+		t.Errorf("the message was refused:\n%s", e.dump())
 	}
 }
 
@@ -1924,7 +1917,7 @@ func TestPiVimThatDoesNotReactGetsNoMoreKeys(t *testing.T) {
 	e.fake.SetScreenMachine("NORMAL", map[string]string{"NORMAL": vimScreen("NORMAL"), "INSERT": vimScreen("INSERT")}, nil)
 	e.say(thread, "hello")
 	e.waitText(thread, "did not react")
-	e.never("a second key", 4*time.Second, func() bool { return len(e.keys()) > 1 })
+	e.never("a second key", 4*testTiming.VimRetry, func() bool { return len(e.keys()) > 1 })
 	if got := e.keys(); len(got) != 1 || got[0] != "i" {
 		t.Fatalf("keys = %v, want one i", got)
 	}
@@ -2175,44 +2168,6 @@ func TestCommandMenuIsSetForTheOwnersChat(t *testing.T) {
 	}
 }
 
-// Bringing pi-vim to INSERT can take a few seconds. If the agent leaves the
-// pane meanwhile, no further key and no paste go to the shell.
-func TestPiVimAgentLeavesDuringRecovery(t *testing.T) {
-	e, _, thread := piTopic(t, "pi-vim-leaves")
-	piVimMachine(e, "NORMAL 3d_")
-	// After the Escape, pi is gone and a shell is in front.
-	e.fake.SetScreenProcess("NORMAL", fmt.Sprintf(`{"foreground":{"pid":777,"name":"zsh","argv0":"-zsh","cwd":%q},"ancestors":[]}`, paneCWD))
-	id := e.say(thread, "rm -rf build")
-	e.waitFor("the thumbs down", func() bool { m, _ := e.message(id); return m.Reaction == "👎" })
-	e.waitText(thread, "Not sent")
-	if got := strings.Join(e.keys(), " "); got != "escape" {
-		t.Errorf("keys = %q, want only the Escape that was pressed while pi was in front", got)
-	}
-	if len(e.pastes()) != 0 {
-		t.Errorf("pasted into a shell: %v", e.pastes())
-	}
-}
-
-// Every pi-vim mode has a label. A screen without one after a key is a redraw
-// caught halfway or something covering the editor, so it is not taken as
-// INSERT: nothing is pasted until INSERT shows.
-func TestPiVimLabelGoneAfterAKeyIsNotInsert(t *testing.T) {
-	e, _, thread := piTopic(t, "pi-vim-blank")
-	screens := map[string]string{"NORMAL": vimScreen("NORMAL"), "BLANK": "some answer text\n", "INSERT": vimScreen("INSERT")}
-	e.fake.SetScreenMachine("NORMAL", screens, map[string]map[string]string{"NORMAL": {"i": "BLANK"}})
-	e.say(thread, "hello")
-	e.waitText(thread, "did not react")
-	if len(e.pastes()) != 0 {
-		t.Fatalf("pasted while the label was missing: %v", e.pastes())
-	}
-	e.fake.SetScreenState("INSERT")
-	e.waitFor("the paste", func() bool { return len(e.pastes()) == 1 })
-	e.waitFor("Enter", func() bool { return len(e.keys()) == 2 })
-	if got := strings.Join(e.keys(), " "); got != "i enter" {
-		t.Errorf("keys = %q, want i then enter", got)
-	}
-}
-
 // A transcript follower that stops on a read error is started again, so the
 // topic keeps showing the session.
 func TestFollowerStartsAgainAfterAReadError(t *testing.T) {
@@ -2224,7 +2179,7 @@ func TestFollowerStartsAgainAfterAReadError(t *testing.T) {
 	if err := os.Mkdir(p.Path, 0o755); err != nil { // reading a folder fails
 		t.Fatal(err)
 	}
-	time.Sleep(1500 * time.Millisecond) // the follower polls, fails, and stops
+	time.Sleep(4 * testTiming.TailPoll) // the follower polls, fails, and stops
 	if err := os.Remove(p.Path); err != nil {
 		t.Fatal(err)
 	}
@@ -2310,7 +2265,7 @@ func TestAgentDyingMidTurnEndsTheTurn(t *testing.T) {
 		return strings.Contains(m.Text, "🔴 Stopped")
 	})
 	before := len(e.tg.Calls("sendChatAction"))
-	e.never("typing after the stop", 6*time.Second, func() bool { return len(e.tg.Calls("sendChatAction")) > before })
+	e.never("typing after the stop", 3*testTiming.Typing, func() bool { return len(e.tg.Calls("sendChatAction")) > before })
 }
 
 // A replaced transcript longer than one batch is read again from byte 0 in

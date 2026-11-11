@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 )
 
 const claudeBoxScreen = "answer text\n╭──────────────────────────────╮\n│ >                            │\n╰──────────────────────────────╯\n"
@@ -41,6 +40,9 @@ func claudeTopic(t *testing.T) (*env, int64) {
 	return e, thread
 }
 
+// The daemon leaves Claude Code's VISUAL mode with one Escape before it pastes,
+// because Enter does not submit in VISUAL. The unit tests in
+// vim_settle_test.go cover the other modes and an editor that does not react.
 func TestClaudeVisualModeIsLeftBeforeThePaste(t *testing.T) {
 	e, thread := claudeTopic(t)
 	e.fake.SetScreenMachine("VISUAL", map[string]string{
@@ -68,75 +70,5 @@ func TestClaudeVisualModeIsLeftBeforeThePaste(t *testing.T) {
 	}
 	if !(escAt < pasteAt && pasteAt < enterAt) {
 		t.Errorf("order: escape %d, paste %d, enter %d", escAt, pasteAt, enterAt)
-	}
-}
-
-func TestClaudeVisualThatStaysGetsOneEscapeAndTheMessageWaits(t *testing.T) {
-	e, thread := claudeTopic(t)
-	e.fake.SetScreenMachine("VISUAL", map[string]string{
-		"VISUAL": claudeScreen("  -- VISUAL --"),
-		"NORMAL": claudeScreen("  ? for shortcuts"),
-	}, nil)
-	e.say(thread, "hello")
-	e.waitText(thread, "did not react")
-	e.never("a second key", 4*time.Second, func() bool { return len(e.keys()) > 1 })
-	if got := e.keys(); len(got) != 1 || got[0] != "escape" {
-		t.Fatalf("keys = %v, want one escape", got)
-	}
-	if len(e.pastes()) != 0 {
-		t.Fatalf("pasted while VISUAL stayed: %v", e.pastes())
-	}
-	e.fake.SetScreenState("NORMAL") // the editor caught up
-	e.waitFor("the paste", func() bool { return len(e.pastes()) == 1 })
-	e.waitFor("Enter", func() bool { return len(e.keys()) == 2 })
-	if got := e.keys()[1]; got != "enter" {
-		t.Errorf("keys = %v, want escape then enter", e.keys())
-	}
-	if n := e.countText(thread, "did not react"); n != 1 {
-		t.Errorf("the note was posted %d times, want once", n)
-	}
-}
-
-func TestClaudeWithoutIndicatorGetsPasteAndEnterOnly(t *testing.T) {
-	for name, screen := range map[string]string{
-		"normal":         claudeScreen("  ? for shortcuts"),
-		"insert":         claudeScreen("  -- INSERT --"),
-		"text in output": "-- VISUAL --\n" + claudeScreen("  ? for shortcuts"),
-		"not vim at all": "plain screen\n",
-	} {
-		t.Run(name, func(t *testing.T) {
-			e, thread := claudeTopic(t)
-			e.setScreen(screen)
-			e.say(thread, "hello")
-			e.waitFor("the paste", func() bool { return len(e.pastes()) == 1 })
-			e.waitFor("Enter", func() bool { return len(e.keys()) == 1 })
-			e.never("another key", 500*time.Millisecond, func() bool { return len(e.keys()) > 1 })
-			if got := e.keys(); got[0] != "enter" {
-				t.Errorf("keys = %v, want enter only", got)
-			}
-		})
-	}
-}
-
-// After the Escape, a screen without the prompt box (a redraw caught halfway)
-// does not count as "VISUAL is gone": nothing is pasted until the box shows
-// without the label.
-func TestClaudeVisualNeedsTheBoxBackBeforeThePaste(t *testing.T) {
-	e, thread := claudeTopic(t)
-	e.fake.SetScreenMachine("VISUAL", map[string]string{
-		"VISUAL": claudeScreen("  -- VISUAL --"),
-		"REDRAW": "answer text\n",
-		"NORMAL": claudeScreen("  ? for shortcuts"),
-	}, map[string]map[string]string{"VISUAL": {"escape": "REDRAW"}})
-	e.say(thread, "hello")
-	e.waitText(thread, "did not react")
-	if len(e.pastes()) != 0 {
-		t.Fatalf("pasted while the box was missing: %v", e.pastes())
-	}
-	e.fake.SetScreenState("NORMAL")
-	e.waitFor("the paste", func() bool { return len(e.pastes()) == 1 })
-	e.waitFor("Enter", func() bool { return len(e.keys()) == 2 })
-	if got := strings.Join(e.keys(), " "); got != "escape enter" {
-		t.Fatalf("keys = %q, want one escape, then enter", got)
 	}
 }

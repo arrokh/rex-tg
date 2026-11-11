@@ -47,7 +47,23 @@ type env struct {
 	done   chan error
 }
 
+// newEnv makes a test environment and runs the test in parallel with the
+// others: each one has its own folders, fake Rex, and fake Telegram server.
 func newEnv(t *testing.T) *env {
+	t.Helper()
+	if _, again := parallelTests.LoadOrStore(t, true); !again {
+		t.Parallel()
+	}
+	return newEnvSerial(t)
+}
+
+// parallelTests holds the tests that called t.Parallel, which may be called
+// only once per test.
+var parallelTests sync.Map
+
+// newEnvSerial makes a test environment for a test that must not run in
+// parallel, such as one that sets an environment variable.
+func newEnvSerial(t *testing.T) *env {
 	t.Helper()
 	home := t.TempDir()
 	cfg := config.Default(home)
@@ -105,7 +121,25 @@ func (e *env) options() daemon.Options {
 		Rex:       rex.New(e.fake.Bin()),
 		Telegram:  e.tg.Client(),
 		ProcStart: func(int) (time.Time, error) { return time.Now().Add(-time.Hour), nil },
+		Timing:    testTiming,
 	}
+}
+
+// testTiming shortens the daemon's fixed waits, so tests do not sleep through
+// production-length pauses. A test that checks one of these waits uses the
+// value from here.
+var testTiming = daemon.Timing{
+	Tick:         20 * time.Millisecond,
+	Prep:         50 * time.Millisecond,
+	TailPoll:     50 * time.Millisecond,
+	TailerGrace:  300 * time.Millisecond,
+	TailRestart:  300 * time.Millisecond,
+	VimPoll:      10 * time.Millisecond,
+	VimRetry:     300 * time.Millisecond,
+	Spool:        100 * time.Millisecond,
+	AnswerGrace:  600 * time.Millisecond,
+	StoppedGrace: 200 * time.Millisecond,
+	Typing:       500 * time.Millisecond,
 }
 
 // start runs the daemon in a goroutine.

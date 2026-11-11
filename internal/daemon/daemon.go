@@ -38,6 +38,9 @@ type Options struct {
 	Telegram  *telegram.Client
 	Now       func() time.Time
 	ProcStart func(pid int) (time.Time, error)
+	// Timing shortens the daemon's fixed waits in tests. Zero keeps the
+	// production values.
+	Timing Timing
 }
 
 // Run runs the daemon until ctx ends. It returns nil when ctx ended, and an
@@ -78,7 +81,7 @@ func Run(ctx context.Context, opt Options) error {
 	if err != nil {
 		return err
 	}
-	defer lock.Close()
+	defer releaseLock(lock)
 
 	st, err := store.Open(cfg.DBPath())
 	if err != nil {
@@ -100,7 +103,7 @@ func Run(ctx context.Context, opt Options) error {
 		Now:           opt.Now,
 		Logger:        log,
 	})
-	d := newDaemon(cfg, home, log, now, st, tg, rx, snd, opt.ProcStart)
+	d := newDaemon(cfg, home, log, now, st, tg, rx, snd, opt.ProcStart, opt.Timing.withDefaults())
 	return d.run(ctx)
 }
 
@@ -121,4 +124,13 @@ func acquireLock(path string) (*os.File, error) {
 	_ = f.Truncate(0)
 	_, _ = fmt.Fprintf(f, "%d\n", os.Getpid())
 	return f, nil
+}
+
+// releaseLock drops the instance lock, then closes its file. The unlock comes
+// first: a child process forked a moment ago (for a rex call) holds a copy of
+// the file until it runs exec, and a plain close would leave the lock with
+// that copy.
+func releaseLock(f *os.File) {
+	_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+	_ = f.Close()
 }

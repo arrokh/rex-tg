@@ -176,7 +176,10 @@ func findEntry(path, ev, text string) (logEntry, bool) {
 func TestDaemonEndToEnd(t *testing.T) {
 	// The dummy is built under the name that the registry detects.
 	for _, runtime := range []string{"pi", "claude", "codex"} {
-		t.Run(runtime, func(t *testing.T) { runFlow(t, runtime) })
+		t.Run(runtime, func(t *testing.T) {
+			t.Parallel() // each flow has its own Rex server, folders, and fakes
+			runFlow(t, runtime)
+		})
 	}
 }
 

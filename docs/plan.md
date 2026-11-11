@@ -292,8 +292,10 @@ Stop or roll back:
 | Unit | Agent state | The newest signal wins, a prompt overrides a stale `done`, and silence never counts as idle. |
 | Unit | Command routing | Bot commands, other `/` text, and `//name`. |
 | Unit | Safety checks | The action × checks table in design section 9.5, and stale alert buttons. |
+| Unit | Vim steps | pi-vim and Claude Code vim against an in-memory pane: every start mode, an editor that does not react, a missing mode label, and the safety check before each key. |
 | Integration | Telegram | A fake Bot API on `httptest.Server` that returns each error in design section 9.1, and timeouts. |
-| Integration | Rex | A fake `rex` binary (the test binary itself, run as a helper process) that returns recorded JSON and logs the input it gets. |
+| Integration | Rex | A fake `rex` binary (`rextest/fakerex`, built once per test run) that returns recorded JSON and logs the input it gets. |
+| Integration | Daemon | The whole daemon with the fake Bot API and the fake `rex`: one test per core flow and per piece of wiring (pairing, topics, typing, answers and progress, restarts, stop notices). The daemon's fixed waits are short in these tests (`daemon.Timing`), and the tests run in parallel. |
 | Integration | Installer | Hook files from fixtures: install, install again, and uninstall. The rest of each file must stay byte for byte the same. `uninstall` refuses when other entries follow a rex-tg entry in a Codex list. A file changed during an install is not overwritten. |
 | End to end | The whole daemon, with real Rex | A dummy agent in a real Rex pane that writes JSONL in each runtime's format and reads its input. It spends no model tokens. Build tag `e2e`. |
 | Crash | Delivery rules | Build the binary, kill it in each outbox, progress, and `typing` state, start it again, and count the messages and the typed inputs. |

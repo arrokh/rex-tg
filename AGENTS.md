@@ -9,11 +9,25 @@ Guidance for coding agents (Claude Code, Codex, pi, and others) that work in thi
 
 ## Build and check
 
-- The Go version is in `.tool-versions` (mise).
+- The Go version is in `.tool-versions` (mise). Use Go 1.27.3 or newer. In Go 1.26, the race detector can hang a forked child process on macOS. Such a child spins forever and keeps the test's files open, so `go test -race` fails at random.
 - `make check` runs gofmt, `go vet`, staticcheck, and `go test -race ./...`.
 - `go vet -tags e2e ./...` also checks the end-to-end tests.
 - `make e2e` runs the end-to-end tests against a real Rex server. They use isolated sockets and scratch sessions.
 - `make install` builds and installs `~/.local/bin/rex-tg`.
+
+## Test routine
+
+- While you work, run the tests of the package you change, for example `go test ./internal/daemon/` (about 25 seconds).
+- Before a commit, run `make check` once. Also run `make e2e` when the change touches the daemon, Rex, or an agent.
+- Check the real exit status of a test run. A pipe such as `go test … | tail` hides a failure.
+- Run tests many times (`-count=N`) only to hunt a flaky test, not as a routine check.
+
+## Writing tests
+
+- Test logic with unit tests: call the parser, the state machine, or the decision with fixed input. For example, `internal/daemon/vim_settle_test.go` drives the vim steps against an in-memory pane.
+- Daemon tests start the whole daemon with the fake Bot API and the fake `rex`. Use them for the core flows and for wiring, one test per flow, not one per case.
+- Never wait for a production delay in a test. The daemon's fixed waits are in `daemon.Timing`, and the daemon tests use the short values in `testTiming`.
+- Daemon tests run in parallel (`newEnv` calls `t.Parallel`). A test that changes the environment (`t.Setenv`) uses `newEnvSerial`.
 
 ## Rules that keep rex-tg safe
 

@@ -191,7 +191,7 @@ func (d *daemon) pump(now time.Time) {
 			continue
 		}
 		d.busy[tid] = true
-		d.nextPrep[tid] = now.Add(prepInterval)
+		d.nextPrep[tid] = now.Add(d.timing.Prep)
 		d.spawn(func() {
 			res := d.prepare(th, in, act)
 			d.emit(evPrepared{thread: tid, in: in, res: res})
@@ -492,7 +492,7 @@ func (d *daemon) onTyped(e evTyped) {
 		if err := d.st.SetInboundState(d.ctx, e.in.UpdateID, store.InboundQueued, e.in.Reason, now); err != nil {
 			d.log.Warn("typing: state", "err", err)
 		}
-		d.nextPrep[e.thread] = now.Add(vimRetryWait)
+		d.nextPrep[e.thread] = now.Add(d.timing.VimRetry)
 		if !d.vimNoticed[e.in.UpdateID] {
 			d.vimNoticed[e.in.UpdateID] = true
 			d.notice(e.thread, fmt.Sprintf("vim-stuck:%d", e.in.UpdateID), vimStuckNote)

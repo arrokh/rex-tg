@@ -312,6 +312,7 @@ func (e *crashEnv) noticeCount() int { return e.count(e.thread, "may not have ar
 
 // (a) kill -9 while the request that sends an answer is in flight.
 func TestCrashDuringSend(t *testing.T) {
+	t.Parallel()
 	e := newCrashEnv(t)
 	e.openTopic()
 
@@ -358,6 +359,7 @@ func TestCrashDuringSend(t *testing.T) {
 
 // (b) kill -9 while the daemon types a message into the pane.
 func TestCrashDuringTyping(t *testing.T) {
+	t.Parallel()
 	e := newCrashEnv(t)
 	e.openTopic()
 
@@ -383,6 +385,7 @@ func TestCrashDuringTyping(t *testing.T) {
 // (c) kill -9 while a progress message is shown, and the turn ends while the
 // daemon is down.
 func TestCrashDuringProgress(t *testing.T) {
+	t.Parallel()
 	e := newCrashEnv(t)
 	e.openTopic()
 

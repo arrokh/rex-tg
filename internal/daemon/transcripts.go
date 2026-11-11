@@ -17,11 +17,9 @@ import (
 )
 
 const (
-	tailPoll        = 500 * time.Millisecond
-	tailRestartWait = 5 * time.Second // after a follower stopped on a read error
-	partLimit       = 4000
-	maxTextParts    = 4
-	maxRichRunes    = 32768
+	partLimit    = 4000
+	maxTextParts = 4
+	maxRichRunes = 32768
 )
 
 // tailer follows the transcript of one session that belongs to a topic.
@@ -90,7 +88,7 @@ func (d *daemon) startTailer(conv store.Conversation, threadID int64, start regi
 func (d *daemon) follow(conv store.Conversation, threadID int64, pos tail.Position) {
 	d.gen++
 	fctx, cancel := context.WithCancel(d.ctx)
-	f := tail.Follow(fctx, conv.Transcript, pos, tail.Options{Poll: tailPoll})
+	f := tail.Follow(fctx, conv.Transcript, pos, tail.Options{Poll: d.timing.TailPoll})
 	tl := &tailer{conv: conv.ID, thread: threadID, gen: d.gen, f: f, cancel: cancel}
 	d.tailers[conv.ID] = tl
 	gen := tl.gen
@@ -103,7 +101,7 @@ func (d *daemon) follow(conv store.Conversation, threadID int64, pos tail.Positi
 		// after a pause, or the topic would stop showing the session.
 		if err := f.Err(); err != nil {
 			d.log.Warn("transcript follower stopped; starting it again", "conversation", conv.ID, "err", err)
-			if sleepCtx(d.ctx, tailRestartWait) {
+			if sleepCtx(d.ctx, d.timing.TailRestart) {
 				d.emit(evTailEnded{conv: conv.ID, gen: gen})
 			}
 		}
@@ -217,7 +215,7 @@ func (d *daemon) stopTailer(conv int64, graceful bool) {
 			delete(d.pending, conv)
 		} else if p.stopAt.IsZero() {
 			// The scan still runs: its follower stops after the grace period.
-			p.stopAt = d.now().Add(tailerGrace)
+			p.stopAt = d.now().Add(d.timing.TailerGrace)
 			d.pending[conv] = p
 		}
 	}
@@ -227,7 +225,7 @@ func (d *daemon) stopTailer(conv int64, graceful bool) {
 	}
 	if graceful {
 		if tl.stopAt.IsZero() {
-			tl.stopAt = d.now().Add(tailerGrace)
+			tl.stopAt = d.now().Add(d.timing.TailerGrace)
 		}
 		return
 	}
@@ -249,9 +247,12 @@ func (d *daemon) tracker(th store.Thread) *turn.Tracker {
 		return t
 	}
 	cfg := turn.Config{
-		ProgressDelay: d.cfg.Display.ProgressDelay.Duration,
-		EditInterval:  d.cfg.Display.ProgressEditInterval.Duration,
-		Redact:        format.Redact,
+		ProgressDelay:  d.cfg.Display.ProgressDelay.Duration,
+		EditInterval:   d.cfg.Display.ProgressEditInterval.Duration,
+		AnswerGrace:    d.timing.AnswerGrace,
+		StoppedGrace:   d.timing.StoppedGrace,
+		TypingInterval: d.timing.Typing,
+		Redact:         format.Redact,
 	}
 	set := d.settings(th)
 	var t *turn.Tracker

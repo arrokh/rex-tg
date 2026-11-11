@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -21,6 +22,10 @@ import (
 )
 
 const stopSessionID = "0197a1b2-c3d4-7e5f-8a6b-0123456789ab"
+
+// stopServers numbers the Rex servers of the stop tests, so tests that run in
+// parallel get sockets of their own.
+var stopServers atomic.Int32
 
 // stopEnv is the real daemon with a real, isolated Rex server and a fake
 // Telegram. The pane runs a small script that starts the dummy agent, waits
@@ -43,7 +48,7 @@ func newStopEnv(t *testing.T, think time.Duration) *stopEnv {
 	if out, err := exec.Command("go", "build", "-o", piBin, "./dummyagent").CombinedOutput(); err != nil {
 		t.Fatalf("build dummy agent: %v\n%s", err, out)
 	}
-	sock := startRex(t, "stop")
+	sock := startRex(t, fmt.Sprintf("stop%d", stopServers.Add(1)))
 
 	home := t.TempDir()
 	stateDir := t.TempDir()
@@ -219,6 +224,7 @@ func (e *stopEnv) countBot(sub string) int {
 
 // The agent exits while its pane stays open, in the middle of a turn.
 func TestStopAgentExitedMidTurn(t *testing.T) {
+	t.Parallel()
 	e := newStopEnv(t, 60*time.Second)
 	if n := e.topicName(); strings.HasPrefix(n, "🔴") {
 		t.Fatalf("topic starts with the stopped mark: %q", n)
@@ -254,6 +260,7 @@ func TestStopAgentExitedMidTurn(t *testing.T) {
 
 // The Rex pane is closed.
 func TestStopPaneClosed(t *testing.T) {
+	t.Parallel()
 	e := newStopEnv(t, 2*time.Second)
 
 	ctx := context.Background()
@@ -279,6 +286,7 @@ func TestStopPaneClosed(t *testing.T) {
 
 // The same session runs again in the same pane.
 func TestStopThenRunningAgain(t *testing.T) {
+	t.Parallel()
 	e := newStopEnv(t, 2*time.Second)
 
 	e.touch(e.exitFile)
