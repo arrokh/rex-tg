@@ -1,433 +1,156 @@
 # rex-tg
 
-rex-tg connects coding agents that run in Rex panes to Telegram.
+rex-tg lets you use your coding agents from Telegram.
 
-- In the main chat, `/agents` lists the agents that run in Rex panes.
-- Tap an agent. rex-tg opens a topic for its session.
-- `/new` starts an agent in a new Rex tab, in a folder you pick, and opens its topic.
-- A new session in the same pane, such as after the agent's `/clear` or `/new`, takes over the topic.
-- After a Rex restart, the topic follows the session when the agent resumes in its pane.
-- While the agent works, one progress message shows its tool calls. The answer then arrives as a normal message.
-- Text you write in a topic waits until the agent is idle. Then rex-tg types it into the pane.
-- Replies come from each agent's session file. Rex and the agent's hooks tell rex-tg whether the agent is working.
-- SQLite makes sure no reply is posted twice. A reply whose send got no answer is sent again only when the chat's message numbers prove that it never arrived.
+The agents run in Rex panes on your Mac. Each agent session gets its own Telegram topic:
 
-Supported agents: pi, Claude Code, and Codex, on this Mac. Claude Code started through [cux](https://github.com/inulute/cux) counts as Claude Code. Not supported: T3 Code panes, and Rex servers on other computers.
+- You write in the topic. rex-tg types your text into the agent's pane.
+- The agent works. One progress message shows its tool calls.
+- The agent answers. The answer arrives in the topic as a normal message.
 
-> **Status: version 1 is built.** Unit tests, daemon integration tests (with a fake Telegram and a fake Rex), and an end-to-end test (with a real, isolated Rex server and dummy agents) pass. Spike S1 is still open: nobody has tried rex-tg with a real Telegram client yet, because that needs your bot. Items marked **(unverified)** depend on that check.
+Supported agents: pi, Claude Code (also through [cux](https://github.com/inulute/cux)), and Codex, on this Mac.
+Not supported: T3 Code panes, and Rex servers on other computers.
 
-## Requirements
+**Status:** version 1 works. It is tested with a real bot and phone ([spike S1](docs/spikes/s1-telegram.md)). A few small checks are still open.
 
-- **macOS.** rex-tg uses the macOS Keychain, the `security` tool, and launchd.
-- **Rex**, the Rex Beta app, with its `rex` command. The spikes used Rex Beta 0.1.0 (build 1925).
-- **pi, Claude Code, or Codex.** Each agent runs in a Rex pane.
-- **Go 1.26.1, to build.** `.tool-versions` sets the version. mise installs it.
-- **A Telegram bot** from @BotFather, with Threaded Mode turned on.
-- **For voice notes only:** ffmpeg and whisper.cpp.
+## What you need
+
+- macOS (rex-tg uses the Keychain and launchd)
+- Rex Beta, with its `rex` command
+- pi, Claude Code, or Codex, running in a Rex pane
+- Go, to build (the version is in `.tool-versions`; `mise install` gets it)
+- A Telegram bot from @BotFather, with Threaded Mode on
+- For voice notes only: ffmpeg and whisper.cpp
 
 ## Setup
 
-Do the steps in order. Step 5 comes after step 4, because the daemon must run to read the pairing code.
+1. **Make the bot.** In @BotFather, send `/newbot` and keep the token. Treat it like an SSH key.
+   Then open Bot Settings > Threaded Mode and turn it on.
+2. **Build and install.**
+   ```sh
+   mise install
+   make install      # puts the binary in ~/.local/bin/rex-tg
+   ```
+3. **Store the token.** Run `rex-tg login` and paste the token. It goes into the Keychain.
+   rex-tg prints a pairing code. The code works for 10 minutes.
+4. **Install the hooks and the daemon.** Run `rex-tg install`.
+   This adds rex-tg hooks to Claude Code and Codex, a pi extension, and a launchd job.
+   It backs up each file first. Then start Codex once and trust the new hooks.
+5. **Pair.** Send `/start <code>` to your bot. Your account becomes the owner.
+   The bot answers no one else. If the code expired, run `rex-tg pair`.
+6. **Check.** Run `rex-tg doctor`. `✓` is good, `!` is a warning, `✗` is a failure.
 
-### 1. Create the bot
-
-1. Open @BotFather in Telegram. Send `/newbot`, and follow the steps. Keep the token. Treat it like an SSH key.
-2. Turn on Threaded Mode. In @BotFather, choose your bot. Open Bot Settings > Threaded Mode, and turn it on.
-
-Threaded Mode gives your private chat with the bot topics. rex-tg uses one topic for each agent session.
-
-### 2. Build and install the binary
-
-```sh
-mise install   # installs Go 1.26.1 from .tool-versions
-make install   # builds the binary and copies it to ~/.local/bin/rex-tg
-```
-
-If the shell cannot find `rex-tg`, add `~/.local/bin` to your `PATH`. The hooks and the launchd agent use the full path, so they do not need `PATH`.
-
-### 3. Store the token and get a pairing code
-
-```sh
-rex-tg login
-```
-
-1. macOS `security` asks for the token. Paste the token from @BotFather. It is not shown.
-2. rex-tg checks the token with Telegram, and stores it in the Keychain.
-3. It tells you if Threaded Mode is off.
-4. It prints a pairing code. Keep it for step 5. The code works for 10 minutes.
-
-`rex-tg login --token-stdin` reads the token from one line of standard input instead. Use it in scripts.
-
-### 4. Install the hooks and the launchd agent
-
-```sh
-rex-tg install
-```
-
-The command changes these files:
-
-- **Claude Code:** adds six rex-tg hook entries to `~/.claude/settings.json`. The events are `SessionStart`, `UserPromptSubmit`, `Stop`, `PermissionRequest`, `Notification`, and `SessionEnd`.
-- **Codex:** adds four rex-tg hook entries to the end of each event list in `~/.codex/hooks.json`. The events are `SessionStart`, `UserPromptSubmit`, `Stop`, and `PermissionRequest`.
-- **pi:** writes the extension `~/.pi/agent/extensions/rex-tg.ts`. The extension sends four pi events to rex-tg: `session_start`, `session_shutdown`, `agent_start`, and `agent_end`.
-- **launchd:** writes `~/Library/LaunchAgents/local.rex-tg.plist` and starts the daemon. launchd starts the daemon at login, and restarts it if it stops.
-
-Before it changes `settings.json` or `hooks.json`, rex-tg saves a backup of that file next to it. It keeps the 5 newest backups. Running the command again changes nothing.
-
-To change one agent only, add `--only pi`, `--only claude`, or `--only codex`. The launchd agent is still installed.
-
-Then start Codex once. Codex asks you to trust the new hook entries. Trust them. The trust prompt is not tested yet (spike S3).
-
-pi loads extensions from its folder. Whether pi loads this extension with no other step is not tested yet (spike S3).
-
-### 5. Pair your Telegram account
-
-Send the code from step 3 to your bot:
-
-```
-/start <code>
-```
-
-Send it after step 4. The daemon reads the code only while it runs.
-
-- The first valid code makes your account the owner.
-- The bot answers no one until pairing is done.
-- A code works once. It expires after 10 minutes. After it expires, run `rex-tg pair` for a new code.
-- After 5 wrong codes from one Telegram account, that account cannot pair with this code. Others still can, so a stranger cannot lock you out. Run `rex-tg pair` for a new code; it clears all counts.
-
-### 6. Check the setup
-
-```sh
-rex-tg doctor
-```
-
-Doctor prints one line for each check. `✓` means the check passed. `!` is a warning. `✗` is a failure. The checks cover:
-
-- the Rex CLI, and `rex whoami`
-- the bot token, `getMe`, and Threaded Mode
-- the database, and whether an owner is paired
-- the Claude Code and Codex hooks, and the pi extension
-- the launchd agent, and the folder modes
-- whether a daemon is running
+Details of each step: [docs/reference.md](docs/reference.md#setup-details).
 
 ## Daily use
 
+With Threaded Mode, every message is in a topic. A topic that is not linked to an agent works as the main chat.
+
 ### Main chat
-
-- `/agents` lists the agents in Rex panes. Tap one to open its topic. If the session already has a topic, you get a link to it. If you deleted that topic, a new one is made for the same session.
-- `/new` starts a coding agent in a new Rex tab. Tap the agent, then tap a recent folder or send a path such as `~/work/app`. When cux is installed, it is one of the agents. Every tab goes into one Rex session, `rex-tg` (set `[rex] new_session` to use another name). If there is no such session, rex-tg makes it. A tab is named after its folder and agent, such as `app · pi`. When the agent's topic gets its own name, such as the session name, the tab takes the same name. The agent starts as if you typed its name in a terminal, so your `~/.zshrc` applies. When the agent is ready, its topic opens. `/new pi ~/work/app` does it in one step.
-- If the new agent asks something before it starts, such as Claude Code's or Codex's "trust this folder?", the question comes to the chat with a button for each answer. A button moves the agent's cursor there and presses Enter, checking the screen after each key.
-- A topic is named after its Rex pane when you gave the pane a name, else after the agent's session name. The name follows changes of both.
-- When an agent exits or its pane closes, its topic says so (🔴), a running turn ends, and the topic's name gets a 🔴 until the agent runs again.
-- `/topics` lists the topics and their states.
-- `/status` shows the health of the daemon.
-- `/pause` and `/unpause` stop and allow all typing into panes. Use `/pause` if you lose your phone. (optional)
-- `/help` lists the commands.
-
-An agent marked `(guess)` has no hook report yet. rex-tg took the newest transcript in the agent's folder that changed after the agent started. An agent marked `(waiting for session)` has no known session file yet. It resolves at the agent's next prompt or turn end.
-
-### In a topic
-
-Text you write in a topic goes to the agent. The commands below are for rex-tg. Any other text that starts with `/` goes to the agent.
 
 | Command | What it does |
 | --- | --- |
-| `/info` | Shows the agent's state, and when rex-tg last heard a signal from it. |
-| `/screen [lines]` | Shows the pane's screen, with secrets removed. |
-| `/approve`, `/deny` | Answers the open permission prompt. |
-| `/esc` | Sends Escape to the pane. |
-| `/interrupt` | Stops the current turn with the agent's interrupt keys. |
-| `/key <keys>` | Presses the keys you name in the pane. |
-| `/force <text>` | Types text even when a prompt is open. It skips the prompt check. |
-| `/mode progress`, `block`, or `final` | Sets how replies appear in this topic. |
-| `/verbose on`, `full`, or `off` | Adds one message per tool call (`on`), or also the tool output (`full`). |
-| `/reasoning on` or `off` | Shows the agent's thinking text, when the agent stores it. |
-| `/resend [id]` | Sends again the parts of a reply that may not have arrived. Without an id: the newest such reply. The `🔁 Send again` button on the notice does the same. |
-| `/unlink` | Closes the topic in rex-tg. The topic stays in Telegram. |
-| `/mute` and `/unmute` | Sends answers without sound, or with sound again. |
+| `/agents` | Lists the agents in Rex panes. Tap one to open its topic. |
+| `/new` | Starts an agent in a new Rex tab. Pick the agent and a folder. `/new pi ~/work/app` does it in one step. |
+| `/topics` | Lists the topics and their states. |
+| `/status` | Shows the daemon's health. |
+| `/pause`, `/unpause` | Stops or allows all typing into panes. Use `/pause` if you lose your phone. |
 | `/help` | Lists the commands. |
 
-Other `/` text goes to the agent unchanged. Examples are `/compact`, `/model`, and `/clear`. To send an agent command that has the same name as a bot command, add a second slash. For example, `//help` sends `/help` to the agent, and `//new` sends `/new`. In a topic, `/new` itself starts another agent (see Main chat).
+### In a topic
 
-When you open a topic, the bot posts an intro card. The card shows the session, the pane, the folder, and the mode. Then the bot posts the last 3 final answers. The number is the `backfill` setting.
+Your text goes to the agent. Text that starts with `/` also goes to the agent (for example `/compact` or `/model`), except these rex-tg commands:
 
-When a new session takes over a topic, the bot posts a divider. For example: `── claude · new session (clear) ──`.
+| Command | What it does |
+| --- | --- |
+| `/info` | Shows the agent's state. |
+| `/screen [lines]` | Shows the pane's screen, with secrets removed. |
+| `/approve`, `/deny` | Answers the open permission prompt. |
+| `/esc`, `/interrupt`, `/key <keys>` | Sends Escape, stops the turn, or presses keys. |
+| `/force <text>` | Types text even when a prompt is open. |
+| `/mode progress\|block\|final` | Sets how replies appear. |
+| `/verbose on\|full\|off` | Shows each tool call (`on`), and also its output (`full`). |
+| `/reasoning on\|off` | Shows the agent's thinking, when the agent stores it. |
+| `/resend [id]` | Sends again a reply that may not have arrived. |
+| `/mute`, `/unmute` | Answers arrive without or with sound. |
+| `/unlink` | Closes the topic in rex-tg. |
 
-When the agent stops, the topic shows `🔴 agent stopped`. Messages you send there are refused, with a reason.
+To send an agent a command that has a bot command's name, use two slashes: `//help` sends `/help` to the agent.
 
-### Waiting and sending
+### What you see
 
-- If the agent is working, your message waits. The bot replies `⏳ Waiting until the agent is idle.` It shows two buttons: `⚡ Send now` and `✖ Cancel`. The notice goes away once the message is typed (👀, then 👍) or refused (👎 and a reply that says why).
-- Waiting messages go in the order you sent them. Each one is its own turn.
-- A waiting message expires after 30 minutes, and the bot tells you.
-- `⚡ Send now` types the message at once. All three agents steer. The message joins the current run.
-- Telegram splits long messages into parts. rex-tg joins parts that arrive close together into one prompt. The window is 300 ms, or 1500 ms for long messages.
+- **⏳ Waiting:** the agent is busy, so your message waits. It is typed when the agent is idle. `⚡ Send now` types it at once. `✖ Cancel` drops it. A waiting message expires after 30 minutes.
+- **Reactions on your message:** 👀 means typed into the pane. 👍 means the agent got it. 👎 means refused; a reply says why.
+- **Progress:** one message updates while the agent works. When the turn ends, it becomes one summary line.
+- **Answer:** a new message. A long answer comes in numbered parts, such as `(1/3)`.
+- **Images:** when an answer names an image file on your Mac, rex-tg sends the picture too.
+- **Permission prompts:** the bot shows the bottom of the pane, with one button per answer.
+- **💻 You (on Mac):** a prompt that you typed in the pane on the Mac.
+- **🔴:** the agent stopped, or its pane closed.
 
-### Reactions, progress, and answers
+### Photos, files, and voice
 
-- 👀 on your message: rex-tg typed it into the pane.
-- 👍 on your message: the agent's transcript recorded it.
-- 👎 on your message: it was refused or failed. A reply says why.
-- (unverified) Spike S1 has not yet checked on a real Telegram client that Telegram accepts these reactions.
-- `typing…` shows while the agent works. It appears in the topic you used last.
-- One progress message updates while the agent works. It appears after 2 seconds without an answer. It shows the latest commentary and the recent tool calls.
-- When the turn ends, the progress message becomes one summary line. The tool rows stay in a collapsed quote.
-- The answer arrives as a new message. Long answers are split into numbered parts, such as `(1/3)`.
-- When the final answer names image files that exist on your Mac (for example "saved to ~/Desktop/screen.png"), rex-tg sends the pictures to the topic right after the answer, up to 10 per answer. Set `send_images = false` to turn this off.
+- Photos and files (up to 20 MB) are saved on the Mac. rex-tg types their path and your caption into the pane.
+- Voice notes are turned into text, when voice is set up ([how](docs/reference.md#voice-notes)).
+- Stickers and videos are not supported. Edited messages are not sent again.
 
-### Permission prompts
+## Settings
 
-When an agent asks for permission, the bot posts the bottom of the pane. The post has one button for each answer. Tap a button to send its key to the pane. The buttons go away when the prompt ends. A button for an old prompt is refused.
+Settings go in `~/.config/rex-tg/config.toml`. The file is optional. Write only the keys you change.
+All keys and their defaults: [docs/reference.md](docs/reference.md#configuration).
 
-`/approve` and `/deny` answer the open prompt too.
-
-Questions that allow free text get a `✍ Other…` button. Your next message becomes the answer. This is not tested yet (spike S2).
-
-### Files, photos, and voice notes
-
-- Photos and files are downloaded up to the `max_upload_mb` limit, which is 20 MB by default. Their local path is typed into the pane, with your caption.
-- Voice notes are described below.
-- Stickers, videos, and other kinds get the reply `Only text is supported for now.`
-- Edited messages are not sent to the agent. The bot says so.
-- A reply to a bot message sends only your new text.
-
-## Configuration
-
-rex-tg reads `~/.config/rex-tg/config.toml`. The file is optional. A missing file means every setting has its default.
-
-- You only need the lines you change. A partial file works.
-- An unknown key is an error. rex-tg names the key.
-- A leading `~` is expanded in `rex.cli`, `state.dir`, `voice.whisper_cli`, and `agents.claude_exec_glob`. Use an absolute path for `voice.model`, because `~` is not expanded there.
-
-The example lists every key with its default. The `[voice]` keys and `rich_messages` turn on optional features.
+Settings that people change most:
 
 ```toml
-# ~/.config/rex-tg/config.toml
-#
-# Every key is shown with its default value. A missing file, or a missing
-# key, uses the default. An unknown key is an error.
-
 [telegram]
-api_base = "https://api.telegram.org"  # Telegram Bot API address. Keep the default.
-proxy = ""                              # Proxy for Telegram: http, https, socks5, or socks5h URL. Empty uses HTTPS_PROXY or ALL_PROXY.
-rate_per_second = 1                     # Messages per second for the whole chat.
-rate_burst = 5                          # Messages that may be sent at once above that rate.
-
-[rex]
-cli = "/Applications/Rex Beta.app/Contents/Helpers/Rex Server.rex/Contents/MacOS/rex"  # Path to the rex CLI. A leading ~ is expanded.
-scan_interval = "30s"                   # How often rex-tg scans the Rex panes, as a backup to Rex events.
-new_session = "rex-tg"                  # The Rex session where /new opens its tabs. rex-tg makes it when it is missing.
-
-[agents]
-pi_argv0 = ["pi"]                       # Process names (argv0) that mean a pi pane.
-claude_argv0 = ["claude", "cux"]        # Process names (argv0) that mean a Claude Code pane. cux runs claude as its child.
-claude_exec_glob = ["~/.local/share/claude/versions/*"]  # Claude Code program paths. A leading ~ is expanded.
-codex_names = ["codex"]                 # Process names that mean a Codex pane.
-
-[agents.pi]
-launch = ["pi"]                         # What /new runs, one word per item, as if typed in a terminal (~/.zshrc applies).
-paste_enter_delay = "300ms"             # Wait between the paste and the Enter key.
-interrupt_keys = ["escape"]             # Keys that stop the current turn (/interrupt).
-while_working = "steer"                 # What Enter does while the agent works: steer, queue, or unknown.
-answers = []                            # Fallback permission answers. pi has none.
-
-[agents.claude]
-launch = ["claude"]
-paste_enter_delay = "300ms"
-interrupt_keys = ["escape"]
-while_working = "steer"
-
-[[agents.claude.answers]]               # Fallback permission answers, used when the screen shows no numbered options.
-label = "1 Yes"
-keys = ["1"]
-
-[[agents.claude.answers]]
-label = "2 Always"
-keys = ["2"]
-
-[[agents.claude.answers]]
-label = "4 No"
-keys = ["4"]
-
-[[agents.claude.answers]]
-label = "Esc"
-keys = ["escape"]
-
-[agents.codex]
-launch = ["codex"]
-paste_enter_delay = "300ms"
-interrupt_keys = ["escape"]
-while_working = "steer"
-
-[[agents.codex.answers]]
-label = "Yes"
-keys = ["y"]
-
-[[agents.codex.answers]]
-label = "Always"
-keys = ["p"]
-
-[[agents.codex.answers]]
-label = "No"
-keys = ["escape"]
+proxy = "socks5h://127.0.0.1:40000"  # when your network blocks or drops Telegram
 
 [display]
-mode = "progress"                       # progress, block, or final.
-backfill = 3                            # Final answers to post when a topic opens.
-show_mac_prompts = true                 # Post prompts that you type in the pane on the Mac.
-progress_delay = "2s"                   # Wait before the progress message appears.
-progress_edit_interval = "2s"           # Least time between two edits of the progress message.
-rich_messages = false                   # Send final answers as Telegram rich messages.
-send_images = true                      # Send the image files that a final answer names.
-
-[input]
-queue_expiry = "30m"                    # A waiting message expires after this time.
-join_window = "300ms"                   # Messages that arrive this close together become one prompt.
-join_window_long = "1500ms"             # Join window when a message is 4000 characters or longer.
-busy_after_typing = "15s"               # After a message is typed, the pane counts as busy for up to this long.
-max_upload_mb = 20                      # Largest photo or file to download from Telegram.
-
-[voice]
-whisper_cli = ""                        # Path to whisper-cli. Empty turns voice notes off.
-model = ""                              # Path to a ggml model file. Use an absolute path.
-language = ""                           # Language code for whisper.cpp, such as "en".
-
-[state]
-dir = "~/.local/state/rex-tg"           # Database, spool, logs, and uploads. A leading ~ is expanded.
+mode = "progress"         # progress, block, or final
+show_mac_prompts = true   # show prompts typed on the Mac
+send_images = true        # send images that an answer names
 ```
 
-## Voice notes (optional)
+## Logs, stop, and uninstall
 
-Voice notes need ffmpeg and whisper.cpp.
+- `rex-tg status` shows topics, queued messages, and alerts.
+- The log is `~/.local/state/rex-tg/logs/rex-tg.log`.
+- Restart the daemon: `launchctl kickstart -k gui/$(id -u)/local.rex-tg`.
+- Stop the daemon: `launchctl bootout gui/$(id -u)/local.rex-tg`. Start it again with `rex-tg install`.
+- Remove rex-tg: `rex-tg uninstall`. It keeps the database and the token. See [Codex notes](docs/reference.md#uninstall).
 
-1. If you do not have ffmpeg, install it: `brew install ffmpeg`.
-2. Install whisper.cpp: `brew install whisper-cpp`. Homebrew names the formula `whisper.cpp`, and `whisper-cpp` is an alias for it. The install adds the `whisper-cli` command.
-3. Download a ggml model file from the whisper.cpp project. For example, `ggml-base.en.bin`.
-4. Find the command path: `which whisper-cli`.
-5. Set the three keys in `[voice]`:
+## Problems
 
-```toml
-[voice]
-whisper_cli = "/path/from/which/whisper-cli"
-model = "/Users/you/models/ggml-base.en.bin"   # use an absolute path; ~ is not expanded here
-language = "en"                                # a language code; the default is empty
-```
-
-When voice is on, rex-tg converts a voice note to 16 kHz WAV with ffmpeg. Then whisper-cli transcribes it. The bot replies with 🎤 and the text. The text then goes to the agent, like any text you write.
-
-When voice is off, the bot replies: `Voice notes need whisper.cpp; see the README.`
-
-## Rich messages (optional)
-
-Final answers can use Telegram's rich message format. To turn it on, set:
-
-```toml
-[display]
-rich_messages = true
-```
-
-The default is `false`. If Telegram rejects a rich message, rex-tg sends the text as plain text. If the text is longer than 4000 characters, rex-tg sends a `.md` file instead.
-
-## Status, logs, and stopping
-
-- `rex-tg status` shows the topics, the queued messages, and any open alerts. It only reads the database.
-- The daemon log is `~/.local/state/rex-tg/logs/rex-tg.log`. It holds one JSON object per line. The file rotates at 10 MB and keeps 3 old copies.
-- launchd writes `launchd.out.log` and `launchd.err.log` to the same folder.
-- To watch the log, run `tail -f ~/.local/state/rex-tg/logs/rex-tg.log`.
-- To stop the daemon, run `launchctl bootout gui/$(id -u)/local.rex-tg`. To start it again, run `rex-tg install`.
-
-## Uninstall
-
-```sh
-rex-tg uninstall
-```
-
-The command removes:
-
-- the hook entries that rex-tg added to Claude Code and Codex
-- the pi extension
-- the launchd agent
-
-It keeps the database, the file backups, and the bot token in the Keychain.
-
-Options:
-
-- `--only pi`, `--only claude`, or `--only codex` removes one agent's parts. The launchd agent stays.
-- `--keep-launchd` keeps the launchd agent.
-- `--force` removes Codex entries even if that moves the trust of other Codex hooks.
-
-**Codex trust rule.** Codex trusts each hook by its position in the list. If another Codex hook comes after a rex-tg entry, removing the rex-tg entry moves that hook. Codex then stops trusting it. So uninstall does not remove the Codex entries. It names the entries that would lose trust. To remove them anyway, run:
-
-```sh
-rex-tg uninstall --only codex --force
-```
-
-Then start Codex and trust the moved entries again.
-
-To delete the token from the Keychain, run `security delete-generic-password -s rex-tg -a bot-token`. To delete the database and the logs, remove `~/.local/state/rex-tg`.
-
-## Troubleshooting
-
-Start with `rex-tg doctor`.
+Start with `rex-tg doctor`. Common cases:
 
 | Problem | What to do |
 | --- | --- |
-| Threaded Mode is off | `login` and `doctor` say so. In @BotFather, choose your bot, then turn on Bot Settings > Threaded Mode. Check again with `rex-tg doctor`. |
-| Codex does not trust the hooks | Start Codex once, and trust the new rex-tg entries. Codex trusts each entry by its position. The prompt is not tested yet (spike S3). |
-| Rex is not running | All topics show as offline. rex-tg retries every 10 seconds. It never starts Rex. Start Rex Beta. If `doctor` cannot find the Rex CLI, set `[rex] cli`. |
-| No owner is paired | `doctor` reports it. Run `rex-tg pair`, then send `/start <code>` to the bot. |
-| "waiting for session" | rex-tg does not know the session file yet. It learns the file at the agent's next prompt or turn end. |
-| "message thread not found" | You deleted the topic in Telegram, so rex-tg closed it. Open the agent again with `/agents`. |
-| "This topic is not linked" | The topic is closed, or rex-tg did not create it. Open the agent again with `/agents`. |
-| "Checking whether it arrived" | Telegram did not confirm a reply. rex-tg checks the chat's message numbers: a reply that never arrived is sent again by itself, and the note goes. |
-| "may not have arrived" | The reply may be in the chat already, so rex-tg does not send it again by itself. Tap `🔁 Send again`, or send `/resend`, if it is missing. |
-| "may be in the input box without Enter" | The daemon stopped between the paste and Enter. Check the pane with `/screen`. rex-tg does not type the text again. |
-| `/new`: "exited with code 127" | The shell did not find the agent. Set its full path in `[agents.<name>] launch`, for example `launch = ["/opt/homebrew/bin/codex"]`. |
-| `/new`: "has not reported its session yet" | The agent may wait on its screen for something that is not a list of answers, such as a login. The message shows the screen. Deal with it on the Mac, then open the agent with `/agents`. |
-| `/new`: "did not react to a key" | The startup question did not move its cursor. Answer it on the Mac. rex-tg pressed nothing more. |
-| Telegram returns 409 Conflict | Another program uses the same bot token. Stop it. Only one daemon may poll Telegram. |
-| Telegram says the bot was blocked | Unblock the bot in Telegram. |
-| `doctor` reports unknown line types | The agent changed its transcript format. rex-tg ignores those lines. The adapter may need an update. |
-| "Not sent: the pane now runs ..." | The agent is no longer running in the pane. Start it again in the pane, or open another agent with `/agents`. |
+| Replies are slow, or come in bursts | Your network may drop Telegram. Set `[telegram] proxy` ([more](docs/reference.md#slow-or-unreliable-network)). |
+| "may not have arrived" | Tap `🔁 Send again`, or send `/resend`, if the reply is missing. |
+| "This topic is not linked" | Open the agent again with `/agents`. |
+| Telegram returns 409 Conflict | Another program uses the same bot token. Stop it. |
 
-### Slow or unreliable network
+More cases: [docs/reference.md](docs/reference.md#troubleshooting).
 
-Some networks drop the route to Telegram for a minute or two, again and again. rex-tg cannot get through while the route is down. It notices a dead connection in about 15 seconds. It retries every half second to 2 seconds, and it sends queued replies within seconds after the route returns. The log has one warning when a break starts, and one "Telegram reachable again" line when it ends.
+## Safety
 
-If your network blocks Telegram, set a proxy: `proxy = "socks5://127.0.0.1:1080"` under `[telegram]`. It takes an `http`, `https`, `socks5`, or `socks5h` URL. The log shows only its scheme and host, never a password. When the key is empty, rex-tg uses `HTTPS_PROXY` or `ALL_PROXY` from the environment of the daemon.
-
-## Privacy
-
-- Telegram chats with bots are not end-to-end encrypted. Replies pass through Telegram's servers.
-- rex-tg removes common secret formats before it sends text. These include API keys, GitHub and AWS keys, Slack tokens, private key blocks, JWTs, Telegram bot tokens, and Bearer tokens. This removal is best effort. It cannot catch every secret.
-- Progress rows show tool names and short labels. They never show tool output. `/verbose full` shows tool output.
-- The database keeps the text of messages. rex-tg deletes sent messages after 30 days.
-- The state folder and the spool folder can be read only by you.
-
-## Security
-
-- The bot can type into your terminals. Treat your Telegram account and the bot token like an SSH key.
-- Turn on two-step verification in Telegram.
-- Only the owner can use the bot. The owner is the account that paired. rex-tg ignores other users and other chats.
-- Before rex-tg types, it checks that the sender is the owner, the topic is live, the agent is running in front in the pane, and no permission prompt is open. `/force` skips the last check only.
-- The bot token is in the macOS Keychain. It is not in the config file or the logs.
-- rex-tg makes only outgoing connections, and it opens no port.
-- rex-tg never starts a Rex server.
+- The bot can type into your terminals. Protect your Telegram account (turn on two-step verification) and the bot token.
+- Only the owner can use the bot. rex-tg types only when the agent is in front in its pane and no prompt is open.
+- The token is only in the macOS Keychain. rex-tg opens no port.
+- Telegram bot chats are not end-to-end encrypted. rex-tg removes common secrets (API keys, tokens, private keys) before it sends text, but it cannot catch every secret.
+- Sent messages are deleted from the database after 30 days.
 
 ## Documents
 
 | Document | Contents |
 | --- | --- |
-| [docs/design.md](docs/design.md) | Architecture, flows, Telegram display, SQLite schema, delivery rules, security |
-| [docs/plan.md](docs/plan.md) | Decisions, traceability, spikes, phases, rollout, tests, risks |
-| [docs/implementation.md](docs/implementation.md) | The contract between the packages, and the CLI commands. For developers. |
-| [docs/agent-transcripts.md](docs/agent-transcripts.md) | JSONL formats and hooks of pi, Claude Code, and Codex |
-| [docs/spikes/](docs/spikes/) | Spike results. Spike S1 is still pending. |
+| [docs/reference.md](docs/reference.md) | Setup details, all settings, voice notes, uninstall, troubleshooting |
+| [docs/design.md](docs/design.md) | How rex-tg works: flows, display, database, delivery rules, security |
+| [docs/plan.md](docs/plan.md) | Decisions, spikes, phases, tests, risks |
+| [docs/implementation.md](docs/implementation.md) | Package contracts and CLI commands, for developers |
+| [docs/agent-transcripts.md](docs/agent-transcripts.md) | Transcript formats and hooks of pi, Claude Code, and Codex |
+| [docs/spikes/](docs/spikes/) | Results of the live tests |
 
 ## Development
 
-- `make build` builds `bin/rex-tg`.
-- `make test` runs the tests.
-- `make core` runs one daemon test per core flow, in a few seconds.
-- `make check` runs gofmt, go vet, staticcheck, and the tests with the race detector.
-- `make e2e` runs the end-to-end tests against a real, isolated Rex server.
-- `docs/implementation.md` says how the packages fit together. Keep it in step with `docs/design.md`.
+See [AGENTS.md](AGENTS.md). In short: `make check` before a commit, and `make e2e` when the daemon, Rex, or an agent changes.

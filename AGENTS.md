@@ -41,5 +41,5 @@ Guidance for coding agents (Claude Code, Codex, pi, and others) that work in thi
 
 ## Docs
 
-- Design: `docs/design.md`. Plan: `docs/plan.md`. Package contracts: `docs/implementation.md`. Findings from live tests: `docs/spikes/`.
+- User guide: `README.md` (short) and `docs/reference.md` (details and all settings). Design: `docs/design.md`. Plan: `docs/plan.md`. Package contracts: `docs/implementation.md`. Findings from live tests: `docs/spikes/`.
 - Write docs in plain, short sentences. Update them in the same change as the behavior they describe.
