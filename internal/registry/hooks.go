@@ -265,6 +265,17 @@ func (r *Registry) applyRecord(ctx context.Context, pane store.Pane, rec rex.Sta
 // the daemon was away, retries the guess for unresolved panes, takes in the
 // current Rex status of every agent, and marks panes gone that Rex no longer
 // lists. When Rex cannot be read completely, no pane is marked gone.
+// logScanErr logs a failed call of a scan. A session or block that closed
+// during the scan is normal (the next scan sees it gone), so it is a debug
+// line, not a warning.
+func (r *Registry) logScanErr(msg, key, id string, err error) {
+	if rex.IsGone(err) {
+		r.opt.Logger.Debug(msg, key, id, "err", err)
+		return
+	}
+	r.opt.Logger.Warn(msg, key, id, "err", err)
+}
+
 func (r *Registry) Scan(ctx context.Context) ([]Change, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -280,7 +291,7 @@ func (r *Registry) Scan(ctx context.Context) ([]Change, error) {
 		blocks, err := r.rx.Blocks(ctx, sess.ID)
 		if err != nil {
 			complete = false
-			r.opt.Logger.Warn("scan: list blocks", "session", sess.ID, "err", err)
+			r.logScanErr("scan: list blocks", "session", sess.ID, err)
 			continue
 		}
 		for _, b := range blocks {
@@ -288,7 +299,7 @@ func (r *Registry) Scan(ctx context.Context) ([]Change, error) {
 			proc, err := r.rx.Process(ctx, sess.ID, b.ID)
 			if err != nil {
 				complete = false
-				r.opt.Logger.Warn("scan: process", "block", b.ID, "err", err)
+				r.logScanErr("scan: process", "block", b.ID, err)
 				continue
 			}
 			ch, err := r.syncPane(ctx, sess.ID, b.ID, b.Label, proc, false, now)

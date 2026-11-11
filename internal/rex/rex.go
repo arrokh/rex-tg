@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -132,6 +133,14 @@ type Error struct {
 	Command string // for example "block call process"
 	Stderr  string // trimmed
 	Err     error
+}
+
+// IsGone reports an error that says the session or block is no longer there
+// ("... target ... not found"). Panes come and go, so a call can race with a
+// close; that is not a fault.
+func IsGone(err error) bool {
+	var re *Error
+	return errors.As(err, &re) && strings.Contains(re.Stderr, "target") && strings.Contains(re.Stderr, "not found")
 }
 
 func (e *Error) Error() string {

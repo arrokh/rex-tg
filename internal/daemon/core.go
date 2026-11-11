@@ -539,7 +539,11 @@ func (d *daemon) registryWorker(ctx context.Context) {
 			return
 		}
 		changes, err := j.run(ctx)
-		if err != nil && ctx.Err() == nil {
+		switch {
+		case err == nil || ctx.Err() != nil:
+		case rex.IsGone(err):
+			d.log.Debug("registry: the pane or session is gone", "err", err) // closed meanwhile
+		default:
 			d.log.Warn("registry", "err", err)
 		}
 		if len(changes) > 0 {

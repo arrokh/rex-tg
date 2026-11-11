@@ -3,6 +3,7 @@ package rex_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -300,5 +301,21 @@ func TestStderrCapped(t *testing.T) {
 	var re *rex.Error
 	if !errors.As(err, &re) || len(re.Stderr) > 510 {
 		t.Fatalf("stderr len %d", len(re.Stderr))
+	}
+}
+
+func TestIsGone(t *testing.T) {
+	gone := &rex.Error{Command: "block call process", Stderr: `Error: block target "block:01a1" not found`, Err: errors.New("exit status 3")}
+	if !rex.IsGone(gone) || !rex.IsGone(fmt.Errorf("registry: process of block: %w", gone)) {
+		t.Fatal("a closed block is not reported as gone")
+	}
+	for _, err := range []error{
+		&rex.Error{Command: "ls", Stderr: "Error: connection refused", Err: errors.New("exit status 1")},
+		errors.New(`block target "x" not found`), // not a Rex CLI error
+		nil,
+	} {
+		if rex.IsGone(err) {
+			t.Errorf("IsGone(%v) = true", err)
+		}
 	}
 }
