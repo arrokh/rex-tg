@@ -34,6 +34,8 @@ func TestRouteText(t *testing.T) {
 		{"topic unknown", "/compact", true, txt("/compact")},
 		{"topic unknown args", "  /model gpt  ", true, txt("/model gpt")},
 		{"topic main command", "/agents", true, cmd("agents", "")},
+		{"topic new is the bot's", "/new pi ~/app", true, cmd("new", "pi ~/app")},
+		{"topic double slash new", "//new", true, txt("/new")},
 		{"topic help", "/help", true, cmd("help", "")},
 		{"topic pause", "/pause", true, cmd("pause", "")},
 		{"main command", "/agents", false, cmd("agents", "")},
@@ -62,7 +64,7 @@ func TestRouteTextAllCommands(t *testing.T) {
 			t.Errorf("topic /%s: %+v", c, r)
 		}
 	}
-	for _, c := range []string{"start", "agents", "topics", "status", "pause", "unpause", "help"} {
+	for _, c := range []string{"start", "agents", "new", "topics", "status", "pause", "unpause", "help"} {
 		if r := inbound.RouteText("/"+c, false, "b"); r.Kind != inbound.RouteCommand || r.Command != c {
 			t.Errorf("main /%s: %+v", c, r)
 		}

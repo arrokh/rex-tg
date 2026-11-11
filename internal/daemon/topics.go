@@ -276,11 +276,13 @@ func (d *daemon) onState(c registry.Change) {
 }
 
 // openTopic creates the Telegram topic for the session in a pane (flow 6).
-// The `o:<pane id>` button calls it. replyThread is the topic where the button
-// was pressed (0 outside topics); the link to the new topic is posted there.
-func (d *daemon) openTopic(cbID string, paneID, replyThread int64) {
+// The `o:<pane id>` button calls it, and /new once its agent is ready.
+// replyThread is the topic where the request came from (0 outside topics);
+// the link to the new topic is posted there. answer reports the outcome of a
+// button press: alert is set for a failure, which shows as a dialog.
+func (d *daemon) openTopic(paneID, replyThread int64, answer func(text string, alert bool)) {
 	if d.opening[paneID] {
-		d.answerCallback(cbID, "Opening…", false)
+		answer("Opening…", false)
 		return
 	}
 	d.opening[paneID] = true
@@ -290,7 +292,7 @@ func (d *daemon) openTopic(cbID string, paneID, replyThread int64) {
 		ctx := d.ctx
 		views, err := d.reg.Agents(ctx)
 		if err != nil {
-			d.answerCallback(cbID, "Something went wrong. Try /agents again.", true)
+			answer("Something went wrong. Try /agents again.", true)
 			return
 		}
 		var v *registry.AgentView
@@ -301,10 +303,10 @@ func (d *daemon) openTopic(cbID string, paneID, replyThread int64) {
 		}
 		switch {
 		case v == nil:
-			d.answerCallback(cbID, "That pane is gone. Use /agents again.", true)
+			answer("That pane is gone. Use /agents again.", true)
 			return
 		case v.Conversation == nil:
-			d.answerCallback(cbID, "Waiting for the session file… It resolves at the agent's next prompt or turn end.", true)
+			answer("Waiting for the session file… It resolves at the agent's next prompt or turn end.", true)
 			return
 		}
 		conv := *v.Conversation
@@ -314,7 +316,7 @@ func (d *daemon) openTopic(cbID string, paneID, replyThread int64) {
 		if v.Thread != nil && v.Thread.Status != store.ThreadClosed {
 			th := *v.Thread
 			if d.topicExists(th, statusName(th, name)) {
-				d.answerCallback(cbID, "", false)
+				answer("", false)
 				d.say(chat, replyThread, "↗ "+format.Escape(noAutoLink(name)), linkMarkup("Open topic", d.topicLink(th.MessageThreadID)))
 				return
 			}
@@ -332,13 +334,13 @@ func (d *daemon) openTopic(cbID string, paneID, replyThread int64) {
 			case telegram.ClassUnknownOutcome:
 				// The topic may exist anyway. By now the button press may be
 				// too old to answer, so the note goes into the chat.
-				d.answerCallback(cbID, "", false)
-				d.say(chat, replyThread, "⚠️ Telegram did not answer in time. If no new topic appeared, tap Open again.", nil)
+				answer("", false)
+				d.say(chat, replyThread, "⚠️ Telegram did not answer in time. If no new topic appeared, open the agent again from /agents.", nil)
 			case telegram.ClassNotSent:
-				d.answerCallback(cbID, "", false)
-				d.say(chat, replyThread, "⚠️ Could not reach Telegram. Tap Open again when the connection is back.", nil)
+				answer("", false)
+				d.say(chat, replyThread, "⚠️ Could not reach Telegram. Open the agent again from /agents when the connection is back.", nil)
 			default:
-				d.answerCallback(cbID, "Could not create the topic. Is Threaded Mode on for the bot?", true)
+				answer("Could not create the topic. Is Threaded Mode on for the bot?", true)
 			}
 			return
 		}
@@ -348,7 +350,7 @@ func (d *daemon) openTopic(cbID string, paneID, replyThread int64) {
 			d.emit(evSender{sender.Event{Kind: sender.ThreadGone, ThreadID: gone}})
 		}
 		d.emit(evTopicCreated{chatID: chat, threadID: ft.MessageThreadID, name: name, convID: conv.ID, title: title})
-		d.answerCallback(cbID, "Topic created", false)
+		answer("Topic created", false)
 		d.say(chat, replyThread, "🔗 Opened "+format.Escape(noAutoLink(name)), linkMarkup("Open topic", d.topicLink(ft.MessageThreadID)))
 	})
 }

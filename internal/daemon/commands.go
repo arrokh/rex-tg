@@ -21,6 +21,7 @@ import (
 const (
 	mainHelp = "<b>Main chat</b>\n" +
 		"/agents - agents in Rex panes, with buttons to open a topic\n" +
+		"/new - start a coding agent in a new Rex tab\n" +
 		"/topics - topics and their states\n" +
 		"/status - daemon health\n" +
 		"/pause - stop typing into panes\n" +
@@ -51,6 +52,8 @@ func (d *daemon) mainCommand(r inbound.Route, chat, thread int64, inTopic bool) 
 		d.say(chat, thread, "Already paired. /help lists the commands.", nil)
 	case "agents":
 		d.spawn(func() { d.sendAgents(chat, thread) })
+	case "new":
+		d.newCommand(chat, thread, inTopic, r.Args)
 	case "topics":
 		d.say(chat, thread, d.topicsText(), nil)
 	case "status":

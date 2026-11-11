@@ -74,6 +74,20 @@ type (
 		conv int64
 		gen  int
 	}
+	// evNewSent: the question of a /new request was sent as message msg.
+	evNewSent struct {
+		token string
+		msg   int64
+	}
+	// evNewFolders: the folders that a /new folder question offers.
+	evNewFolders struct {
+		token   string
+		folders []string
+	}
+	// evNewDone: a /new request ended.
+	evNewDone struct{ token string }
+	// evNewReady: the agent that /new started reported its session.
+	evNewReady  struct{ paneID, thread int64 }
 	evAlertDone struct{ threadID int64 }
 	// evAlertStale: an alert's prompt is no longer on the screen.
 	evAlertStale struct{ threadID int64 }
@@ -90,6 +104,9 @@ type rexClient interface {
 	Capture(ctx context.Context, session, block string) (string, error)
 	Paste(ctx context.Context, session, block, text string) error
 	SendKeys(ctx context.Context, session, block string, keys ...string) error
+	Sessions(ctx context.Context) ([]rex.Session, error)
+	NewSession(ctx context.Context, label string, tab rex.Tab) (rex.Started, error)
+	NewWindow(ctx context.Context, session string, tab rex.Tab) (rex.Started, error)
 }
 
 var _ rexClient = (*rex.Client)(nil)
@@ -116,9 +133,10 @@ type daemon struct {
 	regq   *jobQueue
 
 	paused    atomic.Bool
-	answering sync.Map // alert ids whose answer is being sent
-	vimStuck  sync.Map // pane id -> vimStuckMark: the vim label that showed no reaction to a key
-	botUser   string   // set before the workers start
+	answering sync.Map   // alert ids whose answer is being sent
+	vimStuck  sync.Map   // pane id -> vimStuckMark: the vim label that showed no reaction to a key
+	newMu     sync.Mutex // held while /new finds or makes a session, see startTab
+	botUser   string     // set before the workers start
 	scanQueue atomic.Bool
 
 	// core
@@ -138,7 +156,9 @@ type daemon struct {
 	waitNoticed          map[int64]bool
 	vimNoticed           map[int64]bool // inbound rows told that pi-vim did not react
 	alertBusy            map[int64]bool
-	opening              map[int64]bool // panes whose topic is being created
+	opening              map[int64]bool      // panes whose topic is being created
+	newFlows             map[string]*newFlow // /new requests, by the token that their buttons carry
+	newSeq               int64               // numbers the /new requests
 	lastThread           int64
 	lastScan, lastHouse  time.Time
 	lastNames            time.Time // the last check of topic names, see syncNames
@@ -172,6 +192,7 @@ func newDaemon(cfg config.Config, home string, log *slog.Logger, now func() time
 		vimNoticed:  map[int64]bool{},
 		alertBusy:   map[int64]bool{},
 		opening:     map[int64]bool{},
+		newFlows:    map[string]*newFlow{},
 	}
 	jw := cfg.InputSettings.JoinWindow.Duration
 	if jw <= 0 {
@@ -296,6 +317,18 @@ func (d *daemon) handle(ev any) {
 		}
 	case evOpenDone:
 		delete(d.opening, e.paneID)
+	case evNewSent:
+		if f, ok := d.newFlows[e.token]; ok && f.msg == 0 {
+			f.msg = e.msg
+		}
+	case evNewFolders:
+		if f, ok := d.newFlows[e.token]; ok && f.step == newPickFolder {
+			f.folders = e.folders
+		}
+	case evNewDone:
+		delete(d.newFlows, e.token)
+	case evNewReady:
+		d.openNewTopic(e.paneID, e.thread)
 	case evAlertDone:
 		d.alertDone(e.threadID)
 	case evAlertStale:
@@ -332,6 +365,7 @@ func (d *daemon) tick() {
 		d.lastScan = now
 		d.requestScan()
 	}
+	d.expireNewFlows(now)
 	d.maybeFlushUnknown(now)
 	if now.Sub(d.lastHouse) >= 24*time.Hour {
 		d.lastHouse = now

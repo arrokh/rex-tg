@@ -119,6 +119,9 @@ func (d *daemon) mainMessage(u telegram.Update, m *telegram.Message) {
 		}
 		return
 	}
+	if d.newFolderText(u, m, false) {
+		return
+	}
 	r := inbound.RouteText(m.Text, false, d.botUser)
 	if r.Kind != inbound.RouteCommand {
 		return
@@ -137,6 +140,9 @@ func (d *daemon) topicMessage(u telegram.Update, m *telegram.Message) {
 		// A topic that is not linked to an agent therefore works as the
 		// main chat, and the answer stays in that topic.
 		if m.Text != "" {
+			if d.newFolderText(u, m, false) {
+				return
+			}
 			if r := inbound.RouteText(m.Text, false, d.botUser); r.Kind == inbound.RouteCommand {
 				if d.recorded(u, m, "command", m.Text, 0, store.InboundDone) {
 					d.mainCommand(r, m.Chat.ID, m.MessageThreadID, false)
@@ -152,6 +158,9 @@ func (d *daemon) topicMessage(u telegram.Update, m *telegram.Message) {
 	d.lastThread = th.ID
 	if m.Text == "" {
 		d.media(u, m, th)
+		return
+	}
+	if d.newFolderText(u, m, true) {
 		return
 	}
 	r := inbound.RouteText(m.Text, true, d.botUser)
@@ -220,7 +229,7 @@ func (d *daemon) onCallback(u telegram.Update) {
 			if cb.Message != nil {
 				replyThread = cb.Message.MessageThreadID
 			}
-			d.openTopic(cb.ID, id, replyThread)
+			d.openTopic(id, replyThread, func(text string, alert bool) { d.answerCallback(cb.ID, text, alert) })
 			return
 		}
 	case "s":
@@ -252,6 +261,9 @@ func (d *daemon) onCallback(u telegram.Update) {
 			d.resendButton(u.UpdateID, cb, id)
 			return
 		}
+	case "nw":
+		d.newButton(cb, parts[1:])
+		return
 	}
 	d.answerCallback(cb.ID, "Unknown button.", false)
 }

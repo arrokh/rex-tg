@@ -106,7 +106,15 @@ type Process struct {
 	Foreground ProcInfo   `json:"foreground"`
 	Ancestors  []ProcInfo `json:"ancestors"`
 	Child      *ProcInfo  `json:"child"`
-	LastExit   *int       `json:"last_exit"`
+	LastExit   *Exit      `json:"last_exit"`
+}
+
+// Exit is how the program of a pane ended. Rex reports it while the pane
+// stays open after its program, for example {"exit_code":127,"error":"exit
+// status 127"}.
+type Exit struct {
+	Code  int    `json:"exit_code"`
+	Error string `json:"error"`
 }
 
 // ProcOwner is the process that reported a status.
@@ -293,6 +301,97 @@ func (c *Client) Paste(ctx context.Context, session, block, text string) error {
 	}
 	_, err = c.runScrub(ctx, "api call block.event", body, secrets, "api", "call", "-s", session, "block.event", "-")
 	return err
+}
+
+// Tab is what NewSession and NewWindow start: a tab with one pane that runs
+// Command in the folder CWD.
+type Tab struct {
+	Label   string   // the tab's name
+	CWD     string   // an absolute folder
+	Command []string // the program and its arguments, one word each
+}
+
+// Started names the pane that NewSession or NewWindow made, and its tab.
+type Started struct {
+	SessionID string
+	WindowID  string
+	BlockID   string
+}
+
+// NewSession makes a session whose first tab runs tab.Command. It runs
+// `rex new --cwd=DIR --window=TAB --interactive --json LABEL -- COMMAND...`.
+// The command runs through the login shell with its interactive startup
+// files (~/.zshrc), as when you type it in a terminal, so the PATH and the
+// shell functions from there apply. The new tab does not take the focus of
+// a Rex app.
+//
+// Like every create call, it is never tried again: when it fails, the
+// session may exist anyway (a time limit, for example).
+func (c *Client) NewSession(ctx context.Context, label string, tab Tab) (Started, error) {
+	if err := checkTab("new", tab); err != nil {
+		return Started{}, err
+	}
+	if badName(label) {
+		return Started{}, &Error{Command: "new", Err: fmt.Errorf("invalid session name %q", label)}
+	}
+	args := append([]string{"new", "--cwd=" + tab.CWD, "--window=" + tab.Label, "--interactive", "--json", label, "--"}, tab.Command...)
+	var r struct {
+		SessionID string `json:"session_id"`
+		Windows   []struct {
+			WindowID string   `json:"window_id"`
+			BlockIDs []string `json:"block_ids"`
+		} `json:"initial_windows"`
+	}
+	if err := c.runJSON(ctx, "new", &r, args...); err != nil {
+		return Started{}, err
+	}
+	if r.SessionID == "" || len(r.Windows) == 0 || len(r.Windows[0].BlockIDs) == 0 {
+		return Started{}, &Error{Command: "new", Err: errors.New("the answer names no session or pane")}
+	}
+	return Started{SessionID: r.SessionID, WindowID: r.Windows[0].WindowID, BlockID: r.Windows[0].BlockIDs[0]}, nil
+}
+
+// NewWindow adds a tab to a session, like NewSession. It runs
+// `rex window new --session=S --cwd=DIR --interactive --focus=false --json
+// TAB -- COMMAND...`. With --focus=false, the tab that a Rex app shows stays
+// the same.
+func (c *Client) NewWindow(ctx context.Context, session string, tab Tab) (Started, error) {
+	if err := checkTab("window new", tab); err != nil {
+		return Started{}, err
+	}
+	if session == "" {
+		return Started{}, &Error{Command: "window new", Err: errors.New("no session")}
+	}
+	args := append([]string{"window", "new", "--session=" + session, "--cwd=" + tab.CWD, "--interactive", "--focus=false", "--json", tab.Label, "--"}, tab.Command...)
+	var r struct {
+		WindowID string   `json:"window_id"`
+		BlockIDs []string `json:"block_ids"`
+	}
+	if err := c.runJSON(ctx, "window new", &r, args...); err != nil {
+		return Started{}, err
+	}
+	if len(r.BlockIDs) == 0 {
+		return Started{}, &Error{Command: "window new", Err: errors.New("the answer names no pane")}
+	}
+	return Started{SessionID: session, WindowID: r.WindowID, BlockID: r.BlockIDs[0]}, nil
+}
+
+// badName reports a name that the rex command line would read wrongly: one
+// that starts with "-" is read as an option.
+func badName(s string) bool { return s == "" || strings.HasPrefix(s, "-") }
+
+// checkTab rejects a tab that rex would start wrongly. A relative folder
+// would depend on where rex runs.
+func checkTab(cmd string, tab Tab) error {
+	switch {
+	case badName(tab.Label):
+		return &Error{Command: cmd, Err: fmt.Errorf("invalid tab name %q", tab.Label)}
+	case !strings.HasPrefix(tab.CWD, "/"):
+		return &Error{Command: cmd, Err: fmt.Errorf("folder %q is not absolute", tab.CWD)}
+	case len(tab.Command) == 0 || tab.Command[0] == "":
+		return &Error{Command: cmd, Err: errors.New("no command")}
+	}
+	return nil
 }
 
 // SendKeys presses keys such as "enter" or "ctrl+c" in a block.

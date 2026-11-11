@@ -38,7 +38,7 @@ type Route struct {
 var topicCommands = setOf("info", "screen", "approve", "deny", "esc", "interrupt",
 	"key", "force", "mode", "verbose", "reasoning", "resend", "unlink", "mute", "unmute", "help")
 
-var mainCommands = setOf("start", "agents", "topics", "status", "pause", "unpause", "help")
+var mainCommands = setOf("start", "agents", "new", "topics", "status", "pause", "unpause", "help")
 
 func setOf(names ...string) map[string]bool {
 	m := make(map[string]bool, len(names))

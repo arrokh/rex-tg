@@ -76,6 +76,7 @@ type Server struct {
 	topicsEnabled bool
 	calls         []Call
 	fails         map[string][]*failure
+	lost          map[string]int // calls that are handled, but answered with 502
 	delays        map[string]time.Duration
 	msgs          map[int64][]*Message // by chat
 	nextMsg       map[int64]int64
@@ -96,6 +97,7 @@ func New(t testing.TB) *Server {
 		token:         "123456:FAKE-test-token-not-real",
 		topicsEnabled: true,
 		fails:         map[string][]*failure{},
+		lost:          map[string]int{},
 		delays:        map[string]time.Duration{},
 		msgs:          map[int64][]*Message{},
 		nextMsg:       map[int64]int64{},
@@ -147,6 +149,15 @@ func (s *Server) SetTopicsEnabled(v bool) {
 func (s *Server) FailNext(method string, n, code int, description string, retryAfter int) {
 	s.mu.Lock()
 	s.fails[method] = append(s.fails[method], &failure{n, code, description, retryAfter})
+	s.mu.Unlock()
+}
+
+// LoseAnswerNext handles the next n calls of method as usual, then answers
+// them with 502 Bad Gateway: the call took effect, but the client cannot
+// know it (an unknown outcome).
+func (s *Server) LoseAnswerNext(method string, n int) {
+	s.mu.Lock()
+	s.lost[method] += n
 	s.mu.Unlock()
 }
 
@@ -434,6 +445,16 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	if e != nil {
 		writeErr(w, e)
+		return
+	}
+	s.mu.Lock()
+	lose := s.lost[method] > 0
+	if lose {
+		s.lost[method]--
+	}
+	s.mu.Unlock()
+	if lose {
+		writeErr(w, &apiErr{502, "Bad Gateway", 0})
 		return
 	}
 	writeJSON(w, 200, map[string]any{"ok": true, "result": result})

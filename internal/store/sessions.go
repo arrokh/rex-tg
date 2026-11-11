@@ -81,6 +81,35 @@ func (s *Store) ConversationByNative(ctx context.Context, rt agents.Runtime, nat
 	return c, true, nil
 }
 
+// RecentFolders returns the folders that agent sessions ran in, the most
+// recently used first, at most limit of them. A folder counts as used when a
+// session in it started, or when a pane that runs (or ran) one of its
+// sessions was last seen.
+func (s *Store) RecentFolders(ctx context.Context, limit int) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT c.cwd, MAX(MAX(c.first_seen_at, COALESCE(p.seen_at, 0))) AS used
+		FROM conversation c
+		LEFT JOIN pane p ON p.conversation_id = c.id OR p.last_conversation_id = c.id
+		WHERE c.cwd IS NOT NULL AND c.cwd <> ''
+		GROUP BY c.cwd ORDER BY used DESC, c.cwd LIMIT ?`, limit)
+	if err != nil {
+		return nil, fmt.Errorf("store: recent folders: %w", err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var cwd string
+		var used int64
+		if err := rows.Scan(&cwd, &used); err != nil {
+			return nil, fmt.Errorf("store: recent folders: %w", err)
+		}
+		out = append(out, cwd)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("store: recent folders: %w", err)
+	}
+	return out, nil
+}
+
 // SetConversationTitle sets a conversation's title.
 func (s *Store) SetConversationTitle(ctx context.Context, id int64, title string) error {
 	res, err := s.db.ExecContext(ctx, `UPDATE conversation SET title=? WHERE id=?`, nullStr(title), id)

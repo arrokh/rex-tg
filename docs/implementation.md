@@ -109,10 +109,13 @@ func (c *Client) ProgramStatus(ctx, session, block string) ([]StatusRecord, erro
 func (c *Client) Capture(ctx, session, block string) (string, error) // --trim
 func (c *Client) Paste(ctx, session, block, text string) error       // block.event paste, JSON on stdin
 func (c *Client) SendKeys(ctx, session, block string, keys ...string) error
+func (c *Client) NewSession(ctx, label string, tab Tab) (Started, error)   // `rex new --cwd=… --window=… --interactive --json LABEL -- CMD…`
+func (c *Client) NewWindow(ctx, session string, tab Tab) (Started, error)  // `rex window new --session=… --cwd=… --interactive --focus=false --json TAB -- CMD…`
 func (c *Client) Events(ctx) (<-chan Event, <-chan error)           // `rex events --all --json`
 ```
 
-- `Process`: `Foreground ProcInfo`, `Ancestors []ProcInfo`, `Child *ProcInfo`, `LastExit *int`; `ProcInfo{PID int, Name, Path, InvokedPath, Argv0, CWD string}`.
+- `Process`: `Foreground ProcInfo`, `Ancestors []ProcInfo`, `Child *ProcInfo`, `LastExit *Exit`; `ProcInfo{PID int, Name, Path, InvokedPath, Argv0, CWD string}`; `Exit{Code int, Error string}` from `{"exit_code":127,"error":"exit status 127"}`, set while a pane stays open after its program ended.
+- `Tab{Label, CWD string; Command []string}` and `Started{SessionID, WindowID, BlockID string}`. `NewSession` and `NewWindow` refuse a name that starts with `-` (rex would read it as an option), a relative folder, and an empty command, before running rex. They are never retried: after a failure the tab may exist anyway.
 - `StatusRecord{ID, State, Kind, App, EffectiveApp, Title, Msg string; UpdatedAt time.Time; Owner *ProcOwner}`.
 - `Event{Type EventType; SessionID, BlockID string; Status *StatusRecord; Received time.Time; Raw json.RawMessage}` with types `SessionCreated`, `SessionRemoved`, `BlockCreated`, `BlockClosed`, `ProgramStatusChanged`, `ProcessChanged`, `PwdChanged`, `TitleChanged`, `OtherEvent`. `progress_report` and client join/leave events are dropped.
 - `rextest.New(t)` builds or provides a fake `rex` binary that answers commands from a scenario, logs every call (arguments and stdin), and can stream scripted events.
@@ -140,6 +143,7 @@ UpsertConversation(c Conversation) (Conversation, error)        // by (runtime, 
 Conversation(id int64) (Conversation, error)
 ConversationByNative(rt agents.Runtime, nativeID string) (Conversation, bool, error)
 SetConversationTitle(id int64, title string) error
+RecentFolders(limit int) ([]string, error)                       // session folders, most recently used first (session start or pane last seen)
 
 // Panes
 UpsertPane(host, block, session, label string, now time.Time) (Pane, error)
@@ -296,6 +300,7 @@ For pi, the extension sends this stdin payload: `{"hook_event_name":"session_sta
 type Duration struct{ time.Duration }            // TOML text such as "2s"
 type Answer struct{ Label string; Keys []string }
 type RuntimeInput struct {
+	Launch          []string // what /new runs: pi ["pi"], claude ["claude"], codex ["codex"]; must not be empty
 	PasteEnterDelay Duration
 	InterruptKeys   []string
 	WhileWorking    string   // steer, queue, unknown
@@ -457,7 +462,8 @@ Flows (design sections in brackets):
 6. **Opening a topic** [4.1]: the `o:<pane id>` button resolves the pane's session (an unresolved pane answers "Waiting for the session file…"); `createForumTopic` through `sender.Call`; `store.LinkTopic`; the intro card (design 8.7); the backfill; the tailer starts at the end of the file; a turn tracker is created with the topic's settings.
 7. **Sender events**: `ThreadGone` closes the topic in the store and stops its tailer; `Blocked` and `Conflict` stop the daemon with an error after logging.
 8. **Housekeeping**: `store.Prune` once a day; spool files older than 24 h are deleted; uploads older than 7 days are deleted.
-9. **Phase 6**: photos and documents up to `InputSettings.MaxUploadMB` (default 20) are downloaded to `UploadDir()/<thread id>/` and their path (plus the caption) is delivered like text; voice notes are transcribed when `Voice.WhisperCLI` is set (ffmpeg to 16 kHz WAV, then `<whisper_cli> -m <model> -l <language> -nt -f <wav>`), answered with "🎤 <text>" and delivered like text, else answered "Voice notes need whisper.cpp; see the README."; stickers and others answer "Only text is supported for now."; `/pause` stops all typing (KV `paused`) until `/unpause`; `/mute` and `/unmute` set `thread.muted`.
+9. **Starting an agent** [8.7]: `/new [agent [folder]]` and its buttons (`nw:<token>:a:<runtime>`, `nw:<token>:d:<index>`, `nw:<token>:x`). The core keeps each request in memory under a random 12-character token, from before its question is sent, and ends it after 10 minutes; the first button press names the question's message when Telegram's answer to the send was lost. A worker lists the folder buttons (`store.RecentFolders`, only folders that exist) and hands them to the core before it shows them. A typed folder is taken before routing: a reply to the question, or the newest question in the same chat and topic; in a linked topic only a path that starts with `~`, or the absolute path of an existing folder. The start runs in a worker, one at a time: `rex.Sessions`, then `NewWindow` into the session named after the folder, or `NewSession`; then it polls `registry.Agents` every `Timing.NewAgentPoll` until the new block has a session and the core opens its topic (flow 6), or `rex.Process` shows that the program exited, or `Timing.NewAgentWait` passed.
+10. **Phase 6**: photos and documents up to `InputSettings.MaxUploadMB` (default 20) are downloaded to `UploadDir()/<thread id>/` and their path (plus the caption) is delivered like text; voice notes are transcribed when `Voice.WhisperCLI` is set (ffmpeg to 16 kHz WAV, then `<whisper_cli> -m <model> -l <language> -nt -f <wav>`), answered with "🎤 <text>" and delivered like text, else answered "Voice notes need whisper.cpp; see the README."; stickers and others answer "Only text is supported for now."; `/pause` stops all typing (KV `paused`) until `/unpause`; `/mute` and `/unmute` set `thread.muted`.
 
 ### cmd/rex-tg
 

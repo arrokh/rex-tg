@@ -2,6 +2,7 @@ package store
 
 import (
 	"errors"
+	"reflect"
 	"testing"
 	"time"
 
@@ -32,6 +33,29 @@ func TestConversationUpsert(t *testing.T) {
 	}
 	if _, err := s.UpsertConversation(ctx, Conversation{Runtime: "x", NativeID: "n"}); err == nil {
 		t.Fatal("invalid runtime accepted")
+	}
+}
+
+func TestRecentFolders(t *testing.T) {
+	s := newStore(t)
+	conv := func(id, cwd string, at time.Time) Conversation {
+		return must(s.UpsertConversation(ctx, Conversation{Runtime: agents.Pi, NativeID: id, Transcript: "/t/" + id, CWD: cwd, FirstSeenAt: at}))
+	}
+	conv("old", "/w/old", t0)
+	conv("mid", "/w/mid", t0.Add(time.Hour))
+	conv("mid2", "/w/mid", t0.Add(-time.Hour)) // a second session in the same folder
+	conv("none", "", t0.Add(3*time.Hour))      // no folder: not offered
+	busy := conv("busy", "/w/busy", t0.Add(-2*time.Hour))
+	// An old session whose pane was seen just now counts as used now.
+	p := must(s.UpsertPane(ctx, "h", "b1", "s1", "", t0.Add(2*time.Hour)))
+	noErr(t, s.SetPaneOccupant(ctx, p.ID, busy.ID, 1, "pi", SourceHook))
+
+	got := must(s.RecentFolders(ctx, 10))
+	if want := []string{"/w/busy", "/w/mid", "/w/old"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+	if got := must(s.RecentFolders(ctx, 2)); len(got) != 2 {
+		t.Fatalf("limit 2: got %q", got)
 	}
 }
 

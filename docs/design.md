@@ -477,7 +477,7 @@ Active agents (3)
 
 The first line is the topic name (section 7). The second line is the runtime and the folder; when the name comes from the pane, the session name follows. `↗` marks a session that already has a topic. Every button reports the tap to rex-tg: for `↗`, rex-tg checks that the topic still exists and posts a link to it, or makes a new topic when it was deleted.
 
-Commands in the main chat: `/agents`, `/topics` (topics and their states), `/status` (daemon health), `/help`.
+Commands in the main chat: `/agents`, `/new` (start an agent, see below), `/topics` (topics and their states), `/status` (daemon health), `/help`.
 
 Commands in a topic: `/info`, `/screen [lines]`, `/approve`, `/deny`, `/esc`, `/interrupt`, `/key <keys>`, `/force <text>`, `/mode progress|block|final`, `/verbose on|full|off`, `/reasoning on|off`, `/resend [id]`, `/unlink`, `/help`.
 
@@ -485,11 +485,26 @@ How a topic routes text that starts with `/` (D15):
 
 - The commands above go to the bot.
 - Any other `/` text goes to the agent unchanged, for example `/compact`, `/model`, or `/clear`.
-- `//name` sends `/name` to the agent. Use it for an agent command that has the same name as a bot command, such as `//help`.
+- `//name` sends `/name` to the agent. Use it for an agent command that has the same name as a bot command, such as `//help`, or `//new`: pi and Codex start a new conversation with `/new`, but in a topic `/new` goes to the bot.
 
 The topic commands avoid the names that the agents use most, such as `/status`. Telegram cannot show a different command menu per topic, so `setMyCommands` registers the topic commands. In the main chat, a topic command answers "Use this inside a topic."
 
 rex-tg registers the menu twice: for the default scope, and for the owner's chat once paired. Telegram shows a chat's own list first, so the second list also replaces an older list that another program left for that chat (found live: the menu showed `/commands /sessions /sync /upgrade`). `rex-tg doctor` shows which list the owner sees. Lists for one language are not checked.
+
+Start an agent with `/new`:
+
+1. The bot asks for the agent: pi, Claude Code, or Codex.
+2. The bot asks for the folder. Its buttons offer up to 6 folders where agent sessions ran, the most recently used first. In a linked topic, the folder of the topic's agent comes first. You can also send a path: `~/work/app`, an absolute path, or a path from your home folder (`work/app`).
+3. rex-tg looks for the Rex session that has the folder's name, for example `rex-tg` for `~/work/personal/rex-tg`. It adds a tab named after the agent to that session (`rex window new --focus=false`, so the tab that the Rex app shows stays the same). When no session has that name, it makes one (`rex new`). Only the name counts, so two folders with the same name share a session. Rex takes at most 128 characters and no control characters in a name, so rex-tg leaves those out. Starts run one at a time, so two starts in one folder make one session.
+4. The tab runs the agent's `launch` command (section 12) through your login shell with its interactive startup files (`--interactive`), as when you type the command in a terminal. So the PATH and the shell functions from `~/.zshrc` apply. Rex passes each word of the command as it is: spaces and `$` are not read by the shell.
+5. When the agent reports its session (its hook at start), rex-tg opens its topic, as the Open button of `/agents` does. If the agent exits first, rex-tg shows the exit code and the end of the pane's screen. If no report comes within 90 seconds, rex-tg shows the screen and points to `/agents`. That can happen when the agent waits for an answer on its screen, such as a folder trust question.
+
+`/new <agent>` skips the first question. `/new <agent> <folder>` skips both.
+
+- **At most once.** A `/new` request starts at most one agent. rex-tg never tries a failed start again, because the tab may exist anyway, for example after a time limit. It tells you to check `/agents` first.
+- **Typed folders.** A typed folder answers the newest question in the same topic. A reply to the question always counts. In a topic that is linked to an agent, other text counts only when it is a path that starts with `~`, or the absolute path of an existing folder. Any other text, also an agent command such as `/compact` or `//new`, still goes to the agent. Bot commands stay commands.
+- **Old questions.** A question waits 10 minutes. Its buttons carry a random token, so they work even when Telegram's answer to the send was lost. A restart forgets the questions. An old button then only says that the request expired.
+- **Pause.** While typing is paused (`/pause`), `/new` starts no agent.
 
 Intro card when a topic opens:
 
@@ -610,6 +625,8 @@ Which checks apply to which action:
 | `/screen`, `/info`, `/mode`, other bot commands | yes | — | — | — | — |
 
 Checks 1 and 3 can never be skipped. Only `/force` skips check 4.
+
+`/new` types nothing into an existing pane, so only check 1 applies. It starts a new program, so it starts nothing while typing is paused.
 
 Waiting (D11):
 
@@ -815,6 +832,7 @@ Housekeeping:
 - **Requests stay encrypted.** The token is part of every request URL, so `telegram.api_base` must be an `https` URL; plain `http` is accepted only for a local test server. `state.dir` must be an absolute path, so the hooks and the daemon use the same folder.
 - **Progress rows hold no output.** Like OpenClaw's progress drafts, rows show only tool names and short labels, never tool output, file contents, or full arguments. `/verbose full` is the only way to show output, and you turn it on per topic.
 - **Typing only into agents.** The check in 9.5 stops rex-tg from typing into anything but the session's agent process.
+- **Starting agents.** `/new` runs an agent's `launch` command (section 12) in a folder you name. Only the owner can use it, and it starts nothing while typing is paused.
 - **No server start.** rex-tg calls `rex` with `--autostart=false`.
 - **Local files.** The state folder and the spool folder are only readable by you (mode 0700). Spool files are mode 0600.
 
@@ -849,6 +867,9 @@ pi_argv0 = ["pi"]
 claude_argv0 = ["claude"]
 claude_exec_glob = ["~/.local/share/claude/versions/*"]
 codex_names = ["codex"]
+
+[agents.pi]
+launch = ["pi"]              # what /new runs; also [agents.claude] and [agents.codex]
 
 [display]
 mode = "progress"            # progress | block | final

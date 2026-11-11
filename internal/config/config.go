@@ -45,8 +45,14 @@ type Answer struct {
 	Keys  []string `toml:"keys"`
 }
 
-// RuntimeInput describes how to type into one runtime.
+// RuntimeInput holds the settings of one runtime: how /new starts it and
+// how to type into it.
 type RuntimeInput struct {
+	// Launch is the command that /new runs in a new Rex tab: the program and
+	// its arguments, one word each. It runs through the login shell with its
+	// interactive startup files (~/.zshrc), as when you type it in a
+	// terminal.
+	Launch          []string `toml:"launch"`
 	PasteEnterDelay Duration `toml:"paste_enter_delay"`
 	InterruptKeys   []string `toml:"interrupt_keys"`
 	WhileWorking    string   `toml:"while_working"` // steer, queue, unknown
@@ -131,17 +137,20 @@ func Default(home string) Config {
 	}
 	c.Agents.Pi = base()
 	c.Agents.Pi.Answers = []Answer{}
+	c.Agents.Pi.Launch = []string{"pi"}
 	c.Agents.Claude = base(
 		Answer{"1 Yes", []string{"1"}},
 		Answer{"2 Always", []string{"2"}},
 		Answer{"4 No", []string{"4"}},
 		Answer{"Esc", []string{"escape"}},
 	)
+	c.Agents.Claude.Launch = []string{"claude"}
 	c.Agents.Codex = base(
 		Answer{"Yes", []string{"y"}},
 		Answer{"Always", []string{"p"}},
 		Answer{"No", []string{"escape"}},
 	)
+	c.Agents.Codex.Launch = []string{"codex"}
 
 	c.Display.Mode = "progress"
 	c.Display.Backfill = 3
@@ -219,6 +228,9 @@ func (c Config) validate() error {
 		case "steer", "queue", "unknown":
 		default:
 			return fmt.Errorf("agents.%s.while_working %q: want steer, queue, or unknown", name, in.WhileWorking)
+		}
+		if len(in.Launch) == 0 || strings.TrimSpace(in.Launch[0]) == "" {
+			return fmt.Errorf("agents.%s.launch: want a program, such as [%q]", name, name)
 		}
 	}
 	if c.Telegram.RatePerSecond <= 0 {

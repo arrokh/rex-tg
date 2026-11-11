@@ -90,13 +90,92 @@ func TestProcess(t *testing.T) {
 		t.Fatalf("args %q", got)
 	}
 
-	f.On([]string{"block", "call"}, `{"foreground":null,"ancestors":[],"child":null,"last_exit":130}`, 0)
+	// A pane that stays open after its program ended (the shape Rex sends).
+	f.On([]string{"block", "call"}, `{"foreground":null,"child":null,"home":"/h","last_exit":{"exit_code":127,"error":"exit status 127"}}`, 0)
 	p, err = c.Process(context.Background(), "session:a", "block:1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p.Foreground.PID != 0 || p.LastExit == nil || *p.LastExit != 130 {
+	if p.Foreground.PID != 0 || p.LastExit == nil || p.LastExit.Code != 127 || p.LastExit.Error != "exit status 127" {
 		t.Fatalf("got %+v", p)
+	}
+}
+
+func TestNewSession(t *testing.T) {
+	c, f := newClient(t)
+	f.On([]string{"new"}, `{"session_id":"session:n","initial_windows":[{"window_id":"window:w","block_ids":["block:b"],"revision":1}]}`, 0)
+	got, err := c.NewSession(context.Background(), "my app", rex.Tab{Label: "pi", CWD: "/work/my app", Command: []string{"pi", "--flag", "a b"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := (rex.Started{SessionID: "session:n", WindowID: "window:w", BlockID: "block:b"}); got != want {
+		t.Fatalf("got %+v, want %+v", got, want)
+	}
+	want := []string{"--autostart=false", "new", "--cwd=/work/my app", "--window=pi", "--interactive", "--json", "my app", "--", "pi", "--flag", "a b"}
+	if args := lastArgs(t, f); !reflect.DeepEqual(args, want) {
+		t.Fatalf("args %q, want %q", args, want)
+	}
+}
+
+func TestNewWindow(t *testing.T) {
+	c, f := newClient(t)
+	f.On([]string{"window", "new"}, `{"window_id":"window:w","block_ids":["block:b"],"revision":2}`, 0)
+	got, err := c.NewWindow(context.Background(), "session:s", rex.Tab{Label: "codex", CWD: "/work/app", Command: []string{"codex"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := (rex.Started{SessionID: "session:s", WindowID: "window:w", BlockID: "block:b"}); got != want {
+		t.Fatalf("got %+v, want %+v", got, want)
+	}
+	want := []string{"--autostart=false", "window", "new", "--session=session:s", "--cwd=/work/app", "--interactive", "--focus=false", "--json", "codex", "--", "codex"}
+	if args := lastArgs(t, f); !reflect.DeepEqual(args, want) {
+		t.Fatalf("args %q, want %q", args, want)
+	}
+}
+
+// A name that starts with "-" would be read as an option, so it never
+// reaches rex; neither does a relative folder or an empty command.
+func TestNewTabRejectsWhatRexWouldMisread(t *testing.T) {
+	c, f := newClient(t)
+	f.On([]string{"new"}, `{"session_id":"session:n","initial_windows":[{"window_id":"w","block_ids":["b"]}]}`, 0)
+	f.On([]string{"window", "new"}, `{"window_id":"w","block_ids":["b"]}`, 0)
+	ok := rex.Tab{Label: "pi", CWD: "/work", Command: []string{"pi"}}
+	ctx := context.Background()
+	cases := map[string]func() error{
+		"session name": func() error { _, err := c.NewSession(ctx, "-rf", ok); return err },
+		"empty name":   func() error { _, err := c.NewSession(ctx, "", ok); return err },
+		"tab name": func() error {
+			_, err := c.NewWindow(ctx, "s", rex.Tab{Label: "--json", CWD: "/work", Command: []string{"pi"}})
+			return err
+		},
+		"relative folder": func() error {
+			_, err := c.NewWindow(ctx, "s", rex.Tab{Label: "pi", CWD: "work", Command: []string{"pi"}})
+			return err
+		},
+		"no command": func() error { _, err := c.NewSession(ctx, "app", rex.Tab{Label: "pi", CWD: "/work"}); return err },
+		"no session": func() error { _, err := c.NewWindow(ctx, "", ok); return err },
+	}
+	for name, call := range cases {
+		if err := call(); err == nil {
+			t.Errorf("%s: no error", name)
+		}
+	}
+	if n := len(f.Calls()); n != 0 {
+		t.Fatalf("%d rex calls, want none", n)
+	}
+}
+
+// An answer without a pane is an error: the caller needs the pane's ID.
+func TestNewTabNeedsAPane(t *testing.T) {
+	c, f := newClient(t)
+	f.On([]string{"new"}, `{"session_id":"session:n","initial_windows":[]}`, 0)
+	f.On([]string{"window", "new"}, `{"window_id":"window:w","block_ids":[]}`, 0)
+	tab := rex.Tab{Label: "pi", CWD: "/work", Command: []string{"pi"}}
+	if _, err := c.NewSession(context.Background(), "app", tab); err == nil {
+		t.Error("NewSession: no error")
+	}
+	if _, err := c.NewWindow(context.Background(), "session:s", tab); err == nil {
+		t.Error("NewWindow: no error")
 	}
 }
 

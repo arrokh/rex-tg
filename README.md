@@ -4,7 +4,8 @@ rex-tg connects coding agents that run in Rex panes to Telegram.
 
 - In the main chat, `/agents` lists the agents that run in Rex panes.
 - Tap an agent. rex-tg opens a topic for its session.
-- A new session in the same pane, such as after `/clear` or `/new`, takes over the topic.
+- `/new` starts an agent in a new Rex tab, in a folder you pick, and opens its topic.
+- A new session in the same pane, such as after the agent's `/clear` or `/new`, takes over the topic.
 - After a Rex restart, the topic follows the session when the agent resumes in its pane.
 - While the agent works, one progress message shows its tool calls. The answer then arrives as a normal message.
 - Text you write in a topic waits until the agent is idle. Then rex-tg types it into the pane.
@@ -113,6 +114,7 @@ Doctor prints one line for each check. `✓` means the check passed. `!` is a wa
 ### Main chat
 
 - `/agents` lists the agents in Rex panes. Tap one to open its topic. If the session already has a topic, you get a link to it. If you deleted that topic, a new one is made for the same session.
+- `/new` starts a coding agent in a new Rex tab. Tap the agent, then tap a recent folder or send a path such as `~/work/app`. The tab goes into the Rex session named after the folder (only the name counts, so two folders with the same name share a session). If there is no such session, rex-tg makes it. The agent starts as if you typed its name in a terminal, so your `~/.zshrc` applies. When the agent is ready, its topic opens. `/new pi ~/work/app` does it in one step.
 - A topic is named after its Rex pane when you gave the pane a name, else after the agent's session name. The name follows changes of both.
 - When an agent exits or its pane closes, its topic says so (🔴), a running turn ends, and the topic's name gets a 🔴 until the agent runs again.
 - `/topics` lists the topics and their states.
@@ -143,7 +145,7 @@ Text you write in a topic goes to the agent. The commands below are for rex-tg. 
 | `/mute` and `/unmute` | Sends answers without sound, or with sound again. |
 | `/help` | Lists the commands. |
 
-Other `/` text goes to the agent unchanged. Examples are `/compact`, `/model`, and `/clear`. To send an agent command that has the same name as a bot command, add a second slash. For example, `//help` sends `/help` to the agent.
+Other `/` text goes to the agent unchanged. Examples are `/compact`, `/model`, and `/clear`. To send an agent command that has the same name as a bot command, add a second slash. For example, `//help` sends `/help` to the agent, and `//new` sends `/new`. In a topic, `/new` itself starts another agent (see Main chat).
 
 When you open a topic, the bot posts an intro card. The card shows the session, the pane, the folder, and the mode. Then the bot posts the last 3 final answers. The number is the `backfill` setting.
 
@@ -218,12 +220,14 @@ claude_exec_glob = ["~/.local/share/claude/versions/*"]  # Claude Code program p
 codex_names = ["codex"]                 # Process names that mean a Codex pane.
 
 [agents.pi]
+launch = ["pi"]                         # What /new runs, one word per item, as if typed in a terminal (~/.zshrc applies).
 paste_enter_delay = "300ms"             # Wait between the paste and the Enter key.
 interrupt_keys = ["escape"]             # Keys that stop the current turn (/interrupt).
 while_working = "steer"                 # What Enter does while the agent works: steer, queue, or unknown.
 answers = []                            # Fallback permission answers. pi has none.
 
 [agents.claude]
+launch = ["claude"]
 paste_enter_delay = "300ms"
 interrupt_keys = ["escape"]
 while_working = "steer"
@@ -245,6 +249,7 @@ label = "Esc"
 keys = ["escape"]
 
 [agents.codex]
+launch = ["codex"]
 paste_enter_delay = "300ms"
 interrupt_keys = ["escape"]
 while_working = "steer"
@@ -370,6 +375,8 @@ Start with `rex-tg doctor`.
 | "This topic is not linked" | The topic is closed, or rex-tg did not create it. Open the agent again with `/agents`. |
 | "may not have arrived" | rex-tg never resends on its own. Send the `/resend` command from the notice, if you want the missing parts. |
 | "may be in the input box without Enter" | The daemon stopped between the paste and Enter. Check the pane with `/screen`. rex-tg does not type the text again. |
+| `/new`: "exited with code 127" | The shell did not find the agent. Set its full path in `[agents.<name>] launch`, for example `launch = ["/opt/homebrew/bin/codex"]`. |
+| `/new`: "has not reported its session yet" | The agent may wait for an answer on its screen, such as a folder trust question. Answer it on the Mac, then open the agent with `/agents`. |
 | Telegram returns 409 Conflict | Another program uses the same bot token. Stop it. Only one daemon may poll Telegram. |
 | Telegram says the bot was blocked | Unblock the bot in Telegram. |
 | `doctor` reports unknown line types | The agent changed its transcript format. rex-tg ignores those lines. The adapter may need an update. |

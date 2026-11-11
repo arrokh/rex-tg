@@ -26,7 +26,7 @@ Setup: a real bot made with @BotFather, Threaded Mode turned on, rex-tg installe
 
 - `/agents` in a topic listed the three running pi agents. **Open** created the topic with `createForumTopic`, and the intro card and the last three answers arrived in it (step 3, first part).
 - Once, `createForumTopic` did not answer in time during a network burst. The second tap worked. Before the fix, the alert said "Is Threaded Mode on for the bot?", which was wrong for a timeout, and the answer to the button press may already have been too old to show.
-- Change made: when Telegram's answer is unknown, the chat gets "Telegram did not answer in time. If no new topic appeared, tap Open again." Other errors keep the Threaded Mode hint (tests `TestTopicCreateWithoutAnAnswerSaysToTapAgain`, `TestTopicCreateRefusedMentionsThreadedMode`).
+- Change made: when Telegram's answer is unknown, the chat gets "Telegram did not answer in time. If no new topic appeared, open the agent again from /agents." Other errors keep the Threaded Mode hint (tests `TestTopicCreateWithoutAnAnswerSaysToTapAgain`, `TestTopicCreateRefusedMentionsThreadedMode`).
 - Telegram turned the folder name `resume.md` into a web link. Change made: folder names are shown in `<code>`, and session titles get a zero-width space after such a dot (`noAutoLink` in `internal/daemon/names.go`).
 
 ### Typing into a vim-style editor

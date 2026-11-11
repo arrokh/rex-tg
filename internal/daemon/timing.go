@@ -17,6 +17,8 @@ type Timing struct {
 	AnswerGrace  time.Duration // a turn's wait for its answer after idle (5 s)
 	StoppedGrace time.Duration // a turn's wait for the last lines after its agent stopped (2 s)
 	Typing       time.Duration // "typing…" refresh (5 s)
+	NewAgentWait time.Duration // how long /new waits for the new agent to report its session (90 s)
+	NewAgentPoll time.Duration // how often /new looks for that report (1 s)
 }
 
 // withDefaults fills the zero fields with the production values.
@@ -37,5 +39,7 @@ func (t Timing) withDefaults() Timing {
 	def(&t.AnswerGrace, 5*time.Second)
 	def(&t.StoppedGrace, 2*time.Second)
 	def(&t.Typing, 5*time.Second)
+	def(&t.NewAgentWait, 90*time.Second)
+	def(&t.NewAgentPoll, time.Second)
 	return t
 }

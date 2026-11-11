@@ -143,6 +143,10 @@ func startRex(t *testing.T, tag string) string {
 	}
 
 	srv := exec.Command(rexBin, "server", "run", "--listen", "unix://"+sock, "--state-dir", stateDir, "--config", emptyCfg)
+	// The panes' shells get their environment from the server. An empty
+	// ZDOTDIR keeps your own ~/.zshrc out of a pane that /new starts through
+	// the interactive shell.
+	srv.Env = append(os.Environ(), "ZDOTDIR="+t.TempDir())
 	var srvOut bytes.Buffer
 	srv.Stdout, srv.Stderr = &srvOut, &srvOut
 	srv.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}

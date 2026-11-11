@@ -140,6 +140,8 @@ var testTiming = daemon.Timing{
 	AnswerGrace:  600 * time.Millisecond,
 	StoppedGrace: 200 * time.Millisecond,
 	Typing:       500 * time.Millisecond,
+	NewAgentWait: 3 * time.Second,
+	NewAgentPoll: 50 * time.Millisecond,
 }
 
 // start runs the daemon in a goroutine.
@@ -401,8 +403,14 @@ func (e *env) keys() []string {
 
 // --- registry helpers ---
 
-// spool writes a hook report in the spool folder.
+// spool writes a hook report of the test's pane in the spool folder.
 func (e *env) spool(runtime, event string, payload map[string]any) {
+	e.t.Helper()
+	e.spoolFrom(rexSess, rexBlock, runtime, event, payload)
+}
+
+// spoolFrom writes a hook report from the agent in a Rex session and block.
+func (e *env) spoolFrom(sess, block, runtime, event string, payload map[string]any) {
 	e.t.Helper()
 	dir := e.cfg.SpoolDir()
 	if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -410,7 +418,7 @@ func (e *env) spool(runtime, event string, payload map[string]any) {
 	}
 	rep := map[string]any{
 		"runtime": runtime, "event": event, "at": time.Now().UTC().Format(time.RFC3339Nano),
-		"rex_session": rexSess, "rex_block": rexBlock, "payload": payload,
+		"rex_session": sess, "rex_block": block, "payload": payload,
 	}
 	b, _ := json.Marshal(rep)
 	name := fmt.Sprintf("%d-%d-%d.json", time.Now().UnixNano(), os.Getpid(), e.seq.Add(1))

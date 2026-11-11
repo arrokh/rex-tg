@@ -69,6 +69,11 @@ func TestDefaults(t *testing.T) {
 	if got := c.Input("nope"); got.WhileWorking != "" {
 		t.Errorf("unknown runtime = %+v", got)
 	}
+	for rt, want := range map[agents.Runtime]string{agents.Pi: "pi", agents.Claude: "claude", agents.Codex: "codex"} {
+		if l := c.Input(rt).Launch; len(l) != 1 || l[0] != want {
+			t.Errorf("%s launch = %q", rt, l)
+		}
+	}
 }
 
 func TestLoadMissingGivesDefaults(t *testing.T) {
@@ -96,6 +101,7 @@ pi_argv0 = ["pi", "pi2"]
 claude_exec_glob = ["~/vers/*"]
 
 [agents.claude]
+launch = ["claude", "--model", "opus"]
 paste_enter_delay = "500ms"
 while_working = "queue"
 answers = [{label="1 Yes", keys=["1"]}]
@@ -140,6 +146,9 @@ dir = "~/st"
 	if cl.InterruptKeys[0] != "escape" {
 		t.Error("claude interrupt default lost")
 	}
+	if strings.Join(cl.Launch, " ") != "claude --model opus" || c.Input(agents.Pi).Launch[0] != "pi" {
+		t.Errorf("launch: claude %q, pi %q", cl.Launch, c.Input(agents.Pi).Launch)
+	}
 	if c.Input(agents.Codex).Answers[0].Keys[0] != "y" {
 		t.Error("codex default lost")
 	}
@@ -165,6 +174,8 @@ func TestLoadErrors(t *testing.T) {
 		{"negative duration", "[rex]\nscan_interval = \"-1s\"\n", "negative"},
 		{"bad mode", "[display]\nmode = \"loud\"\n", "display.mode"},
 		{"bad while working", "[agents.pi]\nwhile_working = \"x\"\n", "while_working"},
+		{"empty launch", "[agents.codex]\nlaunch = []\n", "agents.codex.launch"},
+		{"blank launch", "[agents.pi]\nlaunch = [\" \"]\n", "agents.pi.launch"},
 		{"syntax", "[rex\n", "parse"},
 		{"relative state dir", "[state]\ndir = \"state\"\n", "absolute"},
 		{"plain http api", "[telegram]\napi_base = \"http://api.telegram.org\"\n", "https"},
