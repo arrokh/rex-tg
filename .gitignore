@@ -13,3 +13,6 @@
 .DS_Store
 .idea/
 .vscode/
+
+# Binary built at the root by `go build` without -o
+/rex-tg
