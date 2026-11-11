@@ -22,6 +22,7 @@ Guidance for coding agents (Claude Code, Codex, pi, and others) that work in thi
 - The bot token lives only in the macOS Keychain. Never put it in files, argv, logs, or test data.
 - Tests must not send input to, capture, or close the user's own Rex panes or sessions. Use the fakes (`internal/rex/rextest`, `internal/telegram/tgtest`) or an isolated Rex server.
 - Never copy real transcripts or other user data into tests or docs.
+- Fake secrets in tests (tokens, API keys, JWTs, private keys) must not appear whole in any file: build them from pieces, such as `"ghp_" + "abc…"` or a split `BEGIN … PRIVATE KEY` header, and use obviously fake key bodies. Secret scanners (GitGuardian) read the raw text and flag whole fake values too.
 
 ## Docs
 
