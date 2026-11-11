@@ -132,7 +132,7 @@ func (s *Store) Enqueue(ctx context.Context, item OutboxItem) (int64, bool, erro
 	return id, ok, nil
 }
 
-const partCols = `p.outbox_id, p.part, o.thread_id, t.chat_id, t.message_thread_id, o.kind,
+const partCols = `p.outbox_id, p.part, o.thread_id, t.chat_id, t.message_thread_id, o.kind, o.event_key,
 	p.content, p.format, p.filename, o.silent, p.state, p.tg_message_id`
 
 const partFrom = ` FROM outbox_part p JOIN outbox o ON o.id=p.outbox_id JOIN thread t ON t.id=o.thread_id `
@@ -142,7 +142,7 @@ func scanPart(r scanner) (Part, error) {
 	var fn sql.NullString
 	var silent int
 	var tg sql.NullInt64
-	err := r.Scan(&p.OutboxID, &p.Part, &p.ThreadID, &p.ChatID, &p.MessageThreadID, &p.Kind,
+	err := r.Scan(&p.OutboxID, &p.Part, &p.ThreadID, &p.ChatID, &p.MessageThreadID, &p.Kind, &p.Key,
 		&p.Content, &p.Format, &fn, &silent, &p.State, &tg)
 	if err != nil {
 		return Part{}, err
@@ -297,6 +297,21 @@ func (s *Store) MarkPartUnknown(ctx context.Context, outboxID int64, part int) e
 func (s *Store) MarkPartFailed(ctx context.Context, outboxID int64, part int, reason string) error {
 	return s.mustSetPart(ctx, outboxID, part, `state='failed'`, nil, "",
 		`UPDATE outbox SET last_error=? WHERE id=?`, reason)
+}
+
+// NewestUnknown returns the newest item of a topic that has a part whose
+// outcome is unknown, not counting notices. ok is false when there is none.
+func (s *Store) NewestUnknown(ctx context.Context, threadID int64) (id int64, ok bool, err error) {
+	err = s.db.QueryRowContext(ctx, `SELECT o.id FROM outbox o JOIN outbox_part p ON p.outbox_id=o.id
+		WHERE o.thread_id=? AND p.state='unknown' AND o.kind NOT IN ('notice','part-notice')
+		ORDER BY o.id DESC LIMIT 1`, threadID).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, fmt.Errorf("store: newest unknown: %w", err)
+	}
+	return id, true, nil
 }
 
 // ResendUnknown moves the unknown parts of a row back to pending and returns how many.

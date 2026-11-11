@@ -164,6 +164,7 @@ type Part struct {
 	ChatID          int64
 	MessageThreadID int64
 	Kind            string
+	Key             string // the outbox item's event key
 	Content         string
 	Format          string
 	Filename        string

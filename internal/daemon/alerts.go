@@ -108,6 +108,23 @@ func preBlock(lines []string, limit int) string {
 	return "<pre>" + format.Escape(text) + "</pre>"
 }
 
+// reopenAlert posts the prompt that a blocked pane shows now, after an older
+// alert turned out stale. The pane stayed blocked, so no state change posts
+// it.
+func (d *daemon) reopenAlert(threadID int64) {
+	th, err := d.st.Thread(d.ctx, threadID)
+	if err != nil || th.Status != store.ThreadLive {
+		return
+	}
+	p, ok, err := d.st.PaneByConversation(d.ctx, th.CurrentConversationID)
+	if err != nil || !ok || p.State != "blocked" {
+		return
+	}
+	if p.StateKind == store.AlertPermission || p.StateKind == store.AlertQuestion {
+		d.openAlert(th, p.StateKind)
+	}
+}
+
 // openAlert starts a worker that posts the alert of a blocked pane (flow 5).
 func (d *daemon) openAlert(th store.Thread, kind string) {
 	if d.alertBusy[th.ID] {
@@ -272,6 +289,7 @@ func (d *daemon) answerAlert(alertID int64, idx int, respond func(text string, i
 			_ = d.st.SetAlertState(ctx, al.ID, store.AlertGone)
 			d.removeButtons(th.ChatID, al.TGMessageID)
 			respond("This prompt is gone.", true)
+			d.emit(evAlertStale{th.ID}) // a newer prompt may show now
 			return
 		}
 		respond("⛔ Not sent: "+reason+".", true)

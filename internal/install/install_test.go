@@ -511,7 +511,8 @@ func TestLaunchd(t *testing.T) {
 	for _, want := range []string{
 		"<string>local.rex-tg</string>",
 		"<string>" + testBin + "</string>\n\t\t<string>daemon</string>",
-		"<key>RunAtLoad</key>\n\t<true/>", "<key>KeepAlive</key>\n\t<true/>",
+		"<key>RunAtLoad</key>\n\t<true/>", "<key>KeepAlive</key>\n\t<dict>\n\t\t<key>SuccessfulExit</key>\n\t\t<false/>\n\t</dict>",
+		"<key>ThrottleInterval</key>\n\t<integer>30</integer>",
 		"<key>ProcessType</key>\n\t<string>Standard</string>",
 		"<string>" + filepath.Join(p.LogDir, "launchd.out.log") + "</string>",
 		"<string>" + filepath.Join(p.LogDir, "launchd.err.log") + "</string>",
@@ -639,5 +640,110 @@ func TestLaunchdLogPermissions(t *testing.T) {
 	}
 	if fi, _ := os.Stat(filepath.Join(q.LogDir, "launchd.err.log")); fi.Mode().Perm() != 0o600 {
 		t.Errorf("err log mode %v", fi.Mode())
+	}
+}
+
+// A settings file without a hooks object comes back exactly as it was after
+// install and uninstall, for both agents.
+func TestRoundTripWithoutHooksKey(t *testing.T) {
+	for _, original := range []string{
+		"{\n  \"model\": \"x\"\n}\n",
+		`{"a":1}`,
+	} {
+		p := newPaths(t)
+		for _, path := range []string{p.ClaudeSettings, p.CodexHooks} {
+			if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, []byte(original), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if _, err := InstallClaude(p); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := InstallCodex(p); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := UninstallClaude(p); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := UninstallCodex(p, false); err != nil {
+			t.Fatal(err)
+		}
+		for _, path := range []string{p.ClaudeSettings, p.CodexHooks} {
+			got, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(got) != original {
+				t.Errorf("%s after a round trip = %q, want %q", filepath.Base(path), got, original)
+			}
+		}
+	}
+}
+
+// A file with CRLF line ends keeps them: the new lines use CRLF too, and a
+// round trip gives the file back as it was.
+func TestCRLFFileKeepsItsLineEnds(t *testing.T) {
+	p := newPaths(t)
+	original := "{\r\n  \"a\": 1\r\n}\r\n"
+	if err := os.MkdirAll(filepath.Dir(p.ClaudeSettings), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p.ClaudeSettings, []byte(original), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := InstallClaude(p); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := os.ReadFile(p.ClaudeSettings)
+	if strings.Count(string(got), "\n") != strings.Count(string(got), "\r\n") {
+		t.Fatalf("mixed line ends after install: %q", got)
+	}
+	if _, err := UninstallClaude(p); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := os.ReadFile(p.ClaudeSettings); string(got) != original {
+		t.Fatalf("after a round trip = %q, want %q", got, original)
+	}
+}
+
+// A file of the user's at the extension path is backed up before install
+// writes over it, and uninstall never removes a file rex-tg did not write.
+func TestPiLeavesTheUsersFile(t *testing.T) {
+	p := newPaths(t)
+	mine := "// my own extension\nexport default function () {}\n"
+	write(t, p.PiExtension, mine, 0o644)
+	ch, err := InstallPi(p)
+	if err != nil || !ch.Changed || ch.Backup == "" {
+		t.Fatalf("install = %+v, %v", ch, err)
+	}
+	if got, _ := os.ReadFile(ch.Backup); string(got) != mine {
+		t.Fatalf("backup = %q, want the user's file", got)
+	}
+	if _, err := UninstallPi(p); err != nil {
+		t.Fatalf("uninstall of our file: %v", err)
+	}
+	write(t, p.PiExtension, mine, 0o644)
+	if _, err := UninstallPi(p); !errors.Is(err, ErrNotOurs) {
+		t.Fatalf("uninstall of the user's file: err = %v, want ErrNotOurs", err)
+	}
+	if got, _ := os.ReadFile(p.PiExtension); string(got) != mine {
+		t.Fatalf("the user's file changed: %q", got)
+	}
+}
+
+// With a current rex-tg hook in place, an old one is left as it is: updating
+// it would make the same hook run twice.
+func TestCurrentHookKeepsOldOneUnchanged(t *testing.T) {
+	p := newPaths(t)
+	write(t, p.ClaudeSettings, `{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"/old/place/rex-tg hook claude"}]},{"hooks":[{"type":"command","command":"`+testBin+` hook claude","timeout":5}]}]}}`, 0o644)
+	if _, err := InstallClaude(p); err != nil {
+		t.Fatal(err)
+	}
+	stop := gjson.Get(read(t, p.ClaudeSettings), "hooks.Stop").Array()
+	if len(stop) != 2 || stop[0].Get("hooks.0.command").String() != "/old/place/rex-tg hook claude" {
+		t.Fatalf("Stop: %v", stop)
 	}
 }

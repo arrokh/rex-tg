@@ -5,6 +5,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -292,6 +294,7 @@ func TestClassify(t *testing.T) {
 		{"cannot delete", api(400, "Bad Request: message can't be deleted"), telegram.ClassDeleteTargetGone},
 		{"thread", api(400, "Bad Request: message thread not found"), telegram.ClassThreadNotFound},
 		{"topic id", api(400, "Bad Request: TOPIC_ID_INVALID"), telegram.ClassThreadNotFound},
+		{"topic closed", api(400, "Bad Request: TOPIC_CLOSED"), telegram.ClassThreadNotFound},
 		{"topic same name", api(400, "Bad Request: TOPIC_NOT_MODIFIED"), telegram.ClassNotModified},
 		{"topic deleted", api(400, "Bad Request: TOPIC_DELETED"), telegram.ClassThreadNotFound},
 		{"thread not found", api(400, "Bad Request: thread not found"), telegram.ClassThreadNotFound},
@@ -746,5 +749,43 @@ func TestSendRichMessageErrors(t *testing.T) {
 	}
 	if n := len(s.Messages(chat)); n != 0 {
 		t.Fatalf("messages stored: %d", n)
+	}
+}
+
+// A request that cannot connect never left this machine: it is "not sent",
+// and the token is not in the error.
+func TestNoConnectionIsNotSent(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := ln.Addr().String()
+	ln.Close() // nothing listens there now
+	const token = "123456:SECRET-token-for-this-test"
+	c := telegram.New(token, telegram.WithBaseURL("http://"+addr))
+	_, err = c.SendMessage(context.Background(), telegram.SendMessageParams{ChatID: chat, Text: "hi"})
+	if telegram.Classify(err) != telegram.ClassNotSent {
+		t.Fatalf("class = %v (%v), want not sent", telegram.Classify(err), err)
+	}
+	if strings.Contains(err.Error(), "SECRET") {
+		t.Fatalf("the token is in the error: %v", err)
+	}
+}
+
+// A connection that drops after the request was written may have posted the
+// message: the outcome stays unknown.
+func TestDropAfterWriteIsUnknown(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.ReadAll(r.Body)
+		conn, _, err := w.(http.Hijacker).Hijack()
+		if err == nil {
+			conn.Close()
+		}
+	}))
+	defer srv.Close()
+	c := telegram.New("123456:abc", telegram.WithBaseURL(srv.URL))
+	_, err := c.SendMessage(context.Background(), telegram.SendMessageParams{ChatID: chat, Text: "hi"})
+	if telegram.Classify(err) != telegram.ClassUnknownOutcome {
+		t.Fatalf("class = %v (%v), want unknown outcome", telegram.Classify(err), err)
 	}
 }

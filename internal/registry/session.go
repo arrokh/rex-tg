@@ -84,13 +84,13 @@ func (r *Registry) stopOccupant(ctx context.Context, pane store.Pane, mem *paneM
 		return nil, fmt.Errorf("registry: clear occupant: %w", err)
 	}
 	out := []Change{{Kind: SessionStopped, PaneID: pane.ID, ConversationID: conv}}
-	off, err := r.topicOffline(ctx, conv, pane.ID)
+	off, err := r.topicOffline(ctx, conv, pane.ID, ReasonAgentExited)
 	return append(out, off...), err
 }
 
 // topicOffline sets the topic offline when conv is its current session and it
 // is live.
-func (r *Registry) topicOffline(ctx context.Context, conv, paneID int64) ([]Change, error) {
+func (r *Registry) topicOffline(ctx context.Context, conv, paneID int64, reason string) ([]Change, error) {
 	th, ok, err := r.st.ThreadByConversation(ctx, conv)
 	if err != nil {
 		return nil, fmt.Errorf("registry: find topic: %w", err)
@@ -101,7 +101,7 @@ func (r *Registry) topicOffline(ctx context.Context, conv, paneID int64) ([]Chan
 	if err := r.st.SetThreadStatus(ctx, th.ID, store.ThreadOffline); err != nil {
 		return nil, fmt.Errorf("registry: topic offline: %w", err)
 	}
-	return []Change{{Kind: TopicOffline, PaneID: paneID, ConversationID: conv, ThreadID: th.ID}}, nil
+	return []Change{{Kind: TopicOffline, PaneID: paneID, ConversationID: conv, ThreadID: th.ID, Reason: reason}}, nil
 }
 
 // paneGone handles a closed Rex block.
@@ -115,7 +115,7 @@ func (r *Registry) paneGone(ctx context.Context, pane store.Pane, now time.Time)
 	if conv == 0 {
 		return out, nil
 	}
-	off, err := r.topicOffline(ctx, conv, pane.ID)
+	off, err := r.topicOffline(ctx, conv, pane.ID, ReasonPaneClosed)
 	return append(out, off...), err
 }
 
@@ -375,7 +375,7 @@ func (r *Registry) adopt(ctx context.Context, pane store.Pane, mem *paneMem, rt 
 		if t, ok, err := r.st.ThreadByConversation(ctx, prevOcc); err != nil {
 			return nil, fmt.Errorf("registry: find topic: %w", err)
 		} else if ok && t.ID != taken {
-			off, err := r.topicOffline(ctx, prevOcc, pane.ID)
+			off, err := r.topicOffline(ctx, prevOcc, pane.ID, ReasonReplaced)
 			if err != nil {
 				return nil, err
 			}

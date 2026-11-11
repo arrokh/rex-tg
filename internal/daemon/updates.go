@@ -247,8 +247,26 @@ func (d *daemon) onCallback(u telegram.Update) {
 		d.answerCallback(cb.ID, "", false)
 		d.spawn(func() { d.refreshAgents(chat, msg) })
 		return
+	case "rs":
+		if id, ok := arg(1); ok {
+			d.resendButton(u.UpdateID, cb, id)
+			return
+		}
 	}
 	d.answerCallback(cb.ID, "Unknown button.", false)
+}
+
+// resendButton is `🔁 Send again` on a "may not have arrived" notice: it
+// works like /resend for that reply, and the button goes away.
+func (d *daemon) resendButton(upd int64, cb *telegram.CallbackQuery, id int64) {
+	th, ok := d.threadOfMessage(cb.Message)
+	if !ok {
+		d.answerCallback(cb.ID, "This topic is closed.", false)
+		return
+	}
+	d.answerCallback(cb.ID, "", false)
+	d.removeButtons(cb.Message.Chat.ID, cb.Message.MessageID)
+	d.resend(th, upd, strconv.FormatInt(id, 10))
 }
 
 func (d *daemon) threadOfMessage(m *telegram.Message) (store.Thread, bool) {
@@ -280,7 +298,8 @@ func (d *daemon) cancelButton(cb *telegram.CallbackQuery, id int64) {
 	if err := d.st.SetInboundState(d.ctx, id, store.InboundDone, "cancelled", d.now()); err != nil {
 		d.log.Warn("cancel: state", "err", err)
 	}
-	delete(d.actions, id)
+	d.forget(id)
+	delete(d.extra, id)
 	d.answerCallback(cb.ID, "Cancelled", false)
 	chat, msg := cb.Message.Chat.ID, cb.Message.MessageID
 	d.spawn(func() {

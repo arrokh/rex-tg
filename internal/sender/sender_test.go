@@ -3,9 +3,11 @@ package sender_test
 import (
 	"context"
 	"errors"
+	"net/http"
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -236,7 +238,7 @@ func TestRateLimitWaitsAndRetriesOnce(t *testing.T) {
 }
 
 func noticeText(id int64, part int) string {
-	return "⚠️ Part " + string(rune('0'+part+1)) + " of reply #" + string(rune('0'+id)) + " may not have arrived. /resend " + string(rune('0'+id))
+	return "⚠️ Part " + string(rune('0'+part+1)) + " of reply #" + string(rune('0'+id)) + " may not have arrived."
 }
 
 func TestUnknownOutcomeNoRetryOneNotice(t *testing.T) {
@@ -255,6 +257,10 @@ func TestUnknownOutcomeNoRetryOneNotice(t *testing.T) {
 	ms := e.srv.Messages(chat)
 	if len(ms) != 1 || ms[0].Text != noticeText(id, 0) || ms[0].ParseMode != "HTML" {
 		t.Fatalf("messages = %+v", ms)
+	}
+	// One tap sends the reply again: the button carries its id.
+	if m := ms[0].Markup; m == nil || len(m.InlineKeyboard) != 1 || m.InlineKeyboard[0][0].CallbackData != sender.ResendButtonData(id) {
+		t.Fatalf("notice buttons = %+v, want one Send again button for #%d", ms[0].Markup, id)
 	}
 	if n := len(e.srv.Calls("sendMessage")); n != 2 {
 		t.Fatalf("sendMessage calls = %d, want 2 (original and notice)", n)
@@ -798,5 +804,105 @@ func TestReactAndTypingGoneEmitNoEvent(t *testing.T) {
 	case ev := <-e.s.Events():
 		t.Fatalf("unexpected event %+v", ev)
 	default:
+	}
+}
+
+// failFirst fails the first n requests for a method before writing them, as
+// when the network is down.
+type failFirst struct {
+	method string
+	n      atomic.Int32
+}
+
+func (f *failFirst) RoundTrip(r *http.Request) (*http.Response, error) {
+	if strings.HasSuffix(r.URL.Path, "/"+f.method) && f.n.Add(-1) >= 0 {
+		return nil, errors.New("dial tcp: connect: network is unreachable")
+	}
+	return http.DefaultTransport.RoundTrip(r)
+}
+
+// A request that never left the machine cannot have posted anything, so the
+// part is sent again after a growing pause, with no "may not have arrived"
+// notice.
+func TestNotSentIsRetriedWithoutNotice(t *testing.T) {
+	ft := &failFirst{method: "sendMessage"}
+	ft.n.Store(3)
+	e := newEnv(t, sender.Options{}, telegram.WithHTTPClient(&http.Client{Transport: ft}))
+	th := e.topic(1)
+	id := e.enqueue(th, "k", store.FormatPlain, "hello")
+	e.start()
+	e.waitState(id, store.OutboxSent)
+	ms := e.srv.Messages(chat)
+	if len(ms) != 1 || ms[0].Text != "hello" {
+		t.Fatalf("messages = %+v, want only the answer", ms)
+	}
+	var waited time.Duration
+	for _, d := range e.clk.slept() {
+		waited += d
+	}
+	if waited < 7*time.Second { // 1 s + 2 s + 4 s of backoff
+		t.Errorf("waited %v in total, want the growing backoff (%v)", waited, e.clk.slept())
+	}
+}
+
+// A part that Telegram refuses for good gets a notice, but a notice never
+// gets a notice of its own: they cannot pile up.
+func TestRefusedPartGetsOneNotice(t *testing.T) {
+	e := newEnv(t, sender.Options{})
+	th := e.topic(1)
+	id := e.enqueue(th, "k", store.FormatPlain, "hello")
+	e.srv.FailNext("sendMessage", 2, 400, "Bad Request: message is too long", 0)
+	e.start()
+	e.waitState(id, store.OutboxFailed)
+	waitFor(t, "the notice attempt", func() bool { return len(e.srv.Calls("sendMessage")) == 2 })
+	time.Sleep(50 * time.Millisecond)
+	if n := len(e.srv.Calls("sendMessage")); n != 2 {
+		t.Fatalf("sendMessage calls = %d, want the part and one notice", n)
+	}
+	text, _ := e.srv.Calls("sendMessage")[1].Params["text"].(string)
+	if !strings.Contains(text, "could not be sent") || !strings.Contains(text, "message is too long") {
+		t.Errorf("notice = %q", text)
+	}
+}
+
+// A notice that itself may not have arrived gets no notice of its own, also
+// when it was stored before notices had their own kind (seen live: a chain of
+// notices about notices, one per timeout).
+func TestNoNoticeAboutANotice(t *testing.T) {
+	e := newEnv(t, sender.Options{})
+	th := e.topic(1)
+	old, _, err := e.st.Enqueue(ctx, store.OutboxItem{ThreadID: th.ID, Key: "notice:unknown:7:0", Kind: "notice",
+		Parts: []store.PartContent{{Content: "⚠️ Part 1 of reply #7 may not have arrived.", Format: store.FormatHTML}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.srv.FailNext("sendMessage", 1, 500, "Internal Server Error", 0)
+	e.start()
+	e.waitState(old, store.OutboxUnknown)
+	time.Sleep(50 * time.Millisecond)
+	if n := len(e.srv.Calls("sendMessage")); n != 1 {
+		t.Fatalf("sendMessage calls = %d, want only the notice itself", n)
+	}
+	if id, ok := sender.NoticeTarget("notice:unknown:7:0"); !ok || id != 7 {
+		t.Fatalf("NoticeTarget = %d, %v", id, ok)
+	}
+}
+
+// The daemon's own notices (for example a reply to a command) get no
+// "may not have arrived" notice either.
+func TestNoNoticeAboutADaemonNotice(t *testing.T) {
+	e := newEnv(t, sender.Options{})
+	th := e.topic(1)
+	id, _, err := e.st.Enqueue(ctx, store.OutboxItem{ThreadID: th.ID, Key: "reply:42:resend", Kind: "notice",
+		Parts: []store.PartContent{{Content: "Sending 1 part(s) of #7 again.", Format: store.FormatHTML}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.srv.FailNext("sendMessage", 1, 500, "Internal Server Error", 0)
+	e.start()
+	e.waitState(id, store.OutboxUnknown)
+	time.Sleep(50 * time.Millisecond)
+	if n := len(e.srv.Calls("sendMessage")); n != 1 {
+		t.Fatalf("sendMessage calls = %d, want only the notice itself", n)
 	}
 }

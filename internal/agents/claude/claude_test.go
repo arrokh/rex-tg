@@ -345,3 +345,34 @@ func TestUnknownBlockIgnored(t *testing.T) {
 		t.Errorf("%+v %v", evs, err)
 	}
 }
+
+// <system-reminder> blocks in a user line are context for the model, not part
+// of what the user typed: they never reach the prompt text.
+func TestRemindersAreNotPartOfThePrompt(t *testing.T) {
+	const pre = `{"type":"user","uuid":"u1","sessionId":"S","timestamp":"2026-11-11T10:00:00.000Z","message":{"role":"user","content":`
+	cases := []struct {
+		name, content, want string
+	}{
+		{"separate blocks", `[{"type":"text","text":"<system-reminder>secret ctx</system-reminder>"},{"type":"text","text":"hello"}]`, "hello"},
+		{"after the text", `[{"type":"text","text":"hello\n\n<system-reminder>note</system-reminder>"}]`, "hello"},
+		{"only reminders", `[{"type":"text","text":"<system-reminder>a</system-reminder>"},{"type":"text","text":"<system-reminder>b</system-reminder>"}]`, ""},
+		{"an unclosed tag stays", `[{"type":"text","text":"show <system-reminder> as text"}]`, "show <system-reminder> as text"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			evs, err := claude.New().ParseLine([]byte(pre+c.content+`}}`), agents.LineContext{SessionID: "S"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got string
+			for _, e := range evs {
+				if e.Kind == agents.UserPrompt {
+					got = e.Text
+				}
+			}
+			if got != c.want {
+				t.Fatalf("prompt = %q, want %q", got, c.want)
+			}
+		})
+	}
+}

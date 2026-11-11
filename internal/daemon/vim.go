@@ -116,50 +116,76 @@ func nextVimKey(m, want vimMode) string {
 	return "escape"
 }
 
+// vimStuckMark is what d.vimStuck holds for a pane: the label that showed no
+// reaction to a key, and the pi process it was seen with.
+type vimStuckMark struct {
+	label string
+	pid   int
+}
+
 // settlePiVim brings pi-vim to want, one key at a time, and reads the screen
-// after each key, so no key is pressed on a guess. It returns nil when pi-vim
-// shows want, when the pane has no pi-vim label, or when the screen cannot be
-// read at the start (then typing goes on as without pi-vim). It returns
-// errVimStuck when a key shows no effect, and a Rex or context error when a
-// call fails on the way.
-func (d *daemon) settlePiVim(ctx context.Context, pane store.Pane, want vimMode) error {
+// after each key, so no key is pressed on a guess. Before each key it checks
+// again that typing is not paused and that the agent is in front, because
+// this can take a few seconds. It reports whether it pressed a key.
+//
+// It returns nil when pi-vim shows want, when the pane has no pi-vim label,
+// or when the screen cannot be read at the start (then typing goes on as
+// without pi-vim). It returns errPausedBefore or errGoneBefore from the
+// check, errVimStuck when a key shows no effect, and errRetryBefore or a
+// context error when a call fails on the way.
+func (d *daemon) settlePiVim(ctx context.Context, pane store.Pane, want vimMode) (pressed bool, err error) {
 	screen, err := d.rx.Capture(ctx, pane.Session, pane.Block)
 	if err != nil {
-		return nil
+		return false, nil
 	}
 	st := piVimState(screen)
 	for range vimMaxKeys {
-		if was, ok := d.vimStuck.Load(pane.ID); ok && was.(string) != st.label {
-			d.vimStuck.Delete(pane.ID) // the label changed since, so the pane reads keys again
+		if v, ok := d.vimStuck.Load(pane.ID); ok {
+			if m := v.(vimStuckMark); m.label != st.label || m.pid != pane.PID {
+				d.vimStuck.Delete(pane.ID) // the screen or the process changed since
+			}
 		}
 		key := nextVimKey(st.mode, want)
 		if key == "" {
-			return nil
+			return pressed, nil
 		}
 		if _, ok := d.vimStuck.Load(pane.ID); ok {
-			return errVimStuck
+			return pressed, errVimStuck
+		}
+		switch paused, front, err := d.safeNow(pane); {
+		case err != nil:
+			return pressed, errRetryBefore
+		case paused:
+			return pressed, errPausedBefore
+		case !front:
+			return pressed, errGoneBefore
 		}
 		if err := d.rx.SendKeys(ctx, pane.Session, pane.Block, key); err != nil {
-			return err
+			return pressed, errRetryBefore
 		}
+		pressed = true
 		next, err := d.waitVimChange(ctx, pane, st)
-		if err != nil {
-			return err
-		}
-		if next == st {
-			d.vimStuck.Store(pane.ID, st.label)
-			return errVimStuck
+		switch {
+		case ctx.Err() != nil:
+			return pressed, ctx.Err()
+		case err != nil:
+			return pressed, errRetryBefore
+		case next == st:
+			d.vimStuck.Store(pane.ID, vimStuckMark{st.label, pane.PID})
+			return pressed, errVimStuck
 		}
 		st = next
 	}
 	if nextVimKey(st.mode, want) == "" {
-		return nil
+		return pressed, nil
 	}
-	return errVimStuck
+	return pressed, errVimStuck
 }
 
-// waitVimChange reads the screen until the pi-vim label differs from was. It
-// returns was when the label did not change in time.
+// waitVimChange reads the screen until it shows a pi-vim label other than
+// was. A screen without a label does not count: every pi-vim mode has one,
+// so a missing label is a redraw caught halfway or something covering the
+// editor. It returns was when no other label showed in time.
 func (d *daemon) waitVimChange(ctx context.Context, pane store.Pane, was vimState) (vimState, error) {
 	for range vimPolls {
 		if !sleepCtx(ctx, vimPollEvery) {
@@ -169,7 +195,7 @@ func (d *daemon) waitVimChange(ctx context.Context, pane store.Pane, was vimStat
 		if err != nil {
 			return was, err
 		}
-		if st := piVimState(screen); st != was {
+		if st := piVimState(screen); st.mode != vimNone && st != was {
 			return st, nil
 		}
 	}

@@ -184,6 +184,9 @@ func (adapter) ParseLine(line []byte, ctx agents.LineContext) ([]agents.Event, e
 			phase = agents.Error
 		}
 		text := joinText(blocks, "\n\n")
+		if phase == agents.Error && msg.ErrorMessage != "" && strings.TrimSpace(text) != "" && !strings.Contains(text, msg.ErrorMessage) {
+			text += "\n\n" + msg.ErrorMessage // the reason, after what was written before the error
+		}
 		textDone := false
 		for _, b := range blocks {
 			switch b.Type {

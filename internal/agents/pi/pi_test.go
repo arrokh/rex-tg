@@ -294,3 +294,15 @@ func TestUnknownTypes(t *testing.T) {
 		}
 	}
 }
+
+// An error after some text keeps both: what was written, then the reason.
+func TestErrorAfterTextKeepsTheReason(t *testing.T) {
+	line := `{"type":"message","id":"m","timestamp":"2026-11-11T10:00:00.000Z","message":{"role":"assistant","content":[{"type":"text","text":"I started the change"}],"stopReason":"error","errorMessage":"rate limit reached"}}`
+	evs, err := pi.New().ParseLine([]byte(line), agents.LineContext{SessionID: "S"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(evs) != 1 || evs[0].Phase != agents.Error || evs[0].Text != "I started the change\n\nrate limit reached" {
+		t.Fatalf("events = %+v", evs)
+	}
+}

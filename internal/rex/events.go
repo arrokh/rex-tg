@@ -77,7 +77,24 @@ func (c *Client) Events(ctx context.Context) (<-chan Event, <-chan error) {
 
 func (c *Client) streamEvents(ctx context.Context, events chan<- Event, errs chan<- error) {
 	defer close(errs)
-	defer close(events)
+	// A consumer reads errs after events is closed, and errs may be full of
+	// parse and drop reports by the end. So events is closed before the last
+	// error is sent, or that send could wait forever.
+	eventsOpen := true
+	closeEvents := func() {
+		if eventsOpen {
+			close(events)
+			eventsOpen = false
+		}
+	}
+	defer closeEvents()
+	final := func(err error) {
+		closeEvents()
+		select {
+		case errs <- err:
+		case <-ctx.Done():
+		}
+	}
 
 	cmd := exec.CommandContext(ctx, c.bin, append(c.globals(), "events", "--all", "--json")...)
 	var stderr bytes.Buffer
@@ -88,7 +105,7 @@ func (c *Client) streamEvents(ctx context.Context, events chan<- Event, errs cha
 		err = cmd.Start()
 	}
 	if err != nil {
-		errs <- &Error{Command: "events", Err: err}
+		final(&Error{Command: "events", Err: err})
 		return
 	}
 
@@ -149,11 +166,11 @@ func (c *Client) streamEvents(ctx context.Context, events chan<- Event, errs cha
 	}
 	switch {
 	case scanErr != nil:
-		errs <- &Error{Command: "events", Stderr: cleanStderr(stderr.String(), nil), Err: fmt.Errorf("read output: %w", scanErr)}
+		final(&Error{Command: "events", Stderr: cleanStderr(stderr.String(), nil), Err: fmt.Errorf("read output: %w", scanErr)})
 	case waitErr != nil:
-		errs <- &Error{Command: "events", Stderr: cleanStderr(stderr.String(), nil), Err: waitErr}
+		final(&Error{Command: "events", Stderr: cleanStderr(stderr.String(), nil), Err: waitErr})
 	default:
-		errs <- &Error{Command: "events", Stderr: cleanStderr(stderr.String(), nil), Err: fmt.Errorf("stream ended")}
+		final(&Error{Command: "events", Stderr: cleanStderr(stderr.String(), nil), Err: fmt.Errorf("stream ended")})
 	}
 }
 

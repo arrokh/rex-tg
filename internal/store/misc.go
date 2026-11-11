@@ -219,6 +219,39 @@ func (s *Store) InsertInbound(ctx context.Context, in Inbound) (bool, error) {
 	return n > 0, err
 }
 
+// JoinInbound stores the row of a joined message and marks the queued updates
+// it joins as done, in one transaction, so a crash cannot leave both the
+// joined row and its parts to be typed. It returns false when the joined row
+// exists already.
+func (s *Store) JoinInbound(ctx context.Context, joined Inbound, parts []int64) (bool, error) {
+	var inserted bool
+	err := s.tx(ctx, func(tx *sql.Tx) error {
+		state := joined.State
+		if state == "" {
+			state = InboundQueued
+		}
+		res, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO inbound(`+inboundCols+`) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			joined.UpdateID, joined.ChatID, nullInt(joined.MessageThreadID), nullInt(joined.TGMessageID), joined.FromID,
+			joined.Kind, joined.Body, nullStr(joined.BodyHash), nullInt(joined.ThreadID), state, nullStr(joined.Reason),
+			toMsNN(joined.CreatedAt), toMs(joined.DeliveredAt), nullStr(joined.AckedEventKey))
+		if err != nil {
+			return fmt.Errorf("store: insert joined inbound: %w", err)
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return err
+		}
+		inserted = n > 0
+		for _, id := range parts {
+			if _, err := tx.ExecContext(ctx, `UPDATE inbound SET state='done', reason='joined' WHERE update_id=? AND state='queued'`, id); err != nil {
+				return fmt.Errorf("store: mark joined inbound: %w", err)
+			}
+		}
+		return nil
+	})
+	return inserted, err
+}
+
 // SetInboundState changes an update's state and reason. Moving to delivered
 // also records the delivery time.
 func (s *Store) SetInboundState(ctx context.Context, updateID int64, state, reason string, at time.Time) error {

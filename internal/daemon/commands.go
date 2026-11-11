@@ -37,7 +37,7 @@ const (
 		"/mode progress|block|final\n" +
 		"/verbose on|full|off\n" +
 		"/reasoning on|off\n" +
-		"/resend &lt;id&gt; - send parts that may not have arrived\n" +
+		"/resend [id] - send again a reply that may not have arrived (the newest one without an id)\n" +
 		"/mute, /unmute - answers without or with sound\n" +
 		"/unlink - stop mirroring this session\n" +
 		"/help - this list"
@@ -128,7 +128,7 @@ func (d *daemon) renderAgents(views []registry.AgentView) (string, *telegram.Inl
 		name := topicName(v.Pane.Label, v.Runtime, cwd, title)
 		fmt.Fprintf(&b, "\n%s <b>%s</b> · %s\n   %s", emoji, esc(noAutoLink(name)), state, agentHTML(v.Runtime, cwd))
 		if paneName(v.Pane.Label) != "" && title != "" {
-			fmt.Fprintf(&b, " · \"%s\"", esc(noAutoLink(format.Truncate(title, 50))))
+			fmt.Fprintf(&b, " · \"%s\"", format.Escape(noAutoLink(format.Truncate(format.Redact(title), 50))))
 		}
 		text := "Open " + name
 		if v.Thread != nil && v.Thread.Status != store.ThreadClosed {
@@ -320,7 +320,7 @@ func (d *daemon) infoText(th store.Thread) string {
 		if title == "" {
 			title = conv.NativeID
 		}
-		fmt.Fprintf(&b, "\nSession: %s (%s)", esc(noAutoLink(format.Truncate(title, 100))), conv.Runtime)
+		fmt.Fprintf(&b, "\nSession: %s (%s)", format.Escape(noAutoLink(format.Truncate(format.Redact(title), 100))), conv.Runtime)
 		if conv.CWD != "" {
 			fmt.Fprintf(&b, "\nFolder: <code>%s</code>", esc(d.tildePath(conv.CWD)))
 		}
@@ -405,9 +405,26 @@ func (d *daemon) keysCommand(th store.Thread, upd int64, keys []string, piVim bo
 			return
 		}
 		if piVim {
-			switch err := d.settlePiVim(d.ctx, pane, vimNormal); {
+			pressed, err := d.settlePiVim(d.ctx, pane, vimNormal)
+			if err == nil && pressed { // that took time: check again
+				switch paused, front, cerr := d.safeNow(pane); {
+				case cerr != nil:
+					err = errRetryBefore
+				case paused:
+					err = errPausedBefore
+				case !front:
+					err = errGoneBefore
+				}
+			}
+			switch {
 			case errors.Is(err, errVimStuck):
 				d.replyTopic(th, tag, "⚠️ The pi editor did not react to Escape, so nothing more was pressed. Check with /screen.")
+				return
+			case errors.Is(err, errPausedBefore):
+				d.replyTopic(th, tag, "⛔ Not sent: "+format.Escape(inbound.ReasonPaused)+".")
+				return
+			case errors.Is(err, errGoneBefore):
+				d.replyTopic(th, tag, "⛔ Not sent: "+format.Escape(inbound.ReasonAgentNotFront)+".")
 				return
 			case err != nil:
 				d.replyTopic(th, tag, "Could not press the keys.")
@@ -502,14 +519,42 @@ func (d *daemon) setMuted(th store.Thread, muted bool) {
 }
 
 // resend sends the parts of an outbox message that may not have arrived.
+//
+// Without an id it takes the newest reply of the topic that may not have
+// arrived: tapping "/resend" in a message sends the command without its
+// argument (seen live). The id of a "may not have arrived" notice stands for
+// the reply that the notice is about.
 func (d *daemon) resend(th store.Thread, upd int64, arg string) {
 	reply := func(html string) { d.replyTopic(th, fmt.Sprintf("%d:resend", upd), html) }
-	id, err := strconv.ParseInt(strings.TrimPrefix(strings.TrimSpace(arg), "#"), 10, 64)
-	if err != nil {
-		reply("Usage: /resend &lt;id&gt;")
-		return
+	var id int64
+	if arg = strings.TrimPrefix(strings.TrimSpace(arg), "#"); arg == "" {
+		newest, ok, err := d.st.NewestUnknown(d.ctx, th.ID)
+		switch {
+		case err != nil:
+			reply("Could not resend it.")
+			return
+		case !ok:
+			reply("Nothing to resend: no reply in this topic may have been lost. Usage: /resend &lt;id&gt;")
+			return
+		}
+		id = newest
+	} else {
+		n, err := strconv.ParseInt(arg, 10, 64)
+		if err != nil {
+			reply("Usage: /resend [id]")
+			return
+		}
+		id = n
 	}
 	row, err := d.st.OutboxRow(d.ctx, id)
+	for hops := 0; err == nil && hops < 10; hops++ {
+		target, ok := sender.NoticeTarget(row.Key)
+		if !ok {
+			break
+		}
+		id = target // a notice about a reply: send that reply
+		row, err = d.st.OutboxRow(d.ctx, id)
+	}
 	if err != nil || row.ThreadID != th.ID {
 		reply("There is no message " + escapef("#%d", id) + " in this topic.")
 		return

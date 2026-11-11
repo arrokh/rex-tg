@@ -82,6 +82,9 @@ type screenMachine struct {
 	Screens map[string]string            `json:"screens"`
 	Start   string                       `json:"start"`
 	Moves   map[string]map[string]string `json:"moves"`
+	// Processes holds the answer of the block method `process` while a
+	// screen shows, for screens where it differs from the rules.
+	Processes map[string]string `json:"processes"`
 }
 
 // Call is one recorded invocation of the fake.
@@ -147,6 +150,21 @@ func (f *Fake) SetScreenMachine(start string, screens map[string]string, moves m
 	defer f.mu.Unlock()
 	f.sc.Machine = &screenMachine{Screens: screens, Start: start, Moves: moves}
 	_ = os.Remove(filepath.Join(f.dir, "screen.state"))
+	f.save()
+}
+
+// SetScreenProcess makes the block method `process` answer stdout while the
+// screen machine shows screen, as if another program had come to the front.
+func (f *Fake) SetScreenProcess(screen, stdout string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.sc.Machine == nil {
+		f.t.Fatal("rextest: SetScreenProcess needs a screen machine")
+	}
+	if f.sc.Machine.Processes == nil {
+		f.sc.Machine.Processes = map[string]string{}
+	}
+	f.sc.Machine.Processes[screen] = stdout
 	f.save()
 }
 

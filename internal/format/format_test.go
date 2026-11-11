@@ -512,3 +512,39 @@ func TestPartsRawHTMLStaysEscaped(t *testing.T) {
 	got := Parts(in, 60)
 	checkParts(t, got, 60)
 }
+
+func TestRedactMoreFormats(t *testing.T) {
+	stripe := "sk_live_" + strings.Repeat("a", 24)
+	google := "AIza" + strings.Repeat("B", 35)
+	npm := "npm_" + strings.Repeat("c", 36)
+	for _, secret := range []string{stripe, "rk_test_" + strings.Repeat("d", 20), "whsec_" + strings.Repeat("e", 30), google, npm} {
+		if got := Redact("key " + secret + " end"); strings.Contains(got, secret) {
+			t.Errorf("%q not redacted: %q", secret, got)
+		}
+	}
+	cases := map[string]string{
+		"Authorization: Basic dXNlcj" + "pwYXNzd29yZDEyMzQ=": "Authorization: Basic [redacted]",
+		"GITHUB_TOKEN=" + "abcdefghijklmnop":                 "GITHUB_TOKEN=[redacted]",
+		`"api_key": "abcdefghijklmnop"`:                      `"api_key": "[redacted]"`,
+		"password: " + "hunter2hunter2hunter2":               "password: [redacted]",
+		"client_secret = " + "0123456789abcdef":              "client_secret = [redacted]",
+	}
+	for in, want := range cases {
+		if got := Redact(in); got != want {
+			t.Errorf("Redact(%q) = %q, want %q", in, got, want)
+		}
+	}
+	// Code and prose that only look like secrets stay as they are.
+	for _, s := range []string{
+		"tokenizer = AutoTokenizer.from_pretrained(name)",
+		"max_tokens: 4096",
+		"the token is valid for 24 hours",
+		"password: short",
+		`apiKey := os.Getenv("API_KEY")`,
+		"pk_live_" + strings.Repeat("a", 24), // a publishable key, not a secret
+	} {
+		if got := Redact(s); got != s {
+			t.Errorf("Redact(%q) = %q, want it unchanged", s, got)
+		}
+	}
+}

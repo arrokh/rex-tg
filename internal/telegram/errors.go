@@ -39,6 +39,22 @@ func (e *UnknownOutcomeError) Error() string {
 // Unwrap returns the underlying cause (token already removed from its text).
 func (e *UnknownOutcomeError) Unwrap() error { return e.Err }
 
+// NotSentError means the request never left this machine: the connection,
+// the TLS handshake, or writing the request failed before the whole request
+// was written. Telegram cannot have acted on it, so it is safe to send again.
+type NotSentError struct {
+	Method string
+	Err    error
+}
+
+// Error implements error.
+func (e *NotSentError) Error() string {
+	return fmt.Sprintf("telegram %s: not sent: %v", e.Method, e.Err)
+}
+
+// Unwrap returns the underlying cause (token already removed from its text).
+func (e *NotSentError) Unwrap() error { return e.Err }
+
 // Class groups errors by how a caller should react.
 type Class int
 
@@ -55,12 +71,13 @@ const (
 	ClassConflict
 	ClassBadRequest
 	ClassUnknownOutcome
+	ClassNotSent // the request never left this machine; safe to send again
 )
 
 // String returns the class name.
 func (c Class) String() string {
 	names := [...]string{"none", "rate_limited", "parse_entities", "not_modified", "edit_target_gone",
-		"delete_target_gone", "thread_not_found", "blocked", "conflict", "bad_request", "unknown_outcome"}
+		"delete_target_gone", "thread_not_found", "blocked", "conflict", "bad_request", "unknown_outcome", "not_sent"}
 	if c < 0 || int(c) >= len(names) {
 		return fmt.Sprintf("class(%d)", int(c))
 	}
@@ -68,10 +85,15 @@ func (c Class) String() string {
 }
 
 // Classify maps an error from this package to a Class. nil gives ClassNone.
-// Any error that is not an *APIError is treated as an unknown outcome.
+// Any error that is not an *APIError or a *NotSentError is treated as an
+// unknown outcome.
 func Classify(err error) Class {
 	if err == nil {
 		return ClassNone
+	}
+	var ns *NotSentError
+	if errors.As(err, &ns) {
+		return ClassNotSent
 	}
 	var api *APIError
 	if !errors.As(err, &api) {
@@ -90,7 +112,7 @@ func Classify(err error) Class {
 		return ClassEditTargetGone
 	case has("message to delete not found"), has("message can't be deleted"):
 		return ClassDeleteTargetGone
-	case has("message thread not found"), has("topic_deleted"), has("topic_id_invalid"), has("thread not found"):
+	case has("message thread not found"), has("topic_deleted"), has("topic_id_invalid"), has("topic_closed"), has("thread not found"):
 		return ClassThreadNotFound
 	case api.Code == 429:
 		return ClassRateLimited

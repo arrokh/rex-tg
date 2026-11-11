@@ -1,6 +1,7 @@
 // Package telegram is a small Telegram Bot API client. It covers the methods
 // rex-tg needs, reports Telegram refusals as *APIError, reports uncertain
-// outcomes as *UnknownOutcomeError, and never puts the bot token in an error.
+// outcomes as *UnknownOutcomeError (or *NotSentError when the request never
+// left this machine), and never puts the bot token in an error.
 package telegram
 
 import (
@@ -12,10 +13,12 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
+	"net/http/httptrace"
 	"net/textproto"
 	"net/url"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -122,6 +125,17 @@ func (c *Client) wrapErr(method string, err error) error {
 	return &UnknownOutcomeError{Method: method, Err: &sanitizedError{msg: msg, cause: cause}}
 }
 
+// notSent turns a transport error that came before the whole request was
+// written into a *NotSentError without the token.
+func (c *Client) notSent(method string, err error) error {
+	cause := err
+	var ue *url.Error
+	if errors.As(err, &ue) && ue.Err != nil {
+		cause = ue.Err
+	}
+	return &NotSentError{Method: method, Err: &sanitizedError{msg: c.scrub(cause.Error()), cause: cause}}
+}
+
 func (c *Client) unknown(method, format string, args ...any) error {
 	return &UnknownOutcomeError{Method: method, Err: errors.New(c.scrub(fmt.Sprintf(format, args...)))}
 }
@@ -135,8 +149,22 @@ func (c *Client) call(ctx context.Context, method string, timeout time.Duration,
 		return c.wrapErr(method, err)
 	}
 	req.Header.Set("Content-Type", contentType)
+	// A failure before the whole request was written (no connection, a TLS
+	// handshake timeout) cannot have reached Telegram, so it is "not sent"
+	// rather than "unknown": the caller may send again safely.
+	var wrote atomic.Bool
+	req = req.WithContext(httptrace.WithClientTrace(req.Context(), &httptrace.ClientTrace{
+		WroteRequest: func(info httptrace.WroteRequestInfo) {
+			if info.Err == nil {
+				wrote.Store(true)
+			}
+		},
+	}))
 	resp, err := c.hc.Do(req)
 	if err != nil {
+		if !wrote.Load() {
+			return c.notSent(method, err)
+		}
 		return c.wrapErr(method, err)
 	}
 	defer resp.Body.Close()

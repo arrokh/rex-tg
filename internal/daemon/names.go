@@ -31,10 +31,11 @@ func paneName(label string) string {
 }
 
 // topicName is a topic's short name: the pane's own name when it has one,
-// else the session name, else the project folder, else the runtime.
+// else the session name, else the project folder, else the runtime. A
+// session name can come from a prompt, so secrets are redacted.
 func topicName(paneLabel string, rt agents.Runtime, cwd, title string) string {
 	for _, s := range []string{paneName(paneLabel), title, folderBase(cwd), string(rt)} {
-		if s = strings.Join(strings.Fields(s), " "); s != "" {
+		if s = strings.Join(strings.Fields(format.Redact(s)), " "); s != "" {
 			return shortName(s, maxTopicName)
 		}
 	}
@@ -60,10 +61,12 @@ func shortName(s string, max int) string {
 		return s
 	}
 	cut := r[:max-1]
-	for i := len(cut) - 1; i >= max/2; i-- {
-		if cut[i] == ' ' {
-			cut = cut[:i]
-			break
+	if r[max-1] != ' ' { // the cut is inside a word: end at the word before
+		for i := len(cut) - 1; i >= max/2; i-- {
+			if cut[i] == ' ' {
+				cut = cut[:i]
+				break
+			}
 		}
 	}
 	return strings.TrimRight(string(cut), " ·-–—,;:") + "…"

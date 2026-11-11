@@ -55,6 +55,11 @@ func removeOlder(root string, cutoff time.Time) int {
 		return nil
 	})
 	for i := len(dirs) - 1; i >= 0; i-- {
+		// A folder changed after the cutoff may be in use: a download makes
+		// its folder first and the file right after.
+		if info, err := os.Stat(dirs[i]); err != nil || !info.ModTime().Before(cutoff) {
+			continue
+		}
 		_ = os.Remove(dirs[i]) // fails, harmlessly, when the folder is not empty
 	}
 	return n

@@ -23,6 +23,7 @@ const (
 	StateDone    State = "done"
 	StateBlocked State = "blocked"
 	StateError   State = "error"
+	StateStopped State = "stopped" // the agent process went away
 )
 
 // Settings are the per-topic display settings.
@@ -206,7 +207,7 @@ func (t *Tracker) Event(ev agents.Event, echo bool, now time.Time) []Action {
 		}
 		t.unblock()
 		if !echo && t.set.ShowMacPrompts {
-			out = t.post(out, Post{Key: ev.Key, Kind: "prompt", Markdown: "💻 You (on Mac): " + r(ev.Text)})
+			out = t.post(out, Post{Key: ev.Key, Kind: "prompt", Markdown: macPrompt(r(ev.Text))})
 		}
 
 	case agents.ToolCall:
@@ -439,7 +440,7 @@ func (t *Tracker) State(st State, now time.Time) []Action {
 			t.blocked = true
 			t.markDirty()
 		}
-	case StateIdle, StateDone, StateError:
+	case StateIdle, StateDone, StateError, StateStopped:
 		if t.ph != phActive {
 			return nil
 		}
@@ -576,4 +577,13 @@ func Restore(cfg Config, s Settings, snap Snapshot) *Tracker {
 		t.calls = append(t.calls, call{id: c.ID, name: c.Name, kind: c.Kind, label: c.Label, status: c.Status})
 	}
 	return t
+}
+
+// macPrompt shows a prompt typed on the Mac. A prompt of several lines starts
+// on its own line, so a code fence at its start still opens a code block.
+func macPrompt(text string) string {
+	if strings.Contains(text, "\n") {
+		return "💻 You (on Mac):\n\n" + text
+	}
+	return "💻 You (on Mac): " + text
 }

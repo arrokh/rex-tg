@@ -13,6 +13,14 @@ import (
 
 const piPlaceholder = "__REX_TG_BIN__"
 
+// piMarker starts every extension file that rex-tg writes. A file at the same
+// path without it belongs to the user: install backs it up first, and
+// uninstall leaves it alone.
+const piMarker = "// Written by `rex-tg install`"
+
+// ErrNotOurs means a file at a rex-tg path was not written by rex-tg.
+var ErrNotOurs = errors.New("the file was not written by rex-tg")
+
 // piSource returns the extension source with the binary path filled in as a
 // JSON string literal, which is also a valid TypeScript string literal.
 func (p Paths) piSource() []byte {
@@ -23,13 +31,30 @@ func (p Paths) piSource() []byte {
 	return bytes.ReplaceAll(extensions.PiExtension, []byte(piPlaceholder), bytes.TrimSpace(lit.Bytes()))
 }
 
-// InstallPi writes the pi extension file.
+// InstallPi writes the pi extension file. A file of the user's at that path
+// is backed up first.
 func InstallPi(p Paths) (Change, error) {
+	if cur, err := os.ReadFile(p.PiExtension); err == nil && !bytes.HasPrefix(cur, []byte(piMarker)) {
+		if err := p.validate(); err != nil {
+			return Change{Path: p.PiExtension}, err
+		}
+		bak := p.PiExtension + backupInfix + p.now().UTC().Format("20060102T150405.000000000Z")
+		if err := writeAtomic(bak, cur, 0o600, false); err != nil {
+			return Change{Path: p.PiExtension}, fmt.Errorf("back up %s: %w", p.PiExtension, err)
+		}
+		ch, err := p.installFile(p.PiExtension, p.piSource(), 0o644)
+		ch.Backup = bak
+		return ch, err
+	}
 	return p.installFile(p.PiExtension, p.piSource(), 0o644)
 }
 
-// UninstallPi removes the pi extension file and nothing else.
+// UninstallPi removes the pi extension file, only when rex-tg wrote it.
 func UninstallPi(p Paths) (Change, error) {
+	cur, err := os.ReadFile(p.PiExtension)
+	if err == nil && !bytes.HasPrefix(cur, []byte(piMarker)) {
+		return Change{Path: p.PiExtension, Note: "left in place"}, fmt.Errorf("%s: %w", p.PiExtension, ErrNotOurs)
+	}
 	return removeFile(p.PiExtension)
 }
 

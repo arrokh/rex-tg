@@ -85,11 +85,7 @@ func (d *daemon) queueText(threadID, orig, tgMsg int64, text, kind string, act i
 		return false
 	}
 	id := -orig
-	inserted, err := d.st.InsertInbound(d.ctx, store.Inbound{
-		UpdateID: id, ChatID: th.ChatID, MessageThreadID: th.MessageThreadID, TGMessageID: tgMsg,
-		FromID: d.ownerUser, Kind: kind, Body: text, BodyHash: inbound.Hash(text), ThreadID: th.ID,
-		State: store.InboundQueued, CreatedAt: d.now(),
-	})
+	inserted, err := d.st.InsertInbound(d.ctx, d.textRow(th, orig, tgMsg, text, kind))
 	if err != nil {
 		d.log.Warn("queue text", "err", err)
 		return false
@@ -103,6 +99,16 @@ func (d *daemon) queueText(threadID, orig, tgMsg int64, text, kind string, act i
 	d.dirty[th.ID] = true
 	delete(d.nextPrep, th.ID)
 	return true
+}
+
+// textRow is the queued row of text that rex-tg types for the user. Its id
+// is minus the update id, so a repeat is ignored.
+func (d *daemon) textRow(th store.Thread, orig, tgMsg int64, text, kind string) store.Inbound {
+	return store.Inbound{
+		UpdateID: -orig, ChatID: th.ChatID, MessageThreadID: th.MessageThreadID, TGMessageID: tgMsg,
+		FromID: d.ownerUser, Kind: kind, Body: text, BodyHash: inbound.Hash(text), ThreadID: th.ID,
+		State: store.InboundQueued, CreatedAt: d.now(),
+	}
 }
 
 // joined handles a group from the joiner: the messages become one prompt.
@@ -120,18 +126,21 @@ func (d *daemon) joined(g inbound.Joined) {
 		delete(d.joining, id)
 	}
 	if len(g.UpdateIDs) > 1 {
-		// The first update carries the joined text; the others are done. The
-		// joined row is stored first, so a failure never loses the text.
-		if !d.queueText(g.ThreadID, first, tgFirst, g.Text, "text", inbound.ActText) {
-			d.dirty[g.ThreadID] = true // they stay queued, and are typed one by one
+		// The first update carries the joined text; the others are done. One
+		// transaction stores the joined row and ends the parts, so a crash
+		// cannot leave both to be typed. On failure the parts stay queued and
+		// are typed one by one.
+		th, err := d.st.Thread(d.ctx, g.ThreadID)
+		if err != nil || th.Status == store.ThreadClosed {
+			d.dirty[g.ThreadID] = true
+			return
+		}
+		if _, err := d.st.JoinInbound(d.ctx, d.textRow(th, first, tgFirst, g.Text, "text"), g.UpdateIDs); err != nil {
+			d.log.Warn("join messages", "err", err)
+			d.dirty[g.ThreadID] = true
 			return
 		}
 		d.extra[-first] = others
-		for _, id := range g.UpdateIDs {
-			if err := d.st.SetInboundState(d.ctx, id, store.InboundDone, "joined", d.now()); err != nil {
-				d.log.Warn("joined: state", "err", err)
-			}
-		}
 	}
 	d.dirty[g.ThreadID] = true
 	delete(d.nextPrep, g.ThreadID)
@@ -292,13 +301,22 @@ func waitMarkup(updateID int64) *telegram.InlineKeyboardMarkup {
 	}}}
 }
 
+// forget drops what the core keeps in memory for a message that reached a
+// final state.
+func (d *daemon) forget(updateID int64) {
+	delete(d.actions, updateID)
+	delete(d.waitNoticed, updateID)
+	delete(d.vimNoticed, updateID)
+}
+
 // refuse ends a queued message with 👎 and a reply that says why.
 func (d *daemon) refuse(th store.Thread, in store.Inbound, reason string) {
 	if err := d.st.SetInboundState(d.ctx, in.UpdateID, store.InboundRefused, reason, d.now()); err != nil {
 		d.log.Warn("refuse: state", "err", err)
 	}
-	delete(d.actions, in.UpdateID)
+	d.forget(in.UpdateID)
 	d.react(in, "👎")
+	delete(d.extra, in.UpdateID) // 👎 is its last reaction
 	d.replyTopic(th, fmt.Sprintf("refused:%d", in.UpdateID), "⛔ Not sent: "+format.Escape(reason)+".")
 }
 
@@ -306,7 +324,9 @@ func (d *daemon) expire(th store.Thread, in store.Inbound) {
 	if err := d.st.SetInboundState(d.ctx, in.UpdateID, store.InboundExpired, "waited too long", d.now()); err != nil {
 		d.log.Warn("expire: state", "err", err)
 	}
+	d.forget(in.UpdateID)
 	d.react(in, "👎")
+	delete(d.extra, in.UpdateID) // 👎 is its last reaction
 	d.replyTopic(th, fmt.Sprintf("expired:%d", in.UpdateID),
 		fmt.Sprintf("⌛ Not sent: it waited more than %s for the agent.", format.Escape(d.queueExpiry().String())))
 }
@@ -393,15 +413,22 @@ func (d *daemon) typeInto(pane store.Pane, text string, delay time.Duration, sub
 		return errGoneBefore
 	}
 	// pi-vim drops a paste unless it is in INSERT mode. A pending vim command
-	// or an EX line is cancelled on the way there.
+	// or an EX line is cancelled on the way there. Nothing is pasted when
+	// this fails, so the next try reads the screen again.
 	if piVim {
-		switch err := d.settlePiVim(ctx, pane, vimInsert); {
-		case errors.Is(err, errVimStuck):
-			return errVimStuck
-		case ctx.Err() != nil:
-			return ctx.Err()
-		case err != nil:
-			return errRetryBefore // nothing was pasted; the next try reads the screen again
+		pressed, err := d.settlePiVim(ctx, pane, vimInsert)
+		if err != nil {
+			return err
+		}
+		if pressed { // that took time: check again right before the paste
+			switch paused, front, err := d.safeNow(pane); {
+			case err != nil:
+				return errRetryBefore
+			case paused:
+				return errPausedBefore
+			case !front:
+				return errGoneBefore
+			}
 		}
 	}
 	if err := d.rx.Paste(ctx, pane.Session, pane.Block, text); err != nil {
@@ -459,11 +486,13 @@ func (d *daemon) onTyped(e evTyped) {
 		if err := d.st.SetInboundState(d.ctx, e.in.UpdateID, store.InboundUnknown, "typing failed", now); err != nil {
 			d.log.Warn("typing: state", "err", err)
 		}
+		d.forget(e.in.UpdateID)
 		d.react(e.in, "👎")
+		delete(d.extra, e.in.UpdateID) // 👎 is its last reaction
 		d.notice(e.thread, fmt.Sprintf("typing-unknown:%d", e.in.UpdateID), typingUnknownNotice)
 		return
 	}
-	delete(d.vimNoticed, e.in.UpdateID)
+	d.forget(e.in.UpdateID)
 	if err := d.st.SetInboundState(d.ctx, e.in.UpdateID, store.InboundDelivered, "", now); err != nil {
 		d.log.Warn("typing: state", "err", err)
 	}

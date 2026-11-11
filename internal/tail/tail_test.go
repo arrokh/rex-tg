@@ -302,3 +302,39 @@ func TestPollOnly(t *testing.T) {
 		t.Fatalf("%+v", b)
 	}
 }
+
+// A re-read of a long file comes in several batches. Every one of them is
+// marked Reset, so old lines are never taken for new ones; a line written
+// after the re-read reached the end is not marked.
+func TestLongReReadIsResetInEveryBatch(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "a.jsonl")
+	write(t, p, "old1\n")
+	f := Follow(context.Background(), p, Position{}, fast)
+	defer f.Close()
+	next(t, f)
+	old, _ := os.Open(p) // keep the old inode alive so the new file gets another one
+	defer old.Close()
+	line := strings.Repeat("x", 1000) + "\n"
+	big := strings.Repeat(line, (maxBatchBytes/len(line))*2+10) // more than two batches
+	write(t, filepath.Join(dir, "new"), big)
+	if err := os.Rename(filepath.Join(dir, "new"), p); err != nil {
+		t.Fatal(err)
+	}
+	var batches, lines int
+	for lines < strings.Count(big, "\n") {
+		b := next(t, f)
+		if !b.Reset {
+			t.Fatalf("batch %d of the re-read has no Reset", batches+1)
+		}
+		batches++
+		lines += len(b.Lines)
+	}
+	if batches < 2 {
+		t.Fatalf("the re-read came in %d batch, want several", batches)
+	}
+	appendTo(t, p, "new line\n")
+	if b := next(t, f); b.Reset || !eq(texts(b), []string{"new line"}) {
+		t.Fatalf("after the re-read: %+v", b.Reset)
+	}
+}

@@ -8,6 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -228,7 +230,26 @@ func (c Config) validate() error {
 	if c.State.Dir == "" {
 		return errors.New("state.dir must not be empty")
 	}
+	// The hooks run in the agents' folders and the daemon under launchd: a
+	// relative folder would mean a different place for each of them.
+	if !filepath.IsAbs(c.State.Dir) {
+		return fmt.Errorf("state.dir %q must be an absolute path (or start with ~/)", c.State.Dir)
+	}
+	// The token is part of every request URL, so it must never go out in
+	// clear text. Plain http is only for a local test server.
+	u, err := url.Parse(c.Telegram.APIBase)
+	if err != nil || u.Host == "" || (u.Scheme != "https" && !(u.Scheme == "http" && isLoopback(u.Hostname()))) {
+		return fmt.Errorf("telegram.api_base %q: want an https URL (http only for a local test server)", c.Telegram.APIBase)
+	}
 	return nil
+}
+
+func isLoopback(host string) bool {
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // DBPath is the SQLite database file.

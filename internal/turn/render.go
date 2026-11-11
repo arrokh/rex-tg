@@ -169,6 +169,8 @@ func (t *Tracker) summaryHTML() string {
 		if l := firstLine(t.cfg.Redact(t.errText)); l != "" {
 			first += ": " + escape(truncate(l, t.cfg.MaxRowRunes))
 		}
+	case t.endKind == string(StateStopped):
+		first = "🔴 Stopped · " + stats
 	case t.endKind == string(StateIdle) && !t.answered && !t.commentarySeen:
 		first = "⏹ Interrupted · " + stats
 	default:

@@ -79,7 +79,15 @@ type Change struct {
 	State, StateKind, Msg            string // StateChanged
 	Divider                          string // TakeOver, Resume
 	Start                            TailStart
+	Reason                           string // TopicOffline: why the session stopped (Reason* constants)
 }
+
+// Why a topic went offline (Change.Reason).
+const (
+	ReasonPaneClosed  = "pane closed"  // the Rex pane was closed
+	ReasonAgentExited = "agent exited" // the agent process left; the pane is still open
+	ReasonReplaced    = "replaced"     // another session took the pane
+)
 
 // Options configure a Registry.
 type Options struct {

@@ -229,7 +229,11 @@ func (adapter) ParseLine(raw []byte, ctx agents.LineContext) ([]agents.Event, er
 				evs = append(evs, agents.Event{Kind: agents.TurnEnd, Key: k.next(), At: at})
 				continue
 			}
-			texts = append(texts, b.Text)
+			// Claude Code adds <system-reminder> blocks to user lines; they
+			// are context for the model, not what the user typed.
+			if t := stripReminders(b.Text); t != "" {
+				texts = append(texts, t)
+			}
 		}
 	}
 	if !l.IsMeta && !l.IsCompactSummary {
@@ -238,6 +242,24 @@ func (adapter) ParseLine(raw []byte, ctx agents.LineContext) ([]agents.Event, er
 		}
 	}
 	return evs, nil
+}
+
+// stripReminders removes every complete <system-reminder>…</system-reminder>
+// span from s and trims it. An unclosed span is kept as it is.
+func stripReminders(s string) string {
+	const open, closing = "<system-reminder>", "</system-reminder>"
+	for {
+		i := strings.Index(s, open)
+		if i < 0 {
+			break
+		}
+		j := strings.Index(s[i:], closing)
+		if j < 0 {
+			break
+		}
+		s = s[:i] + s[i+j+len(closing):]
+	}
+	return strings.TrimSpace(s)
 }
 
 var wrapperPrefixes = []string{

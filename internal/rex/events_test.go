@@ -236,3 +236,35 @@ func TestEventsSlowConsumerDrops(t *testing.T) {
 		t.Fatalf("received %d + dropped %d != %d", received, dropped, total)
 	}
 }
+
+// A consumer that reads all events and then all errors must not hang, even
+// when the error buffer filled up with reports before the stream ended.
+func TestEventsEndWithFullErrorBuffer(t *testing.T) {
+	c, f := newClient(t)
+	lines := make([]string, 0, 40)
+	for range 40 {
+		lines = append(lines, "garbage{")
+	}
+	f.SetEvents(append(lines, evSessionCreated)...)
+	f.SetEventsExit(3, "server went away\n")
+	events, errs := c.Events(context.Background())
+	done := make(chan []error)
+	go func() {
+		for range events {
+		}
+		var all []error
+		for err := range errs {
+			all = append(all, err)
+		}
+		done <- all
+	}()
+	select {
+	case all := <-done:
+		var re *rex.Error
+		if len(all) == 0 || !errors.As(all[len(all)-1], &re) || re.Stderr != "server went away" {
+			t.Fatalf("errors = %v, want the exit last", all)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the consumer hung: the last error was never sent")
+	}
+}

@@ -15,8 +15,10 @@ import (
 )
 
 const (
-	maxHookInput    = 1 << 20
-	hookReadTimeout = 5 * time.Second
+	maxHookInput = 1 << 20
+	// hookReadTimeout is shorter than the agents' hook timeout (5 s for
+	// Claude Code), so the hook always ends first.
+	hookReadTimeout = 2 * time.Second
 )
 
 // spoolFile is the JSON shape that registry.ParseSpool reads.
@@ -40,6 +42,9 @@ func hookCmd(_ context.Context, args []string, env Env) (code int) {
 }
 
 func writeSpool(args []string, env Env) error {
+	// Read the input first, also when it is not used: an agent that is still
+	// writing it to a hook that already ended gets a broken pipe.
+	payload := readHookInput(env)
 	if len(args) != 1 {
 		return fmt.Errorf("want one runtime")
 	}
@@ -51,7 +56,6 @@ func writeSpool(args []string, env Env) error {
 	if block == "" {
 		return nil
 	}
-	payload := readHookInput(env)
 	var head struct {
 		Event string `json:"hook_event_name"`
 	}

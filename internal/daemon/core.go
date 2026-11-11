@@ -74,11 +74,18 @@ type (
 		text, kind            string
 		action                inbound.Action
 	}
-	evOpenDone  struct{ paneID int64 }
-	evTailScan  tailScan
-	evRestart   struct{ conv int64 }
+	evOpenDone struct{ paneID int64 }
+	evTailScan tailScan
+	evRestart  struct{ conv int64 }
+	// evTailEnded: a follower stopped on a read error (gen tells which one).
+	evTailEnded struct {
+		conv int64
+		gen  int
+	}
 	evAlertDone struct{ threadID int64 }
-	evFatal     struct{ err error }
+	// evAlertStale: an alert's prompt is no longer on the screen.
+	evAlertStale struct{ threadID int64 }
+	evFatal      struct{ err error }
 )
 
 // daemon is the wiring. Fields marked "core" are touched only by the core
@@ -270,10 +277,22 @@ func (d *daemon) handle(ev any) {
 		d.onTailScan(e)
 	case evRestart:
 		d.restartTailer(e.conv)
+	case evTailEnded:
+		// Only the follower that ended: a newer one may run already. One that
+		// was about to stop (its session ended) is not started again.
+		if tl, ok := d.tailers[e.conv]; ok && tl.gen == e.gen {
+			delete(d.tailers, e.conv)
+			tl.cancel()
+			if tl.stopAt.IsZero() {
+				d.restartTailer(e.conv)
+			}
+		}
 	case evOpenDone:
 		delete(d.opening, e.paneID)
 	case evAlertDone:
 		d.alertDone(e.threadID)
+	case evAlertStale:
+		d.reopenAlert(e.threadID)
 	case evFatal:
 		if d.fatal == nil {
 			d.fatal = e.err

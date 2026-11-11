@@ -203,7 +203,7 @@ func (p *progRun) post(html string, keepOld int64) {
 	if keepOld == 0 {
 		p.save(row)
 	}
-	id, v, _ := p.s.sendText(p.ctx, p.th.ID, p.th.ChatID, p.th.MessageThreadID, html, true, true)
+	id, v, _ := p.s.sendText(p.ctx, p.th.ID, p.th.ChatID, p.th.MessageThreadID, html, true, true, nil)
 	switch v {
 	case vOK:
 		row.State, row.TGMessageID, row.EditedAt = store.ProgressShown, id, p.s.now()

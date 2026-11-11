@@ -17,10 +17,11 @@ import (
 )
 
 const (
-	tailPoll     = 500 * time.Millisecond
-	partLimit    = 4000
-	maxTextParts = 4
-	maxRichRunes = 32768
+	tailPoll        = 500 * time.Millisecond
+	tailRestartWait = 5 * time.Second // after a follower stopped on a read error
+	partLimit       = 4000
+	maxTextParts    = 4
+	maxRichRunes    = 32768
 )
 
 // tailer follows the transcript of one session that belongs to a topic.
@@ -31,12 +32,18 @@ type tailer struct {
 	f      *tail.Follower
 	cancel context.CancelFunc
 	stopAt time.Time // set while the tailer waits to stop; zero while it runs
+	// replayUntil is the newest event time from before a re-read from byte 0
+	// began. All batches of that re-read are checked against it, not against
+	// the cursor, which the re-read's own new lines move forward.
+	replayUntil time.Time
+	replaying   bool
 }
 
 // pendingTail is a tailer that waits for the scan of its transcript.
 type pendingTail struct {
 	thread int64
 	token  int
+	stopAt time.Time // set when the session stopped while the scan ran
 }
 
 // tailScan is the result of scanning a transcript to its end in a worker.
@@ -90,6 +97,15 @@ func (d *daemon) follow(conv store.Conversation, threadID int64, pos tail.Positi
 	d.spawn(func() {
 		for b := range f.Batches() {
 			d.emit(evBatch{conv: conv.ID, gen: gen, b: b})
+		}
+		// A missing file is not an error (the follower waits for it), so an
+		// error here is a failed read. Start again from the stored cursor
+		// after a pause, or the topic would stop showing the session.
+		if err := f.Err(); err != nil {
+			d.log.Warn("transcript follower stopped; starting it again", "conversation", conv.ID, "err", err)
+			if sleepCtx(d.ctx, tailRestartWait) {
+				d.emit(evTailEnded{conv: conv.ID, gen: gen})
+			}
 		}
 	})
 }
@@ -164,6 +180,9 @@ func (d *daemon) onTailScan(e evTailScan) {
 		}
 	}
 	d.follow(e.conv, e.thread, e.pos)
+	if !p.stopAt.IsZero() { // the session stopped while the scan ran
+		d.tailers[e.conv.ID].stopAt = p.stopAt
+	}
 }
 
 // restartTailer starts a stopped tailer again from the stored cursor (after a
@@ -193,8 +212,14 @@ func (d *daemon) restartTailer(convID int64) {
 // stopTailer stops the tailer of a session now, or after a grace period so
 // the last lines written before the agent exited still arrive.
 func (d *daemon) stopTailer(conv int64, graceful bool) {
-	if !graceful {
-		delete(d.pending, conv)
+	if p, ok := d.pending[conv]; ok {
+		if !graceful {
+			delete(d.pending, conv)
+		} else if p.stopAt.IsZero() {
+			// The scan still runs: its follower stops after the grace period.
+			p.stopAt = d.now().Add(tailerGrace)
+			d.pending[conv] = p
+		}
 	}
 	tl, ok := d.tailers[conv]
 	if !ok {
@@ -361,6 +386,16 @@ func (d *daemon) onBatch(ev evBatch) {
 		d.log.Warn("batch: cursor", "err", err)
 		return
 	}
+	switch {
+	case ev.b.Reset && !tl.replaying:
+		tl.replaying, tl.replayUntil = true, cur.LastEventAt
+	case !ev.b.Reset:
+		tl.replaying = false
+	}
+	guard := cur.LastEventAt
+	if tl.replaying {
+		guard = tl.replayUntil
+	}
 	now := d.now()
 	tr := d.tracker(th)
 	lastAt := cur.LastEventAt
@@ -373,7 +408,7 @@ func (d *daemon) onBatch(ev evBatch) {
 			continue
 		}
 		for _, e := range evs {
-			if ev.b.Reset && !e.At.IsZero() && !cur.LastEventAt.IsZero() && !e.At.After(cur.LastEventAt) {
+			if ev.b.Reset && !e.At.IsZero() && !guard.IsZero() && !e.At.After(guard) {
 				continue // replay guard (design section 6)
 			}
 			if e.At.After(lastAt) {

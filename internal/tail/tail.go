@@ -42,7 +42,7 @@ type Line struct {
 type Batch struct {
 	Lines   []Line
 	End     Position // right after the last complete line (or skipped line)
-	Reset   bool     // reading restarted at byte 0 (file replaced or shortened)
+	Reset   bool     // reading restarted at byte 0 (file replaced or shortened); set on every batch of that re-read until it reaches the end of the file
 	Skipped int      // lines dropped because they were longer than MaxLine
 }
 
@@ -130,7 +130,7 @@ type reader struct {
 	readAt   int64  // offset of the next byte to read
 	buf      []byte // bytes of the unfinished line read so far
 	skipping bool   // inside an over-long line
-	reset    bool   // Reset flag pending for the next batch
+	reset    bool   // a re-read from byte 0 is going on: its batches carry Reset
 }
 
 func (r *reader) run(ctx context.Context, out chan<- Batch) error {
@@ -217,7 +217,10 @@ func (r *reader) drain(ctx context.Context, out chan<- Batch) error {
 
 	var b Batch
 	size := 0
-	flush := func() error {
+	// flush sends the batch. A re-read from byte 0 can take several batches
+	// (a long transcript); all of them carry Reset, so the reader's user can
+	// tell old lines from new ones until the re-read reaches the end.
+	flush := func(atEnd bool) error {
 		if len(b.Lines) == 0 && !r.reset && b.Skipped == 0 {
 			return nil
 		}
@@ -228,7 +231,9 @@ func (r *reader) drain(ctx context.Context, out chan<- Batch) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		}
-		r.reset = false
+		if atEnd {
+			r.reset = false
+		}
 		b, size = Batch{}, 0
 		return nil
 	}
@@ -239,7 +244,7 @@ func (r *reader) drain(ctx context.Context, out chan<- Batch) error {
 		if n > 0 {
 			r.consume(chunk[:n], &b, &size)
 			if size >= maxBatchBytes {
-				if err := flush(); err != nil {
+				if err := flush(false); err != nil {
 					return err
 				}
 			}
@@ -251,7 +256,7 @@ func (r *reader) drain(ctx context.Context, out chan<- Batch) error {
 			break
 		}
 	}
-	return flush()
+	return flush(true)
 }
 
 // consume splits data into lines and updates the reader state and batch.

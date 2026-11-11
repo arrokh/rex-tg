@@ -75,7 +75,12 @@ func (d *daemon) onChanges(chs []registry.Change) {
 		case registry.TopicLive:
 			if th, err := d.st.Thread(d.ctx, c.ThreadID); err == nil && th.Status != store.ThreadClosed {
 				n := d.nextN(fmt.Sprintf("livn:%d", th.ID))
-				d.notice(th.ID, fmt.Sprintf("live:%d:%d", th.ID, n), "🟢 agent is running again")
+				name := "The agent"
+				if conv, err := d.st.Conversation(d.ctx, c.ConversationID); err == nil {
+					name = string(conv.Runtime)
+					d.rename(th, conv) // the 🔴 goes away
+				}
+				d.notice(th.ID, fmt.Sprintf("live:%d:%d", th.ID, n), "🟢 "+format.Escape(name)+" is running again.")
 				d.dirty[th.ID] = true
 			}
 		case registry.StateChanged:
@@ -135,14 +140,15 @@ func (d *daemon) desiredName(conv store.Conversation) string {
 // session names. A pane name or a session name can change at any time.
 const nameSyncInterval = 30 * time.Second
 
-// syncNames renames each live topic whose pane or session name changed.
+// syncNames renames each topic whose pane name, session name, or state
+// changed.
 func (d *daemon) syncNames() {
 	threads, err := d.st.Threads(d.ctx)
 	if err != nil {
 		return
 	}
 	for _, th := range threads {
-		if th.Status != store.ThreadLive || th.CurrentConversationID == 0 {
+		if th.Status == store.ThreadClosed || th.CurrentConversationID == 0 {
 			continue
 		}
 		if conv, err := d.st.Conversation(d.ctx, th.CurrentConversationID); err == nil {
@@ -152,40 +158,99 @@ func (d *daemon) syncNames() {
 }
 
 // rename gives a topic the name of its session and pane, when it changed.
-// The title may come from the transcript, so the work runs in a worker.
+// The title may come from the transcript, so the work runs in a worker. The
+// new name is saved only once Telegram took it, so a rename that failed is
+// tried again at the next check (syncNames).
 func (d *daemon) rename(th store.Thread, conv store.Conversation) {
 	d.spawn(func() {
-		name := d.desiredName(conv)
-		if name == th.Name {
+		// Another rename may have run since the caller read th: work from
+		// the stored state, so an older rename cannot undo a newer one.
+		if fresh, err := d.st.Thread(d.ctx, th.ID); err == nil {
+			th = fresh
+		}
+		if th.Status == store.ThreadClosed {
 			return
 		}
-		if err := d.st.SetThreadName(d.ctx, th.ID, name); err != nil {
-			d.log.Warn("rename topic", "err", err)
+		var name string
+		if th.Status == store.ThreadOffline {
+			// The session left its pane, so the pane's name is not known any
+			// more: keep the name and mark it.
+			name = statusName(th, strings.TrimPrefix(th.Name, offlineMark))
+		} else {
+			name = d.desiredName(conv)
+		}
+		if name == th.Name {
 			return
 		}
 		err := d.snd.Call(sender.PriorityEdit, func(ctx context.Context, tg *telegram.Client) error {
 			return tg.EditForumTopic(ctx, th.ChatID, th.MessageThreadID, name)
 		})
-		switch {
-		case telegram.Classify(err) == telegram.ClassThreadNotFound:
+		switch telegram.Classify(err) {
+		case telegram.ClassNone, telegram.ClassNotModified:
+			if err := d.st.SetThreadName(d.ctx, th.ID, name); err != nil {
+				d.log.Warn("rename topic", "err", err)
+			}
+		case telegram.ClassThreadNotFound:
 			d.emit(evSender{sender.Event{Kind: sender.ThreadGone, ThreadID: th.ID}}) // the user deleted it
-		case err != nil && telegram.Classify(err) != telegram.ClassNotModified && d.ctx.Err() == nil:
-			d.log.Warn("editForumTopic", "err", err)
+		default:
+			if d.ctx.Err() == nil {
+				d.log.Warn("editForumTopic", "err", err)
+			}
 		}
 	})
 }
 
+// topicOffline shows in the topic that its agent stopped: a notice that says
+// why, the end of a turn that was running (no more "typing…"), and a 🔴 in
+// front of the topic's name until the agent runs again.
 func (d *daemon) topicOffline(c registry.Change) {
 	th, err := d.st.Thread(d.ctx, c.ThreadID)
 	if err != nil || th.Status == store.ThreadClosed {
 		return
 	}
+	conv, cerr := d.st.Conversation(d.ctx, c.ConversationID)
+	name := "The agent"
+	if cerr == nil {
+		name = string(conv.Runtime)
+	}
 	n := d.nextN(fmt.Sprintf("offn:%d", th.ID))
-	d.notice(th.ID, fmt.Sprintf("offline:%d:%d", th.ID, n), "🔴 agent stopped")
+	d.notice(th.ID, fmt.Sprintf("offline:%d:%d", th.ID, n), offlineText(name, c.Reason))
+	if tr, ok := d.trackers[th.ID]; ok {
+		d.perform(th, tr.State(turn.StateStopped, d.now()))
+	}
 	d.stopTailer(c.ConversationID, true)
 	d.closeAlerts(th, store.AlertGone)
 	d.dirty[th.ID] = true
+	if cerr == nil {
+		d.rename(th, conv)
+	}
 }
+
+// offlineText is the notice for a stopped agent.
+func offlineText(name, reason string) string {
+	why := ""
+	switch reason {
+	case registry.ReasonPaneClosed:
+		why = ": its Rex pane was closed"
+	case registry.ReasonAgentExited:
+		why = ": it exited, and the pane is still open"
+	case registry.ReasonReplaced:
+		why = ": another session took its pane"
+	}
+	return "🔴 " + format.Escape(name) + " stopped" + why + ".\nMessages here are not sent now. If you resume the session, this topic continues."
+}
+
+// statusName is the topic name to show for a thread: a 🔴 in front while
+// its agent is stopped.
+func statusName(th store.Thread, name string) string {
+	if th.Status == store.ThreadOffline {
+		return offlineMark + name
+	}
+	return name
+}
+
+// offlineMark leads the name of a topic whose agent stopped.
+const offlineMark = "🔴 "
 
 // onState feeds a pane state to the topic's turn tracker and opens or closes
 // alerts (flow 1).
@@ -245,16 +310,15 @@ func (d *daemon) openTopic(cbID string, paneID, replyThread int64) {
 		conv := *v.Conversation
 		title := d.convTitle(conv)
 		name := topicName(v.Pane.Label, conv.Runtime, conv.CWD, title)
+		var gone int64 // a topic that the user deleted: closed once the new one exists
 		if v.Thread != nil && v.Thread.Status != store.ThreadClosed {
 			th := *v.Thread
-			if d.topicExists(th, name) {
+			if d.topicExists(th, statusName(th, name)) {
 				d.answerCallback(cbID, "", false)
 				d.say(chat, replyThread, "↗ "+format.Escape(noAutoLink(name)), linkMarkup("Open topic", d.topicLink(th.MessageThreadID)))
 				return
 			}
-			// The user deleted the topic. Close it, then make a new one for
-			// the same session: the pane and the session still exist.
-			d.emit(evSender{sender.Event{Kind: sender.ThreadGone, ThreadID: th.ID}})
+			gone = th.ID // the pane and the session still exist: make a new topic
 		}
 		var ft telegram.ForumTopic
 		err = d.snd.Call(sender.PriorityAlert, func(ctx context.Context, tg *telegram.Client) error {
@@ -264,15 +328,24 @@ func (d *daemon) openTopic(cbID string, paneID, replyThread int64) {
 		})
 		if err != nil {
 			d.log.Warn("createForumTopic", "err", err)
-			if telegram.Classify(err) == telegram.ClassUnknownOutcome {
+			switch telegram.Classify(err) {
+			case telegram.ClassUnknownOutcome:
 				// The topic may exist anyway. By now the button press may be
 				// too old to answer, so the note goes into the chat.
 				d.answerCallback(cbID, "", false)
 				d.say(chat, replyThread, "⚠️ Telegram did not answer in time. If no new topic appeared, tap Open again.", nil)
-				return
+			case telegram.ClassNotSent:
+				d.answerCallback(cbID, "", false)
+				d.say(chat, replyThread, "⚠️ Could not reach Telegram. Tap Open again when the connection is back.", nil)
+			default:
+				d.answerCallback(cbID, "Could not create the topic. Is Threaded Mode on for the bot?", true)
 			}
-			d.answerCallback(cbID, "Could not create the topic. Is Threaded Mode on for the bot?", true)
 			return
+		}
+		if gone != 0 {
+			// Both events go through the main loop in this order, so the old
+			// topic is closed before the session is linked to the new one.
+			d.emit(evSender{sender.Event{Kind: sender.ThreadGone, ThreadID: gone}})
 		}
 		d.emit(evTopicCreated{chatID: chat, threadID: ft.MessageThreadID, name: name, convID: conv.ID, title: title})
 		d.answerCallback(cbID, "Topic created", false)
@@ -359,7 +432,7 @@ func (d *daemon) introCard(th store.Thread, conv store.Conversation, title strin
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "🔗 <b>Linked:</b> %s", agentHTML(conv.Runtime, conv.CWD))
-	fmt.Fprintf(&b, "\nSession: %s", format.Escape(noAutoLink(format.Truncate(title, 100))))
+	fmt.Fprintf(&b, "\nSession: %s", format.Escape(noAutoLink(format.Truncate(format.Redact(title), 100))))
 	if pane != "" {
 		fmt.Fprintf(&b, "\nPane: %s", format.Escape(pane))
 	}

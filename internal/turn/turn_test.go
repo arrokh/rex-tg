@@ -705,3 +705,28 @@ func TestSnapshotRoundTripHeldFinish(t *testing.T) {
 		t.Errorf("got %v", as)
 	}
 }
+
+// A prompt of several lines starts on its own line, so a code fence at its
+// start still opens a code block.
+func TestMacPromptOfSeveralLines(t *testing.T) {
+	x := newH(t, turn.Config{}, turn.Settings{Mode: "progress", ShowMacPrompts: true})
+	as := x.k.Event(prompt("p1", "```go\nfmt.Println(1)\n```"), false, at(0))
+	if p := as[0].(turn.Post); p.Markdown != "💻 You (on Mac):\n\n```go\nfmt.Println(1)\n```" {
+		t.Errorf("markdown = %q", p.Markdown)
+	}
+}
+
+// A turn whose agent stopped ends with a "stopped" summary.
+func TestStoppedTurnSummary(t *testing.T) {
+	x := newH(t, turn.Config{}, progress)
+	x.ev(prompt("p", "go"), 0)
+	x.tick(2)
+	x.k.State(turn.StateStopped, at(7))
+	as := x.tick(15)
+	if len(as) == 0 {
+		t.Fatal("no action after the stop")
+	}
+	if got := as[0].(turn.FinishProgress).HTML; got != "🔴 Stopped · 7s · 0 tools" {
+		t.Fatalf("summary %q", got)
+	}
+}

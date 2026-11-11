@@ -29,7 +29,11 @@ func (p Paths) plist() []byte {
 `)
 	str("\t", "Label", p.Label)
 	fmt.Fprintf(&b, "\t<key>ProgramArguments</key>\n\t<array>\n\t\t<string>%s</string>\n\t\t<string>daemon</string>\n\t</array>\n", xmlEscape(p.Binary))
-	b.WriteString("\t<key>RunAtLoad</key>\n\t<true/>\n\t<key>KeepAlive</key>\n\t<true/>\n")
+	// Start again only after a failure, and at most every 30 seconds: a
+	// daemon that cannot start (no token, another one running) must not
+	// restart in a tight loop.
+	b.WriteString("\t<key>RunAtLoad</key>\n\t<true/>\n\t<key>KeepAlive</key>\n\t<dict>\n\t\t<key>SuccessfulExit</key>\n\t\t<false/>\n\t</dict>\n")
+	b.WriteString("\t<key>ThrottleInterval</key>\n\t<integer>30</integer>\n")
 	str("\t", "ProcessType", "Standard")
 	str("\t", "StandardOutPath", filepath.Join(p.LogDir, "launchd.out.log"))
 	str("\t", "StandardErrorPath", filepath.Join(p.LogDir, "launchd.err.log"))

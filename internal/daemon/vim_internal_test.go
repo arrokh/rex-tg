@@ -80,13 +80,13 @@ func TestNextVimKey(t *testing.T) {
 }
 
 func TestTopicName(t *testing.T) {
-	const title = "[resume.md][fix] Update the likely follow ups in the remote people study plan"
+	const title = "[notes.md][fix] Update the list of follow ups in the weekly planning doc"
 	cases := []struct {
 		name, pane, cwd, title, want string
 	}{
-		{"the pane's own name first", "rhasia-scret migrate api to go", "/w/infra", title, "rhasia-scret migrate api to go"},
-		{"a default pane name is skipped", "shell", "/w/resume.md", title, "[resume.md][fix] Update the…"},
-		{"then the folder", "shell", "/w/resume.md", "", "resume.md"},
+		{"the pane's own name first", "billing api migration to go", "/w/infra", title, "billing api migration to go"},
+		{"a default pane name is skipped", "shell", "/w/notes.md", title, "[notes.md][fix] Update the list…"},
+		{"then the folder", "shell", "/w/notes.md", "", "notes.md"},
 		{"then the runtime", "", "", "", "pi"},
 		{"spaces are folded", "  my   pane ", "", "", "my pane"},
 		{"a long pane name is cut", "a very long pane name that keeps going and going", "", "", "a very long pane name that…"},
@@ -113,12 +113,12 @@ func TestShortNameCutsAWordlessName(t *testing.T) {
 
 func TestNoAutoLink(t *testing.T) {
 	cases := map[string]string{
-		"resume.md":                  "resume.\u200bmd",
-		"[resume.md][fix] Update it": "[resume.\u200bmd][fix] Update it",
-		"version 1.2 and a.b":        "version 1.2 and a.\u200bb",
-		"end of sentence. Next":      "end of sentence. Next",
-		"no dots":                    "no dots",
-		"…/rhasia-scret/.piwt/infra": "…/rhasia-scret/.piwt/infra",
+		"notes.md":                  "notes.\u200bmd",
+		"[notes.md][fix] Update it": "[notes.\u200bmd][fix] Update it",
+		"version 1.2 and a.b":       "version 1.2 and a.\u200bb",
+		"end of sentence. Next":     "end of sentence. Next",
+		"no dots":                   "no dots",
+		"…/webapp/.worktrees/infra": "…/webapp/.worktrees/infra",
 	}
 	for in, want := range cases {
 		if got := noAutoLink(in); got != want {

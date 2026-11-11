@@ -68,17 +68,22 @@ func (p Paths) installHooks(path, runtime string, events []string, timeout int) 
 			if !arr.IsArray() {
 				return nil, "", fmt.Errorf("%s is not an array", key)
 			}
-			found := false
+			found, current := false, false
 			var stale [][2]int
 			forEachHook(arr, func(gi, hi int, h gjson.Result) {
 				ours, exact := p.isOurs(h.Get("command").String(), runtime)
 				if ours {
 					found = true
-					if !exact {
+					if exact {
+						current = true
+					} else {
 						stale = append(stale, [2]int{gi, hi})
 					}
 				}
 			})
+			if current {
+				stale = nil // updating them would make the same hook run twice
+			}
 			for _, s := range stale {
 				path := fmt.Sprintf("%s.%d.hooks.%d.command", key, s[0], s[1])
 				if src, err = sjson.SetBytes(src, path, cmd); err != nil {
@@ -229,6 +234,14 @@ func (p Paths) uninstallHooks(path, runtime string, events []string, guardTrust 
 				}
 			}
 			removed = append(removed, pl.ev)
+		}
+		// Install adds the hooks object when the file had none; an empty one
+		// left behind would keep the file from looking as it did.
+		if h := gjson.GetBytes(src, "hooks"); h.IsObject() && len(h.Map()) == 0 {
+			var err error
+			if src, err = sjson.DeleteBytes(src, "hooks"); err != nil {
+				return nil, "", err
+			}
 		}
 		return src, "removed " + strings.Join(removed, ", "), nil
 	})

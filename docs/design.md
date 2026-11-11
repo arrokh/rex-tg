@@ -272,7 +272,7 @@ Rules for every adapter:
 
 The registry keeps one `pane` row per Rex pane and one `conversation` row per agent session. It learns which session runs in which pane from three sources, in this order.
 
-1. **Hook report (exact).** Each agent runs `rex-tg hook <runtime>` from its hooks. The hook reads the hook JSON from stdin and `REX_SESSION` and `REX_BLOCK` from its environment. It writes one JSON file to the spool folder and exits 0. It must finish in under 50 ms and must never fail the agent. It does nothing when `REX_BLOCK` is not set.
+1. **Hook report (exact).** Each agent runs `rex-tg hook <runtime>` from its hooks. The hook reads the hook JSON from stdin and `REX_SESSION` and `REX_BLOCK` from its environment. It writes one JSON file to the spool folder and exits 0. It must finish in under 50 ms and must never fail the agent. It does nothing when `REX_BLOCK` is not set, but it still reads its input first, so the agent never writes into a closed pipe. It waits at most 2 seconds for the input, less than the agents' 5-second hook timeout.
 2. **Scan and guess.** For a pane whose foreground process is an agent but that has no hook report yet, the registry looks for that runtime's transcripts in the same folder. It takes the newest file that changed after the process started. The row is marked `guess`, and `/agents` shows "(guess)".
 3. **Unresolved.** When two agents of the same runtime run in the same folder without hook reports, the registry cannot tell them apart. `/agents` shows them as "(waiting for session)". They resolve at their next hook event, for example the next prompt or turn end.
 
@@ -340,7 +340,7 @@ Rules:
 - **Resume while the topic is busy.** If the topic is live with another session in another pane, the resumed session does not take the topic. `/agents` lists it, and opening it moves it to a new topic. In the same pane there is no conflict: the session that ran there before has stopped, so the resumed session takes the topic back.
 - **Resume under a new session ID.** If an agent gives a resumed session a new ID, rex-tg cannot link it to the old one. The take-over rule still applies in the same pane, so the topic stays the same.
 - **Rex restart.** After one restart, the block IDs and the session ID stayed the same (spike S5). A new block ID is still possible, because only one restart was tested. A restored pane does not run its creation command again, so the agent must resume in that pane, for example through rexume. That resume was not tested (S5). The topic then follows the session. If the restored pane starts a new session instead, rex-tg has no history for that pane, so the session appears in `/agents` as a new agent.
-- **Agent exits.** The topic becomes `offline`, and rex-tg posts "🔴 agent stopped". Messages that you send there are refused with a reason.
+- **Agent exits, or its pane closes.** The topic becomes `offline`. rex-tg posts why: "🔴 pi stopped: its Rex pane was closed.", "…: it exited, and the pane is still open.", or "…: another session took its pane." A turn that was running ends at once with a "🔴 Stopped" summary, so "typing…" stops. The topic's name gets a 🔴 in front until the agent runs again; then rex-tg posts "🟢 pi is running again." and the 🔴 goes away. Messages that you send while it is offline are refused with a reason.
 - **Deleted topic.** Telegram does not tell the bot that you deleted a topic. rex-tg finds out in two ways, and then the topic becomes `closed`: a send or a rename fails with "message thread not found", or you tap the agent in `/agents`. That button reports the tap to rex-tg instead of opening a link, and rex-tg first sets the topic's name with `editForumTopic` (Telegram answers `TOPIC_NOT_MODIFIED` when the name is the same). When the topic is gone and the pane and the session still exist, rex-tg makes a new topic for the session, with the intro card and the backfill (found live, spike S1).
 - **Unlink.** `/unlink` closes the topic in rex-tg. The topic stays in Telegram as history.
 - **Topic name.** A short name, at most 32 characters, cut at the end of a word: the name that you gave the Rex pane, else the session name, else the project folder, else the runtime. Rex's default pane name `shell` (and shell or agent program names) do not count. Every 30 seconds, rex-tg compares each live topic's name with its pane and session and renames the topic with `editForumTopic` when it changed. A take-over renames at once.
@@ -451,7 +451,7 @@ Each alert is stored as a row, with a hash of the prompt text on the screen (sec
 Before rex-tg sends the keys for a button:
 
 1. It checks that the button press comes from the owner, in the owner's chat.
-2. It captures the pane again. If the prompt text no longer matches the alert's hash, it refuses: "This prompt is gone."
+2. It captures the pane again. If the prompt text no longer matches the alert's hash, it refuses: "This prompt is gone." When the pane is still blocked, a newer prompt shows: rex-tg posts an alert for it right away, because no state change would.
 3. It sends the keys and marks the alert `answered`.
 
 When the prompt ends, by a button or on the Mac, rex-tg removes the buttons from the alert message with `editMessageReplyMarkup`. So an old button can never type into whatever is on the screen later.
@@ -465,13 +465,13 @@ Active agents (3)
 🟢 [dotfiles][chore] Plan Rex… · working
    pi · dotfiles
 🟡 api migration · waiting for you
-   claude · lovina · "Move the API to Go"
-⚪ rhasia-scret · idle (guess)
-   codex · rhasia-scret
+   claude · webapp · "Move the API to Go"
+⚪ api-server · idle (guess)
+   codex · api-server
 
 [ Open [dotfiles][chore] Plan Rex… ]
 [ ↗ api migration ]
-[ Open rhasia-scret ]
+[ Open api-server ]
 [ ↻ Refresh ]
 ```
 
@@ -479,7 +479,7 @@ The first line is the topic name (section 7). The second line is the runtime and
 
 Commands in the main chat: `/agents`, `/topics` (topics and their states), `/status` (daemon health), `/help`.
 
-Commands in a topic: `/info`, `/screen [lines]`, `/approve`, `/deny`, `/esc`, `/interrupt`, `/key <keys>`, `/force <text>`, `/mode progress|block|final`, `/verbose on|full|off`, `/reasoning on|off`, `/resend <id>`, `/unlink`, `/help`.
+Commands in a topic: `/info`, `/screen [lines]`, `/approve`, `/deny`, `/esc`, `/interrupt`, `/key <keys>`, `/force <text>`, `/mode progress|block|final`, `/verbose on|full|off`, `/reasoning on|off`, `/resend [id]`, `/unlink`, `/help`.
 
 How a topic routes text that starts with `/` (D15):
 
@@ -534,7 +534,7 @@ stateDiagram-v2
   [*] --> pending
   pending --> sending: the sender claims the next part
   sending --> sent: Telegram returns a message_id
-  sending --> pending: 429 rate limit (wait retry_after) or a clear error before posting
+  sending --> pending: 429 rate limit (wait retry_after), not sent (no connection), or a clear error before posting
   sending --> unknown: timeout, lost connection, or crash while sending
   pending --> failed: permanent error, even as plain text
   pending --> skipped: filtered, or an echo of your own Telegram message
@@ -544,7 +544,10 @@ stateDiagram-v2
 
 - **Claims.** The sender claims a part with `UPDATE … SET state = 'sending' WHERE … AND state = 'pending'` in a transaction, so no part can be claimed twice.
 - **Parts.** Each long message is split into parts, and each part has its own state. After a crash, sending continues at the next part, not from the start.
-- **Unknown.** rex-tg marks the part `unknown` and posts one notice: `⚠️ Part of reply #42 may not have arrived. /resend 42`. It never retries on its own. `/resend 42` sends only the parts of #42 that are `unknown`.
+- **Not sent.** When the connection, the TLS handshake, or writing the request fails before the whole request was written, Telegram cannot have acted on it. The part goes back to `pending`, and sending pauses for 1 second, then 2, 4, up to 30 seconds while this goes on (`httptrace` tells whether the request was written).
+- **Unknown.** When the request was written but no answer came (a timeout, a dropped connection, a 5xx), rex-tg marks the part `unknown` and posts one notice with a button: `⚠️ Part 1 of reply #42 may not have arrived.` `[🔁 Send again]`. It never retries on its own, because the message may be in the chat already. The button, or `/resend 42`, sends only the parts of #42 that are `unknown`. `/resend` without an id takes the newest such reply of the topic (tapping a command in a message drops its argument, seen live), and the id of a notice stands for the reply it is about.
+- **A notice never gets a notice.** If the notice itself may not have arrived, nothing more is posted about it. Before this rule, a network stall made a chain of notices about notices (seen live, spike S1).
+- **Failed.** A part that Telegram refuses for good is marked `failed`, and a notice says why (`⚠️ Part 1 of reply #42 could not be sent: …`). A deleted or closed topic gets no notice: it is closed in rex-tg instead.
 - **A message's state comes from its parts.** It is `sent` when all parts are `sent`, `unknown` when any part is `unknown`, and `failed` when any part is `failed`.
 - **An unknown progress message is not sent again.** The turn goes on without a progress message, and the answer is still sent. The `progress` row is deleted at the end of the turn.
 - **Edits and deletes are safe to repeat.** Editing a progress message twice gives the same result, and so does deleting it twice. So edits and deletes retry freely. Only the first send of a progress message follows the rules for sends.
@@ -566,7 +569,10 @@ Telegram errors:
 | 400 "message thread not found" | The topic was deleted. Mark it `closed`. |
 | 403 "bot was blocked by the user" | Stop sending. `/status` and `rex-tg doctor` report it. |
 | 409 Conflict on `getUpdates` | Another program polls with the same token. Stop polling and report it. |
-| Network error or 5xx before an answer | A send is `unknown`. An edit or delete is retried with backoff. |
+| No connection, or the TLS handshake fails (the request was not written) | Not sent: retried after a growing pause (1 to 30 seconds). |
+| Timeout, dropped connection, or 5xx after the request was written | A send is `unknown`, with one notice and a `🔁 Send again` button. An edit or delete is retried with backoff. |
+| 400 `TOPIC_CLOSED` or `TOPIC_ID_INVALID` | Like "message thread not found": the topic is `closed`. |
+| Any other 400 | The part is `failed`, and a notice says why. |
 
 ### 9.2 Order
 
@@ -614,7 +620,7 @@ Waiting (D11):
 
 Joining messages:
 
-- Telegram splits long texts into several messages. rex-tg joins messages that arrive within 300 ms into one prompt, or within 1500 ms when a message is 4000 characters or longer. These are OpenClaw's values.
+- Telegram splits long texts into several messages. rex-tg joins messages that arrive within 300 ms into one prompt, or within 1500 ms when a message is 4000 characters or longer. These are OpenClaw's values. One transaction stores the joined prompt and ends its parts, so a crash cannot leave both to be typed.
 - Messages that wait while the agent works are delivered one per turn, in the order they arrived. This matches Hermes's `queue` mode and OpenClaw's `followup` mode.
 
 How text is typed:
@@ -805,7 +811,8 @@ Housekeeping:
 - **Pairing.** `rex-tg login` stores the bot token, then shows a one-time code. You send `/start <code>` to the bot. The daemon saves your user ID and chat ID as the owner. Until then, the bot answers nobody. The code is random, works once, and expires after 10 minutes. After 5 wrong codes, pairing stops until you run `rex-tg login` again.
 - **Allowlist.** After pairing, rex-tg accepts updates only from the owner's user ID in the owner's private chat. It drops everything else and logs only `update_id` and `from.id`.
 - **Token.** The bot token is stored in the macOS Keychain. It is never in the config file, the logs, or the dotfiles repository. `rex-tg login` runs `security add-generic-password -U -s rex-tg -a bot-token -w` with no value after `-w`, so `security` asks for the token, and the token never appears in a process list. The daemon reads it with `security find-generic-password`. Because `security` created the item, launchd can start the daemon without a Keychain dialog (Phase 1 checks this).
-- **Telegram is not end-to-end encrypted for bots.** Agent replies pass through Telegram's servers. rex-tg removes common secret formats before it sends text: API keys, GitHub tokens, AWS keys, private key blocks, JWTs, and bot tokens. The removal also runs on progress labels, screen captures, and backfill. It is a best effort, not a guarantee.
+- **Telegram is not end-to-end encrypted for bots.** Agent replies pass through Telegram's servers. rex-tg removes common secret formats before it sends text: API keys (OpenAI, Anthropic, Google, Stripe, npm), GitHub tokens, AWS keys, Slack tokens, private key blocks, JWTs, bot tokens, `Bearer` and `Basic` credentials, and the value of an assignment whose name ends in a secret word (`GITHUB_TOKEN=…`, `"api_key": "…"`, `password: …`; `tokenizer` or `max_tokens` do not count). The removal also runs on progress labels, screen captures, backfill, session titles, and topic names. It is a best effort, not a guarantee.
+- **Requests stay encrypted.** The token is part of every request URL, so `telegram.api_base` must be an `https` URL; plain `http` is accepted only for a local test server. `state.dir` must be an absolute path, so the hooks and the daemon use the same folder.
 - **Progress rows hold no output.** Like OpenClaw's progress drafts, rows show only tool names and short labels, never tool output, file contents, or full arguments. `/verbose full` is the only way to show output, and you turn it on per topic.
 - **Typing only into agents.** The check in 9.5 stops rex-tg from typing into anything but the session's agent process.
 - **No server start.** rex-tg calls `rex` with `--autostart=false`.
@@ -816,11 +823,11 @@ Housekeeping:
 | Item | Location |
 | --- | --- |
 | Binary | `~/.local/bin/rex-tg` (one Go binary for the daemon, the hooks, and the CLI) |
-| Daemon | launchd agent `~/Library/LaunchAgents/local.rex-tg.plist`, with `KeepAlive` |
+| Daemon | launchd agent `~/Library/LaunchAgents/local.rex-tg.plist`. `KeepAlive` starts it again only after a failure (`SuccessfulExit` false), at most every 30 seconds (`ThrottleInterval`). launchd never rotates `launchd.out.log` and `launchd.err.log`, so the daemon empties one that is over 1 MB at every start. |
 | Config | `~/.config/rex-tg/config.toml` |
 | State | `~/.local/state/rex-tg/`: `rex-tg.db`, `daemon.lock`, `spool/`, `logs/` |
 | Token | Keychain item, service `rex-tg`, account `bot-token` |
-| pi extension | `~/.pi/agent/extensions/rex-tg.ts`, a few lines of TypeScript that call `rex-tg hook pi` |
+| pi extension | `~/.pi/agent/extensions/rex-tg.ts`, a few lines of TypeScript that call `rex-tg hook pi`. Its first line marks it as rex-tg's: install backs up a file of yours at that path first, and uninstall never removes a file without the mark. |
 | Claude Code hooks | entries in `~/.claude/settings.json` |
 | Codex hooks | entries at the end of each event's list in `~/.codex/hooks.json` |
 
@@ -913,7 +920,8 @@ testdata/<runtime>/*.jsonl  synthetic transcripts only
 | Rex server is not running | No pane can be read or typed into. | All topics are `offline`. rex-tg retries every 10 seconds and never starts a server. |
 | Rex server restarts | Block IDs and the session ID stayed the same after one restart (spike S5). A new block ID is still possible. | Topics follow their sessions when the agents resume (section 7). Input is refused until then. |
 | A hook cannot write its spool file | One report is lost. | The hook still exits 0 without output. The next hook event or the next scan fills the gap. |
-| Transcript replaced or shortened | The offset no longer fits the file. | A new `dev_ino`, or a size below the offset, starts a read from byte 0. The replay guard and the unique keys (section 6) absorb repeats. |
+| Transcript replaced or shortened | The offset no longer fits the file. | A new `dev_ino`, or a size below the offset, starts a read from byte 0. Every batch of that re-read carries `Reset` until it reaches the end of the file, so the replay guard and the unique keys (section 6) absorb repeats also in a long transcript. |
+| A transcript read fails | The follower stops. | It starts again from the stored cursor after 5 seconds. A missing file is not a failure: the follower waits for it. |
 | Telegram is unreachable | Rows wait in the outbox. | They are sent later, in order. Stale progress edits are dropped. |
 | Another program polls with the same token | Telegram answers 409. | Polling stops, and `rex-tg doctor` reports it. |
 | A line is not complete yet | A half line is at the end of the file. | The tailer reads only up to the last newline. |

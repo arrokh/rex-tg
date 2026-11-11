@@ -166,6 +166,8 @@ func TestLoadErrors(t *testing.T) {
 		{"bad mode", "[display]\nmode = \"loud\"\n", "display.mode"},
 		{"bad while working", "[agents.pi]\nwhile_working = \"x\"\n", "while_working"},
 		{"syntax", "[rex\n", "parse"},
+		{"relative state dir", "[state]\ndir = \"state\"\n", "absolute"},
+		{"plain http api", "[telegram]\napi_base = \"http://api.telegram.org\"\n", "https"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -188,5 +190,14 @@ func TestDurationText(t *testing.T) {
 	}
 	if err := d.UnmarshalText([]byte("x")); err == nil {
 		t.Error("want error")
+	}
+}
+
+// Plain http is allowed only for a local test server.
+func TestLocalHTTPAPIBaseIsAllowed(t *testing.T) {
+	for _, base := range []string{"http://127.0.0.1:8080", "http://localhost:9000", "https://api.telegram.org"} {
+		if _, err := Load(write(t, "[telegram]\napi_base = \""+base+"\"\n"), "/h"); err != nil {
+			t.Errorf("%s: %v", base, err)
+		}
 	}
 }

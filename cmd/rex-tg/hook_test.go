@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -171,5 +172,33 @@ func TestHookInputLimit(t *testing.T) {
 	te.Stdin = strings.NewReader(`{"hook_event_name":"Stop","pad":"` + strings.Repeat("a", 2<<20) + `"}`)
 	if code := te.run("hook", "claude"); code != 0 {
 		t.Fatal(code)
+	}
+}
+
+// countingReader reports whether all of it was read.
+type countingReader struct {
+	r    io.Reader
+	done bool
+}
+
+func (c *countingReader) Read(p []byte) (int, error) {
+	n, err := c.r.Read(p)
+	if err == io.EOF {
+		c.done = true
+	}
+	return n, err
+}
+
+// Outside Rex the hook still reads its input, so the agent writing it never
+// gets a broken pipe.
+func TestHookReadsInputOutsideRex(t *testing.T) {
+	te := newTestEnv(t)
+	in := &countingReader{r: strings.NewReader(claudePayload)}
+	te.Stdin = in
+	if code := te.run("hook", "claude"); code != 0 {
+		t.Fatalf("exit %d", code)
+	}
+	if !in.done {
+		t.Fatal("the hook ended without reading its input")
 	}
 }

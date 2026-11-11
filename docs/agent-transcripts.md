@@ -126,7 +126,7 @@ Top-level keys of an assistant line: `advisorModel`, `apiBlockIndex`, `cwd`, `ef
 | Title | `custom-title.customTitle` |
 | Reply | `type=assistant`, `text` blocks |
 | Final or commentary | `message.stop_reason`: `end_turn` is final. The final line is complete when it is written, with no earlier stub line (observed in S4). `tool_use` is commentary. |
-| Prompt typed on the Mac | `type=user` with string content or `text` blocks, without `isMeta`, and not command wrappers such as `<command-name>`, `<local-command-stdout>`, or `<local-command-caveat>`. A multi-line paste is one string with `\n` (observed in S2). |
+| Prompt typed on the Mac | `type=user` with string content or `text` blocks, without `isMeta`, and not command wrappers such as `<command-name>`, `<local-command-stdout>`, or `<local-command-caveat>`. `<system-reminder>…</system-reminder>` spans (context for the model) are removed from the text. A multi-line paste is one string with `\n` (observed in S2). |
 | Message sent during a tool run | `queue-operation` with `operation=enqueue` (`content` is the text), when it is sent. `queue-operation` with `operation=remove` and `reason=absorbed_mid_turn`, when Claude reads it. An `attachment` line with `attachment.type=queued_command` (`attachment.prompt` is the text, `humanTurn=true`). The line is written when the text is absorbed, but its timestamp is the time of sending. There is no `user` line. Match the echo on the `queued_command` attachment (observed in S2). |
 | Interrupt | A `user` line with a `text` block that starts with `[Request interrupted`. It ends the turn and is not a prompt (observed in S2). |
 | Tool call (verbose mode) | `tool_use` blocks |

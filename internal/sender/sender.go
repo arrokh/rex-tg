@@ -137,6 +137,9 @@ type Sender struct {
 	// the newest one, also when an older one waits for a retry.
 	reactions map[[2]int64]uint64
 	reactGen  uint64
+	// netFails counts requests in a row that never left this machine; it
+	// sets the pause before the next try (see netDown).
+	netFails int
 }
 
 // New returns a Sender. Call Run to start it.
@@ -249,8 +252,15 @@ func (s *Sender) Call(prio Priority, fn func(ctx context.Context, tg *telegram.C
 		}
 		err := fn(ctx, s.tg)
 		switch telegram.Classify(err) {
+		case telegram.ClassNone:
+			s.netUp()
 		case telegram.ClassRateLimited:
 			s.pauseFor(err)
+			if j.attempts++; j.attempts < maxAttempts {
+				return jobResult{retry: true}
+			}
+		case telegram.ClassNotSent:
+			s.netDown()
 			if j.attempts++; j.attempts < maxAttempts {
 				return jobResult{retry: true}
 			}
@@ -436,6 +446,23 @@ func (s *Sender) pauseFor(err error) {
 		d = api.RetryAfter
 	}
 	s.pauseBucket(d)
+}
+
+// netDown pauses the budget after a request that never left this machine,
+// longer each time in a row, so a network outage is not hammered. Nothing was
+// posted, so the request is tried again after the pause.
+func (s *Sender) netDown() {
+	s.mu.Lock()
+	s.netFails++
+	s.bucket.pause(s.now(), backoff(s.netFails-1))
+	s.mu.Unlock()
+}
+
+// netUp resets the backoff of netDown once Telegram answers again.
+func (s *Sender) netUp() {
+	s.mu.Lock()
+	s.netFails = 0
+	s.mu.Unlock()
 }
 
 // block pauses all sending until Run restarts.

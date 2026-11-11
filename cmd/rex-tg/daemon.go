@@ -33,6 +33,7 @@ func daemonCmd(ctx context.Context, args []string, env Env) int {
 		fmt.Fprintf(env.Stderr, "rex-tg: %v\n", err)
 		return 1
 	}
+	trimLaunchdLogs(cfg.LogDir())
 	rotator := &lumberjack.Logger{
 		Filename:   filepath.Join(cfg.LogDir(), "rex-tg.log"),
 		MaxSize:    10,
@@ -78,5 +79,22 @@ func daemonCmd(ctx context.Context, args []string, env Env) int {
 		fmt.Fprintf(env.Stderr, "rex-tg: daemon: %v\n", err)
 		logger.Error("daemon failed", "err", err)
 		return 1
+	}
+}
+
+// maxLaunchdLog is the size above which a launchd log is emptied. launchd
+// writes the daemon's stdout and stderr there and never rotates them; the
+// daemon's own log is rotated by lumberjack.
+const maxLaunchdLog = 1 << 20
+
+// trimLaunchdLogs empties a launchd log that grew too big. It runs at every
+// start, also one that fails, so a daemon that restarts again and again
+// cannot fill the disk.
+func trimLaunchdLogs(dir string) {
+	for _, name := range []string{"launchd.out.log", "launchd.err.log"} {
+		path := filepath.Join(dir, name)
+		if fi, err := os.Stat(path); err == nil && fi.Mode().IsRegular() && fi.Size() > maxLaunchdLog {
+			_ = os.Truncate(path, 0)
+		}
 	}
 }

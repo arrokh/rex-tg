@@ -37,6 +37,9 @@ type screenMachine struct {
 	Screens map[string]string            `json:"screens"`
 	Start   string                       `json:"start"`
 	Moves   map[string]map[string]string `json:"moves"`
+	// Processes holds the answer of the block method `process` while a
+	// screen shows, for screens where it differs from the rules.
+	Processes map[string]string `json:"processes"`
 }
 
 type call struct {
@@ -74,6 +77,13 @@ func main() {
 		case "capture":
 			fmt.Fprint(os.Stdout, m.Screens[currentScreen(dir, m)])
 			os.Exit(0)
+		case "block":
+			if len(stripped) > 0 && stripped[len(stripped)-1] == "process" {
+				if out, ok := m.Processes[currentScreen(dir, m)]; ok {
+					fmt.Fprint(os.Stdout, out)
+					os.Exit(0)
+				}
+			}
 		case "send-key":
 			if len(stripped) > 5 {
 				cur := currentScreen(dir, m)

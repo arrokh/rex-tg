@@ -440,13 +440,19 @@ func TestPermissionAlert(t *testing.T) {
 		t.Errorf("keys sent for a stale button: %v", e.keys())
 	}
 	e.waitFor("buttons removed from the stale alert", func() bool { m, _ := e.message(first.ID); return m.Markup == nil })
+	// The pane is still blocked, now by the prompt on screen: it gets an alert
+	// without waiting for a state change.
+	e.waitFor("an alert for the prompt on screen now", func() bool { return len(alertMessages(e, thread)) == 2 })
+	if ms := alertMessages(e, thread); !strings.Contains(ms[len(ms)-1], "Something else is on screen now") {
+		t.Errorf("new alert = %q", ms[len(ms)-1])
+	}
 
-	// Second alert: same screen on press, the digit is sent.
+	// Next alert: same screen on press, the digit is sent.
 	e.setStatus("working", "")
 	e.waitPaneState("working")
 	e.setScreen(permScreen)
 	e.setStatus("blocked", "permission")
-	e.waitFor("a second alert", func() bool { return len(alertMessages(e, thread)) == 2 })
+	e.waitFor("a third alert", func() bool { return len(alertMessages(e, thread)) == 3 })
 	var second tgtest.Message
 	for _, m := range e.botMessages(thread) {
 		if strings.Contains(m.Text, "Permission needed") && m.ID != first.ID {
@@ -465,11 +471,11 @@ func TestPermissionAlert(t *testing.T) {
 		t.Errorf("open alerts left: %+v", als)
 	}
 
-	// A third alert is answered with /deny: the last non-Esc option.
+	// The next alert is answered with /deny: the last non-Esc option.
 	e.setStatus("working", "")
 	e.waitPaneState("working")
 	e.setStatus("blocked", "permission")
-	e.waitFor("a third alert", func() bool { return len(alertMessages(e, thread)) == 3 })
+	e.waitFor("a fourth alert", func() bool { return len(alertMessages(e, thread)) == 4 })
 	e.say(thread, "/deny")
 	e.waitFor("the deny key", func() bool { return len(e.keys()) == 2 })
 	if got := e.keys()[1]; got != "3" {
@@ -503,7 +509,7 @@ func TestResendAfterUnknownSend(t *testing.T) {
 		t.Fatalf("the unknown part was sent again by itself")
 	}
 	var id int
-	if _, err := fmt.Sscanf(notice.Text[strings.Index(notice.Text, "/resend ")+len("/resend "):], "%d", &id); err != nil {
+	if _, err := fmt.Sscanf(notice.Text[strings.Index(notice.Text, "reply #")+len("reply #"):], "%d", &id); err != nil {
 		t.Fatalf("no outbox id in %q", notice.Text)
 	}
 	e.say(thread, fmt.Sprintf("/resend %d", id))
@@ -651,7 +657,7 @@ func TestTakeOverAfterClear(t *testing.T) {
 	if got := len(e.tg.Topics(chatID)); got != 1 {
 		t.Errorf("%d topics, want the one topic to be reused", got)
 	}
-	if e.hasText(thread, "🔴 agent stopped") {
+	if e.hasText(thread, "stopped:") {
 		t.Errorf("the topic went offline during the take-over\n%s", e.dump())
 	}
 	e.waitFor("the topic to be renamed", func() bool {
@@ -710,8 +716,8 @@ func TestRestartRecovery(t *testing.T) {
 	e.start()
 	notice := e.waitText(ft.MessageThreadID, "may not have arrived")
 	e.waitText(ft.MessageThreadID, "may be in the input box")
-	if !strings.Contains(notice.Text, fmt.Sprintf("/resend %d", outboxID)) {
-		t.Errorf("notice = %q", notice.Text)
+	if !strings.Contains(notice.Text, fmt.Sprintf("reply #%d", outboxID)) || buttonData(notice, "Send again") != fmt.Sprintf("rs:%d", outboxID) {
+		t.Errorf("notice = %q, buttons %+v", notice.Text, notice.Markup)
 	}
 	if e.hasText(ft.MessageThreadID, "half sent answer") {
 		t.Errorf("the part left in sending was sent again")
@@ -900,8 +906,17 @@ func TestMainChatBasics(t *testing.T) {
 
 func TestAgentLeavesAndReturns(t *testing.T) {
 	e, p, thread := piTopic(t, "pi-leave")
+	topicName := func() string {
+		for _, tp := range e.tg.Topics(chatID) {
+			if tp.ThreadID == thread {
+				return tp.Name
+			}
+		}
+		return ""
+	}
 	e.setProcess("zsh", "-zsh", 777)
-	e.waitText(thread, "agent stopped")
+	e.waitText(thread, "pi stopped: it exited, and the pane is still open.")
+	e.waitFor("the 🔴 in the topic name", func() bool { return topicName() == "🔴 pane one" })
 	id := e.say(thread, "anyone there?")
 	e.waitFor("a refusal", func() bool { m, _ := e.message(id); return m.Reaction == "👎" })
 	if len(e.pastes()) != 0 {
@@ -910,7 +925,8 @@ func TestAgentLeavesAndReturns(t *testing.T) {
 	// pi starts again with a new process and the same session (resume).
 	e.setProcess("node", "pi", 4343)
 	e.hookPi(p, "resume")
-	e.waitText(thread, "agent is running again")
+	e.waitText(thread, "pi is running again")
+	e.waitFor("the topic name without the 🔴", func() bool { return topicName() == "pane one" })
 	e.waitText(thread, "pi · resumed")
 	if got := len(e.tg.Topics(chatID)); got != 1 {
 		t.Errorf("%d topics", got)
@@ -922,8 +938,8 @@ func TestAgentLeavesAndReturns(t *testing.T) {
 	p.User("welcome back")
 	p.Final("resumed answer")
 	e.waitText(thread, "resumed answer")
-	if n := e.countText(thread, "agent stopped"); n != 1 {
-		t.Errorf("agent stopped posted %d times", n)
+	if n := e.countText(thread, "stopped:"); n != 1 {
+		t.Errorf("the stop was posted %d times", n)
 	}
 }
 
@@ -1463,7 +1479,7 @@ func TestForceTypesAtAPromptAndMacAnswerClosesAlert(t *testing.T) {
 func TestPaneClosedTakesTopicOffline(t *testing.T) {
 	e, _, thread := piTopic(t, "pi-closed")
 	e.fake.On([]string{"block", "ls"}, `{"blocks":[]}`, 0)
-	e.waitText(thread, "agent stopped")
+	e.waitText(thread, "pi stopped: its Rex pane was closed.")
 	id := e.say(thread, "are you there")
 	e.waitFor("a refusal", func() bool { m, _ := e.message(id); return m.Reaction == "👎" })
 	e.waitText(thread, "Not sent")
@@ -1831,15 +1847,15 @@ func vimScreen(label string) string {
 }
 
 // piVimMachine makes the fake pane behave like pi-vim: Escape leaves INSERT,
-// VISUAL, an EX line, or a pending command, and i enters INSERT. Keys that
-// pi-vim would pass to pi do not change the screen.
+// VISUAL, an EX line, or a pending command, and i enters INSERT. An Escape in
+// plain NORMAL mode reaches pi and stops the agent: the screen "ABORTED".
 func piVimMachine(e *env, start string) {
-	screens := map[string]string{}
+	screens := map[string]string{"ABORTED": vimScreen("NORMAL") + "Operation aborted\n"}
 	for _, l := range []string{"NORMAL", "INSERT", "NORMAL 3d_", "EX w_", "VISUAL 3_", "VISUAL"} {
 		screens[l] = vimScreen(l)
 	}
 	e.fake.SetScreenMachine(start, screens, map[string]map[string]string{
-		"NORMAL":     {"i": "INSERT"},
+		"NORMAL":     {"i": "INSERT", "escape": "ABORTED"},
 		"INSERT":     {"escape": "NORMAL"},
 		"NORMAL 3d_": {"escape": "NORMAL"},
 		"EX w_":      {"escape": "NORMAL"},
@@ -1933,6 +1949,9 @@ func TestInterruptInPiVimLeavesInsertModeFirst(t *testing.T) {
 	e.waitText(thread, "Sent: escape")
 	if got := strings.Join(e.keys(), " "); got != "escape escape" {
 		t.Fatalf("keys = %q, want one Escape for pi-vim, then the interrupt", got)
+	}
+	if got := e.fake.ScreenState(); got != "ABORTED" {
+		t.Errorf("screen = %q, want the interrupt to reach pi", got)
 	}
 	e.say(thread, "/esc")
 	e.waitFor("the third key call", func() bool { return len(e.keys()) == 3 })
@@ -2120,6 +2139,22 @@ func TestTopicNameFollowsThePaneAndTheSession(t *testing.T) {
 	})
 	skew.Add(int64(31 * time.Second)) // the next name check is due
 	e.waitFor("the rename", func() bool { return name() == "[proj][fix] Repair the flaky…" })
+
+	// A rename that fails is tried again at the next check.
+	e.fake.On([]string{"block", "ls"}, fmt.Sprintf(`{"blocks":[{"block_id":%q,"label":"api work"}]}`, rexBlock), 0)
+	e.waitFor("the new pane name", func() bool {
+		pane, ok, _ := e.peek().PaneByBlock(context.Background(), "local", rexBlock)
+		return ok && pane.Label == "api work"
+	})
+	e.tg.FailNext("editForumTopic", 1, 502, "Bad Gateway", 0)
+	calls := len(e.tg.Calls("editForumTopic"))
+	skew.Add(int64(31 * time.Second))
+	e.waitFor("the failed rename", func() bool { return len(e.tg.Calls("editForumTopic")) > calls })
+	if got := name(); got == "api work" {
+		t.Fatalf("renamed although Telegram failed")
+	}
+	skew.Add(int64(31 * time.Second))
+	e.waitFor("the rename on the next check", func() bool { return name() == "api work" })
 }
 
 // The command menu is set for the owner's chat too: Telegram shows a chat's
@@ -2135,5 +2170,184 @@ func TestCommandMenuIsSetForTheOwnersChat(t *testing.T) {
 	})
 	if got := e.tg.Commands(); len(got) != len(daemon.BotCommands()) {
 		t.Errorf("default menu = %v", got)
+	}
+}
+
+// Bringing pi-vim to INSERT can take a few seconds. If the agent leaves the
+// pane meanwhile, no further key and no paste go to the shell.
+func TestPiVimAgentLeavesDuringRecovery(t *testing.T) {
+	e, _, thread := piTopic(t, "pi-vim-leaves")
+	piVimMachine(e, "NORMAL 3d_")
+	// After the Escape, pi is gone and a shell is in front.
+	e.fake.SetScreenProcess("NORMAL", fmt.Sprintf(`{"foreground":{"pid":777,"name":"zsh","argv0":"-zsh","cwd":%q},"ancestors":[]}`, paneCWD))
+	id := e.say(thread, "rm -rf build")
+	e.waitFor("the thumbs down", func() bool { m, _ := e.message(id); return m.Reaction == "👎" })
+	e.waitText(thread, "Not sent")
+	if got := strings.Join(e.keys(), " "); got != "escape" {
+		t.Errorf("keys = %q, want only the Escape that was pressed while pi was in front", got)
+	}
+	if len(e.pastes()) != 0 {
+		t.Errorf("pasted into a shell: %v", e.pastes())
+	}
+}
+
+// Every pi-vim mode has a label. A screen without one after a key is a redraw
+// caught halfway or something covering the editor, so it is not taken as
+// INSERT: nothing is pasted until INSERT shows.
+func TestPiVimLabelGoneAfterAKeyIsNotInsert(t *testing.T) {
+	e, _, thread := piTopic(t, "pi-vim-blank")
+	screens := map[string]string{"NORMAL": vimScreen("NORMAL"), "BLANK": "some answer text\n", "INSERT": vimScreen("INSERT")}
+	e.fake.SetScreenMachine("NORMAL", screens, map[string]map[string]string{"NORMAL": {"i": "BLANK"}})
+	e.say(thread, "hello")
+	e.waitText(thread, "did not react")
+	if len(e.pastes()) != 0 {
+		t.Fatalf("pasted while the label was missing: %v", e.pastes())
+	}
+	e.fake.SetScreenState("INSERT")
+	e.waitFor("the paste", func() bool { return len(e.pastes()) == 1 })
+	e.waitFor("Enter", func() bool { return len(e.keys()) == 2 })
+	if got := strings.Join(e.keys(), " "); got != "i enter" {
+		t.Errorf("keys = %q, want i then enter", got)
+	}
+}
+
+// A transcript follower that stops on a read error is started again, so the
+// topic keeps showing the session.
+func TestFollowerStartsAgainAfterAReadError(t *testing.T) {
+	e, p, thread := piTopic(t, "pi-read-error")
+	saved := p.Path + ".saved"
+	if err := os.Rename(p.Path, saved); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(p.Path, 0o755); err != nil { // reading a folder fails
+		t.Fatal(err)
+	}
+	time.Sleep(1500 * time.Millisecond) // the follower polls, fails, and stops
+	if err := os.Remove(p.Path); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(saved, p.Path); err != nil {
+		t.Fatal(err)
+	}
+	p.Final("after the read error")
+	deadline := time.Now().Add(15 * time.Second)
+	for !e.hasText(thread, "after the read error") {
+		if time.Now().After(deadline) {
+			t.Fatalf("the answer never arrived\n%s", e.dump())
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if n := e.countText(thread, "ready"); n != 1 {
+		t.Errorf("the old answer was posted %d times, want once", n)
+	}
+}
+
+// A reply whose send had an unknown outcome gets a notice with a button. One
+// tap sends it again, and the button goes away.
+func TestLostReplyIsSentAgainWithOneTap(t *testing.T) {
+	e, p, thread := piTopic(t, "pi-lost-reply")
+	e.tg.FailNext("sendMessage", 1, 502, "Bad Gateway", 0) // the outcome is unknown
+	p.Final("the lost answer")
+	notice := e.waitText(thread, "may not have arrived")
+	if strings.Contains(notice.Text, "/resend") {
+		t.Errorf("notice = %q: a tapped /resend would lose its id", notice.Text)
+	}
+	data := buttonData(notice, "Send again")
+	if data == "" {
+		t.Fatalf("no Send again button: %+v", notice.Markup)
+	}
+	e.pressButton(notice, data)
+	e.waitText(thread, "Sending 1 part(s)")
+	e.waitFor("the answer, sent again", func() bool { return e.hasText(thread, "the lost answer") })
+	e.waitFor("the button removed", func() bool { m, _ := e.message(notice.ID); return m.Markup == nil })
+}
+
+// /resend without an id sends the newest reply that may not have arrived, and
+// the id of a notice stands for the reply that it is about.
+func TestResendWithoutIDOrWithANoticeID(t *testing.T) {
+	e, p, thread := piTopic(t, "pi-resend-ids")
+	e.tg.FailNext("sendMessage", 2, 502, "Bad Gateway", 0) // the answer and its notice
+	p.Final("first lost answer")
+	var answerID, noticeID int64
+	e.waitFor("the answer and its notice, both unknown", func() bool {
+		for id := int64(1); id < 40; id++ {
+			row, err := e.peek().OutboxRow(context.Background(), id)
+			if err != nil {
+				continue
+			}
+			switch {
+			case row.Kind == "answer" && row.State == store.OutboxUnknown:
+				answerID = id
+			case strings.HasPrefix(row.Key, "notice:unknown:") && row.State == store.OutboxUnknown:
+				noticeID = id
+			}
+		}
+		return answerID != 0 && noticeID != 0
+	})
+	e.never("a notice about the notice", 400*time.Millisecond, func() bool { return e.hasText(thread, "may not have arrived") })
+
+	e.say(thread, fmt.Sprintf("/resend %d", noticeID))
+	e.waitText(thread, fmt.Sprintf("Sending 1 part(s) of #%d again", answerID))
+	e.waitFor("the answer, sent again", func() bool { return e.hasText(thread, "first lost answer") })
+
+	e.say(thread, "/resend")
+	e.waitText(thread, "Nothing to resend")
+}
+
+// An agent that dies in the middle of a turn ends the turn: the progress
+// message becomes a "stopped" summary and "typing…" stops.
+func TestAgentDyingMidTurnEndsTheTurn(t *testing.T) {
+	e, p, thread := piTopic(t, "pi-dies")
+	p.User("long work")
+	p.ToolCall("c1", "sleep 100")
+	progress := e.waitText(thread, "⏱")
+	e.setProcess("zsh", "-zsh", 777) // pi crashes
+	e.waitText(thread, "pi stopped")
+	e.waitFor("the stopped summary", func() bool {
+		m, _ := e.message(progress.ID)
+		return strings.Contains(m.Text, "🔴 Stopped")
+	})
+	before := len(e.tg.Calls("sendChatAction"))
+	e.never("typing after the stop", 6*time.Second, func() bool { return len(e.tg.Calls("sendChatAction")) > before })
+}
+
+// A replaced transcript longer than one batch is read again from byte 0 in
+// several batches. Old lines stay hidden in all of them, and new lines are
+// all posted, also two with the same time on both sides of a batch end.
+func TestLongReReadKeepsNewLinesInEveryBatch(t *testing.T) {
+	e, p, thread := piTopic(t, "pi-long-reread")
+	const old, newAt = "2026-01-01T00:00:00.000Z", "2099-01-01T00:00:00.000Z"
+	var b strings.Builder
+	filler := func(n int) {
+		for i := range n {
+			fmt.Fprintf(&b, `{"type":"message","id":"f%07d","timestamp":%q,"message":{"role":"user","content":[{"type":"text","text":%q}]}}`+"\n",
+				b.Len()+i, old, strings.Repeat("x", 1000))
+		}
+	}
+	final := func(id, text string) {
+		fmt.Fprintf(&b, `{"type":"message","id":%q,"timestamp":%q,"message":{"role":"assistant","content":[{"type":"text","text":%q}],"stopReason":"stop"}}`+"\n",
+			id, newAt, text)
+	}
+	filler(3600) // 4.10 MB of old lines (1138 bytes each): the first batch ends at 4 MiB plus up to one 64 KiB chunk
+	final("a1", "new answer before the batch end")
+	filler(300) // the first batch ends in here, by 4.26 MB
+	final("a2", "new answer after the batch end")
+
+	keep, err := os.Open(p.Path) // keep the old inode, so the new file gets another one
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer keep.Close()
+	tmp := p.Path + ".new"
+	if err := os.WriteFile(tmp, []byte(b.String()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(tmp, p.Path); err != nil {
+		t.Fatal(err)
+	}
+	e.waitText(thread, "new answer before the batch end")
+	e.waitText(thread, "new answer after the batch end")
+	if n := e.countText(thread, "ready"); n != 1 {
+		t.Errorf("the old answer was posted %d times, want once", n)
 	}
 }

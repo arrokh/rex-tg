@@ -44,6 +44,12 @@ Setup: a real bot made with @BotFather, Threaded Mode turned on, rex-tg installe
 - The menu did not show the rex-tg commands. `rex-tg doctor` found a list for the owner's chat, left by another program: `/commands /sessions /sync /upgrade`. Telegram shows that list before the default one. Change made: rex-tg also registers its menu for the owner's chat.
 - The pi-vim fix now also cancels a pending vim command or an EX line with Escape, instead of refusing the message.
 
+### A network stall and a chain of notices
+
+- At 15:34 a reply was sent while the connection stalled: the request was written, and no answer came within the 15-second timeout. The reply was marked `unknown`, as designed. Its "may not have arrived" notice was sent into the same stall and became `unknown` too, which made a notice about the notice, and so on: four notices, 15 seconds apart, until the network came back.
+- Tapping `/resend` in a notice sent the command without its id ("Usage: /resend <id>"). `/resend 15` and `/resend 14` then sent notices again, not the lost reply (#12).
+- Changes made: a notice never gets a notice; the notice has a `🔁 Send again` button for the reply it is about; `/resend` without an id takes the newest reply that may not have arrived, and the id of a notice stands for its reply. A request that never left the Mac (no connection, a TLS handshake timeout) is now "not sent" and is retried by itself; only a request that was written and got no answer is `unknown` (design section 9.1).
+
 ### Network
 
 - From this Mac, the connection to `api.telegram.org` failed in short bursts: `connection reset by peer`, then `TLS handshake timeout` for about a minute, at 13:08, 13:15, 13:18, and 13:23. Between the bursts, `curl` connected in about 0.5 s.

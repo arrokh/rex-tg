@@ -154,3 +154,33 @@ func TestRecoverTyping(t *testing.T) {
 		t.Fatalf("%+v", again)
 	}
 }
+
+// The joined row and the end of its parts are one change: after it, only the
+// joined row waits to be typed.
+func TestJoinInbound(t *testing.T) {
+	s := newStore(t)
+	th, _ := topic(t, s, 1)
+	for _, id := range []int64{1, 2} {
+		in := Inbound{UpdateID: id, ChatID: 100, MessageThreadID: 1, FromID: 7, Kind: "text", Body: "part", ThreadID: th.ID, CreatedAt: t0}
+		if ok := must(s.InsertInbound(ctx, in)); !ok {
+			t.Fatalf("update %d not inserted", id)
+		}
+	}
+	joined := Inbound{UpdateID: -1, ChatID: 100, MessageThreadID: 1, FromID: 7, Kind: "text", Body: "part\n\npart", ThreadID: th.ID, CreatedAt: t0}
+	if ok := must(s.JoinInbound(ctx, joined, []int64{1, 2})); !ok {
+		t.Fatal("joined row not inserted")
+	}
+	q := must(s.QueuedInbound(ctx, th.ID))
+	if len(q) != 1 || q[0].UpdateID != -1 || q[0].Body != "part\n\npart" {
+		t.Fatalf("queue = %+v, want only the joined row", q)
+	}
+	for _, id := range []int64{1, 2} {
+		rows := must(queryInbound(ctx, s.db, `WHERE update_id=?`, id))
+		if len(rows) != 1 || rows[0].State != InboundDone || rows[0].Reason != "joined" {
+			t.Fatalf("update %d = %+v, want done (joined)", id, rows)
+		}
+	}
+	if ok := must(s.JoinInbound(ctx, joined, []int64{1, 2})); ok {
+		t.Fatal("the joined row was inserted twice")
+	}
+}

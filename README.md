@@ -114,6 +114,7 @@ Doctor prints one line for each check. `✓` means the check passed. `!` is a wa
 
 - `/agents` lists the agents in Rex panes. Tap one to open its topic. If the session already has a topic, you get a link to it. If you deleted that topic, a new one is made for the same session.
 - A topic is named after its Rex pane when you gave the pane a name, else after the agent's session name. The name follows changes of both.
+- When an agent exits or its pane closes, its topic says so (🔴), a running turn ends, and the topic's name gets a 🔴 until the agent runs again.
 - `/topics` lists the topics and their states.
 - `/status` shows the health of the daemon.
 - `/pause` and `/unpause` stop and allow all typing into panes. Use `/pause` if you lose your phone. (optional)
@@ -137,7 +138,7 @@ Text you write in a topic goes to the agent. The commands below are for rex-tg. 
 | `/mode progress`, `block`, or `final` | Sets how replies appear in this topic. |
 | `/verbose on`, `full`, or `off` | Adds one message per tool call (`on`), or also the tool output (`full`). |
 | `/reasoning on` or `off` | Shows the agent's thinking text, when the agent stores it. |
-| `/resend <id>` | Sends again the parts of a reply that may not have arrived. |
+| `/resend [id]` | Sends again the parts of a reply that may not have arrived. Without an id: the newest such reply. The `🔁 Send again` button on the notice does the same. |
 | `/unlink` | Closes the topic in rex-tg. The topic stays in Telegram. |
 | `/mute` and `/unmute` | Sends answers without sound, or with sound again. |
 | `/help` | Lists the commands. |

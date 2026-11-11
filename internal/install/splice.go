@@ -3,6 +3,7 @@ package install
 import (
 	"bytes"
 	"encoding/json"
+	"strings"
 
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
@@ -50,7 +51,12 @@ func spliceInto(src []byte, start, end int, key string, raw []byte) ([]byte, boo
 	if err := json.Indent(&val, raw, item, unit); err != nil {
 		return nil, false
 	}
-	text := val.String()
+	// Keep the file's line ends: a file with CRLF gets CRLF in the new lines.
+	nl := "\n"
+	if bytes.Contains(src, []byte("\r\n")) {
+		nl = "\r\n"
+	}
+	text := strings.ReplaceAll(val.String(), "\n", nl)
 	if key != "" {
 		k, _ := json.Marshal(key)
 		text = string(k) + ": " + text
@@ -58,13 +64,13 @@ func spliceInto(src []byte, start, end int, key string, raw []byte) ([]byte, boo
 	var out []byte
 	if empty {
 		out = append(out, src[:start+1]...)
-		out = append(out, "\n"+item+text+"\n"+base...)
+		out = append(out, nl+item+text+nl+base...)
 		out = append(out, src[end-1:]...)
 		return out, true
 	}
 	at := start + 1 + len(trimmed)
 	out = append(out, src[:at]...)
-	out = append(out, ",\n"+item+text...)
+	out = append(out, ","+nl+item+text...)
 	out = append(out, src[at:]...)
 	return out, true
 }
