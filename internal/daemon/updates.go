@@ -96,6 +96,12 @@ func (d *daemon) onMessage(u telegram.Update) {
 		return
 	}
 	if !d.fromOwner(m.From, m.Chat.ID) {
+		if m.From.IsBot && m.Chat.ID == d.ownerChat {
+			// In the private chat, the only bot is this one: Telegram sends the
+			// bot's own "topic created" notice as an update (seen live).
+			d.log.Debug("own service message", "update", u.UpdateID)
+			return
+		}
 		d.log.Info("update dropped: not the owner", "update", u.UpdateID, "from", m.From.ID)
 		return
 	}
