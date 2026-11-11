@@ -332,6 +332,8 @@ func TestMessageWaitsForIdleThenTypes(t *testing.T) {
 	if got := e.keys()[0]; got != "enter" {
 		t.Errorf("keys = %v", e.keys())
 	}
+	// The message left the queue, so its waiting notice goes away.
+	e.waitFor("the waiting notice to be deleted", func() bool { m, _ := e.message(waiting.ID); return m.Deleted })
 	// Order: the paste comes before Enter.
 	calls := e.fake.Calls()
 	pasteAt, enterAt := -1, -1
@@ -859,6 +861,7 @@ func TestSendNowAndCancelButtons(t *testing.T) {
 	e.pressButton(w1, buttonData(w1, "Cancel"))
 	e.waitText(thread, "Cancelled")
 	_ = cancelled
+	e.never("the cancelled notice deleted", 300*time.Millisecond, func() bool { m, _ := e.message(w1.ID); return m.Deleted })
 
 	forced := e.say(thread, "do it right now")
 	var w2 tgtest.Message
@@ -877,6 +880,7 @@ func TestSendNowAndCancelButtons(t *testing.T) {
 		t.Errorf("pasted %q (the cancelled message must not be typed)", got)
 	}
 	e.waitFor("eyes", func() bool { m, _ := e.message(forced); return m.Reaction == "👀" })
+	e.waitFor("the second waiting notice to be deleted", func() bool { m, _ := e.message(w2.ID); return m.Deleted })
 }
 
 func TestQueuedMessageExpires(t *testing.T) {
@@ -1532,6 +1536,7 @@ func TestForceTypesAtAPromptAndMacAnswerClosesAlert(t *testing.T) {
 	waiting := e.waitText(thread, "Waiting until the agent is idle")
 	e.pressButton(waiting, buttonData(waiting, "Send now"))
 	e.waitFor("a refusal", func() bool { m, _ := e.message(id); return m.Reaction == "👎" })
+	e.waitFor("the waiting notice to be deleted", func() bool { m, _ := e.message(waiting.ID); return m.Deleted })
 	e.waitText(thread, "prompt")
 	if len(e.pastes()) != 0 {
 		t.Fatalf("typed at a prompt: %v", e.pastes())

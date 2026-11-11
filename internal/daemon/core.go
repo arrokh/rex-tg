@@ -47,6 +47,10 @@ type (
 		in     store.Inbound
 		res    prepResult
 	}
+	// evWaitNotice reports the message number of a posted waiting notice.
+	evWaitNotice struct {
+		updateID, chat, msg int64
+	}
 	// evTyped reports the end of a paste and Enter.
 	evTyped struct {
 		thread int64
@@ -311,6 +315,8 @@ func (d *daemon) handle(ev any) {
 		d.onPrepared(e)
 	case evTyped:
 		d.onTyped(e)
+	case evWaitNotice:
+		d.onWaitNotice(e)
 	case evTopicCreated:
 		d.onTopicCreated(e)
 	case evQueueText:
@@ -455,6 +461,7 @@ func (d *daemon) closeThread(threadID int64) {
 			if err := d.st.SetInboundState(d.ctx, q.UpdateID, store.InboundRefused, "topic closed", d.now()); err != nil {
 				d.log.Warn("close topic: refuse queued message", "err", err)
 			}
+			d.dropWaitNotice(q.UpdateID)
 			delete(d.actions, q.UpdateID)
 			delete(d.waitNoticed, q.UpdateID)
 			delete(d.vimNoticed, q.UpdateID)

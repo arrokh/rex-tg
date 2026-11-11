@@ -264,6 +264,16 @@ func (s *Store) SetInboundState(ctx context.Context, updateID int64, state, reas
 	return affected(res, fmt.Sprintf("store: inbound %d", updateID))
 }
 
+// InboundByID returns the update with this update_id; ok is false when there
+// is none.
+func (s *Store) InboundByID(ctx context.Context, updateID int64) (Inbound, bool, error) {
+	ins, err := queryInbound(ctx, s.db, `WHERE update_id=?`, updateID)
+	if err != nil || len(ins) == 0 {
+		return Inbound{}, false, err
+	}
+	return ins[0], true, nil
+}
+
 // QueuedInbound lists a topic's queued updates, oldest first.
 func (s *Store) QueuedInbound(ctx context.Context, threadID int64) ([]Inbound, error) {
 	return queryInbound(ctx, s.db, `WHERE thread_id=? AND state='queued' ORDER BY created_at, update_id`, threadID)

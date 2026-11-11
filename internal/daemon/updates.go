@@ -307,9 +307,10 @@ func (d *daemon) cancelButton(cb *telegram.CallbackQuery, id int64) {
 		d.answerCallback(cb.ID, "That message was already handled.", false)
 		return
 	}
-	if err := d.st.SetInboundState(d.ctx, id, store.InboundDone, "cancelled", d.now()); err != nil {
+	if err := d.st.SetInboundState(d.ctx, id, store.InboundDone, reasonCancelled, d.now()); err != nil {
 		d.log.Warn("cancel: state", "err", err)
 	}
+	d.keepWaitNotice(id) // the tapped notice becomes "✖ Cancelled" below
 	d.forget(id)
 	delete(d.extra, id)
 	d.answerCallback(cb.ID, "Cancelled", false)

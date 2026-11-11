@@ -272,7 +272,7 @@ func (d *daemon) onPrepared(e evPrepared) {
 		// does not post the waiting notice again.
 		if !d.waitNoticed[e.in.UpdateID] && e.in.Reason != reasonWaitNoticed {
 			d.waitNoticed[e.in.UpdateID] = true
-			d.say(th.ChatID, th.MessageThreadID, "⏳ Waiting until the agent is idle.", waitMarkup(e.in.UpdateID))
+			d.postWaitNotice(th, e.in.UpdateID)
 			if err := d.st.SetInboundState(d.ctx, e.in.UpdateID, store.InboundQueued, reasonWaitNoticed, d.now()); err != nil {
 				d.log.Warn("waiting: state", "err", err)
 			}
@@ -301,9 +301,10 @@ func waitMarkup(updateID int64) *telegram.InlineKeyboardMarkup {
 	}}}
 }
 
-// forget drops what the core keeps in memory for a message that reached a
-// final state.
+// forget drops what the core keeps for a message that reached a final state,
+// and its waiting notice.
 func (d *daemon) forget(updateID int64) {
+	d.dropWaitNotice(updateID)
 	delete(d.actions, updateID)
 	delete(d.waitNoticed, updateID)
 	delete(d.vimNoticed, updateID)

@@ -94,6 +94,12 @@ func TestInboundTransitions(t *testing.T) {
 
 	noErr(t, s.SetInboundState(ctx, 1, InboundTyping, "", t0))
 	noErr(t, s.SetInboundState(ctx, 4, InboundTyping, "", t0))
+	if in, ok := must2(s.InboundByID(ctx, 4)); !ok || in.State != InboundTyping || in.ThreadID != th.ID {
+		t.Fatalf("InboundByID(4) = %+v, %v", in, ok)
+	}
+	if _, ok := must2(s.InboundByID(ctx, 99)); ok {
+		t.Fatal("InboundByID found a missing update")
+	}
 	if q := must(s.QueuedInbound(ctx, th.ID)); len(q) != 1 || q[0].UpdateID != 3 {
 		t.Fatalf("%+v", q)
 	}

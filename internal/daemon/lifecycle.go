@@ -85,6 +85,7 @@ func (d *daemon) startup(ctx context.Context) error {
 		return fmt.Errorf("daemon: recover typing: %w", err)
 	}
 	for _, in := range typing {
+		d.dropWaitNotice(in.UpdateID)
 		if in.ThreadID != 0 {
 			d.notice(in.ThreadID, fmt.Sprintf("typing-unknown:%d", in.UpdateID), typingUnknownNotice)
 		}

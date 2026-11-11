@@ -156,7 +156,7 @@ When the agent stops, the topic shows `🔴 agent stopped`. Messages you send th
 
 ### Waiting and sending
 
-- If the agent is working, your message waits. The bot replies `⏳ Waiting until the agent is idle.` It shows two buttons: `⚡ Send now` and `✖ Cancel`.
+- If the agent is working, your message waits. The bot replies `⏳ Waiting until the agent is idle.` It shows two buttons: `⚡ Send now` and `✖ Cancel`. The notice goes away once the message is typed (👀, then 👍) or refused (👎 and a reply that says why).
 - Waiting messages go in the order you sent them. Each one is its own turn.
 - A waiting message expires after 30 minutes, and the bot tells you.
 - `⚡ Send now` types the message at once. All three agents steer. The message joins the current run.

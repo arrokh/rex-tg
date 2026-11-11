@@ -422,7 +422,7 @@ Set per topic with `/mode`:
 | 👀 on your message | rex-tg typed it into the pane |
 | 👍 on your message | the agent's transcript recorded it |
 | 👎 on your message | it was refused or failed; a reply says why |
-| `⏳ Waiting until the agent is idle` | your message is queued (D11), with buttons `⚡ Send now` and `✖ Cancel` |
+| `⏳ Waiting until the agent is idle` | your message is queued (D11), with buttons `⚡ Send now` and `✖ Cancel`. The notice is deleted when the message leaves the queue: it was typed (👀, then 👍), refused or expired (👎 and a reply that says why), or typing failed. `✖ Cancel` turns it into `✖ Cancelled`. |
 | `⛔ Not sent: the pane now runs zsh, not pi.` | the safety check refused it |
 | "typing…" | the agent is working; refreshed about every 5 seconds, only in the topic you used last |
 | `💻 You (on Mac): …` | a prompt you typed in the pane on the Mac |
