@@ -1,0 +1,275 @@
+package rex_test
+
+import (
+	"context"
+	"errors"
+	"reflect"
+	"strings"
+	"testing"
+	"time"
+
+	"rex-tg/internal/rex"
+	"rex-tg/internal/rex/rextest"
+)
+
+func newClient(t *testing.T, opts ...rex.Option) (*rex.Client, *rextest.Fake) {
+	t.Helper()
+	f := rextest.New(t)
+	return rex.New(f.Bin(), opts...), f
+}
+
+func lastArgs(t *testing.T, f *rextest.Fake) []string {
+	t.Helper()
+	calls := f.Calls()
+	if len(calls) == 0 {
+		t.Fatal("no calls recorded")
+	}
+	return calls[len(calls)-1].Args
+}
+
+func TestWhoami(t *testing.T) {
+	c, f := newClient(t)
+	f.On([]string{"whoami"}, `{"principal":{"kind":"peer","uid":501},"account":"tester","endpoint":"unix:///tmp/x.sock","pid":42,"instance_id":"i-1","host_id":"h-1","started_at":"2026-11-09T12:20:52.553438Z","rex_version":"0.0.1","api_revision":11,"session_count":2}`, 0)
+	w, err := c.Whoami(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w.Endpoint != "unix:///tmp/x.sock" || w.PID != 42 || w.APIRevision != 11 || w.SessionCount != 2 || w.Account != "tester" || w.StartedAt.IsZero() {
+		t.Fatalf("got %+v", w)
+	}
+	want := []string{"--autostart=false", "whoami", "--json"}
+	if got := lastArgs(t, f); !reflect.DeepEqual(got, want) {
+		t.Fatalf("args = %q, want %q", got, want)
+	}
+}
+
+func TestSessionsAndBlocks(t *testing.T) {
+	c, f := newClient(t)
+	f.On([]string{"ls"}, `{"sessions":[{"session_id":"session:a","label":"T3 Code"},{"session_id":"session:b","label":"Personal"}]}`, 0)
+	f.On([]string{"block", "ls"}, `{"blocks":[{"block_id":"block:1","label":"shell","creator_name":"com.example.terminal","flavor":"com.example.terminal.shell","host_id":"h","placement":"placed","window_id":"window:1","owner":"client:1"},{"block_id":"block:2","label":"x"}]}`, 0)
+
+	ss, err := c.Sessions(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ss) != 2 || ss[0].ID != "session:a" || ss[1].Label != "Personal" {
+		t.Fatalf("sessions %+v", ss)
+	}
+	if got, want := lastArgs(t, f), []string{"--autostart=false", "ls", "--json"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("args %q", got)
+	}
+
+	bs, err := c.Blocks(context.Background(), "session:a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(bs) != 2 || bs[0].ID != "block:1" || bs[0].WindowID != "window:1" || bs[0].Owner != "client:1" || bs[1].Owner != "" {
+		t.Fatalf("blocks %+v", bs)
+	}
+	if got, want := lastArgs(t, f), []string{"--autostart=false", "block", "ls", "-s", "session:a", "--json"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("args %q", got)
+	}
+}
+
+func TestProcess(t *testing.T) {
+	c, f := newClient(t)
+	f.On([]string{"block", "call"}, `{"last_exit":null,"child":{"pid":2,"user_id":0,"user":"root","name":"login","path":"/usr/bin/login"},"foreground":{"pid":3,"user_id":501,"user":"u","name":"node","path":"/bin/node","invoked_path":"/bin/node","argv0":"pi","cwd":"/work"},"ancestors":[{"pid":4,"name":"zsh","argv0":"-zsh","cwd":"/work"}],"home":"/h"}`, 0)
+	p, err := c.Process(context.Background(), "session:a", "block:1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Foreground.PID != 3 || p.Foreground.Argv0 != "pi" || p.Foreground.CWD != "/work" || p.Foreground.Name != "node" {
+		t.Fatalf("foreground %+v", p.Foreground)
+	}
+	if len(p.Ancestors) != 1 || p.Ancestors[0].Name != "zsh" || p.Child == nil || p.Child.Name != "login" || p.LastExit != nil {
+		t.Fatalf("got %+v", p)
+	}
+	want := []string{"--autostart=false", "block", "call", "-s", "session:a", "-b", "block:1", "process"}
+	if got := lastArgs(t, f); !reflect.DeepEqual(got, want) {
+		t.Fatalf("args %q", got)
+	}
+
+	f.On([]string{"block", "call"}, `{"foreground":null,"ancestors":[],"child":null,"last_exit":130}`, 0)
+	p, err = c.Process(context.Background(), "session:a", "block:1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Foreground.PID != 0 || p.LastExit == nil || *p.LastExit != 130 {
+		t.Fatalf("got %+v", p)
+	}
+}
+
+func TestProgramStatus(t *testing.T) {
+	c, f := newClient(t)
+	f.On([]string{"block", "call"}, `{"records":[{"id":"r1","state":"blocked","kind":"permission","app":"pi","effective_app":"pi","msg":"Run ls?","updated_at":"2026-11-10T22:50:23.039012+07:00","owner":{"pid":80735,"name":"node"}}]}`, 0)
+	rs, err := c.ProgramStatus(context.Background(), "session:a", "block:1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rs) != 1 {
+		t.Fatalf("got %+v", rs)
+	}
+	r := rs[0]
+	if r.ID != "r1" || r.State != "blocked" || r.Kind != "permission" || r.EffectiveApp != "pi" || r.Msg != "Run ls?" ||
+		r.Owner == nil || r.Owner.PID != 80735 || r.Owner.Name != "node" ||
+		!r.UpdatedAt.Equal(time.Date(2026, 11, 10, 15, 50, 23, 39012000, time.UTC)) {
+		t.Fatalf("record %+v", r)
+	}
+	if got := lastArgs(t, f); got[len(got)-1] != "program_status" {
+		t.Fatalf("args %q", got)
+	}
+
+	f.On([]string{"block", "call"}, `{"records":[]}`, 0)
+	rs, err = c.ProgramStatus(context.Background(), "s", "b")
+	if err != nil || len(rs) != 0 {
+		t.Fatalf("got %v %v", rs, err)
+	}
+}
+
+func TestCapture(t *testing.T) {
+	c, f := newClient(t)
+	f.On([]string{"capture"}, "line 1\nline 2\n", 0)
+	out, err := c.Capture(context.Background(), "session:a", "block:1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "line 1\nline 2\n" {
+		t.Fatalf("out %q", out)
+	}
+	want := []string{"--autostart=false", "capture", "-s", "session:a", "-b", "block:1", "--trim"}
+	if got := lastArgs(t, f); !reflect.DeepEqual(got, want) {
+		t.Fatalf("args %q", got)
+	}
+}
+
+func TestPasteUsesStdin(t *testing.T) {
+	c, f := newClient(t)
+	f.On([]string{"api", "call"}, `{}`, 0)
+	text := "hello \"world\"\nsecond line with $HOME and 'quotes' — ünï"
+	if err := c.Paste(context.Background(), "session:a", "block:1", text); err != nil {
+		t.Fatal(err)
+	}
+	calls := f.Calls()
+	if len(calls) != 1 {
+		t.Fatalf("calls %+v", calls)
+	}
+	call := calls[0]
+	wantArgs := []string{"--autostart=false", "api", "call", "-s", "session:a", "block.event", "-"}
+	if !reflect.DeepEqual(call.Args, wantArgs) {
+		t.Fatalf("args %q", call.Args)
+	}
+	for _, a := range call.Args {
+		if strings.Contains(a, "hello") {
+			t.Fatalf("text leaked into argv: %q", call.Args)
+		}
+	}
+	var body struct {
+		BlockID string `json:"block_id"`
+		Event   struct {
+			Type    string `json:"type"`
+			Payload struct {
+				Text string `json:"text"`
+			} `json:"payload"`
+		} `json:"event"`
+	}
+	if err := jsonUnmarshal(call.Stdin, &body); err != nil {
+		t.Fatalf("stdin %q: %v", call.Stdin, err)
+	}
+	if body.BlockID != "block:1" || body.Event.Type != "paste" || body.Event.Payload.Text != text {
+		t.Fatalf("body %+v", body)
+	}
+}
+
+func TestSendKeys(t *testing.T) {
+	c, f := newClient(t)
+	f.On([]string{"send-key"}, "", 0)
+	if err := c.SendKeys(context.Background(), "session:a", "block:1", "ctrl+c", "enter"); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"--autostart=false", "send-key", "-s", "session:a", "-b", "block:1", "ctrl+c", "enter"}
+	if got := lastArgs(t, f); !reflect.DeepEqual(got, want) {
+		t.Fatalf("args %q", got)
+	}
+	n := len(f.Calls())
+	if err := c.SendKeys(context.Background(), "s", "b"); err != nil || len(f.Calls()) != n {
+		t.Fatalf("no keys should be a no-op, err=%v", err)
+	}
+}
+
+func TestWithServer(t *testing.T) {
+	c, f := newClient(t, rex.WithServer("unix:///tmp/test.sock"))
+	f.On([]string{"ls"}, `{"sessions":[]}`, 0)
+	if _, err := c.Sessions(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"--autostart=false", "-S", "unix:///tmp/test.sock", "ls", "--json"}
+	if got := lastArgs(t, f); !reflect.DeepEqual(got, want) {
+		t.Fatalf("args %q", got)
+	}
+}
+
+func TestErrorCarriesSubcommandAndStderr(t *testing.T) {
+	c, f := newClient(t)
+	f.OnError([]string{"block", "call"}, "  block not found: block:9\n\n", 1)
+	_, err := c.Process(context.Background(), "session:a", "block:9")
+	if err == nil {
+		t.Fatal("want error")
+	}
+	var re *rex.Error
+	if !errors.As(err, &re) {
+		t.Fatalf("error type %T", err)
+	}
+	if re.Stderr != "block not found: block:9" || re.Command != "block call process" {
+		t.Fatalf("got %+v", re)
+	}
+	if msg := err.Error(); !strings.Contains(msg, "block call process") || !strings.HasSuffix(msg, "block not found: block:9") {
+		t.Fatalf("message %q", msg)
+	}
+}
+
+func TestUnmatchedCommandFails(t *testing.T) {
+	c, _ := newClient(t)
+	if _, err := c.Sessions(context.Background()); err == nil {
+		t.Fatal("want error")
+	}
+}
+
+func TestBadJSON(t *testing.T) {
+	c, f := newClient(t)
+	f.On([]string{"ls"}, `not json`, 0)
+	_, err := c.Sessions(context.Background())
+	var re *rex.Error
+	if !errors.As(err, &re) || re.Command != "ls" {
+		t.Fatalf("err %v", err)
+	}
+}
+
+func TestTimeout(t *testing.T) {
+	c, f := newClient(t, rex.WithTimeout(150*time.Millisecond))
+	f.OnDelay([]string{"ls"}, `{"sessions":[]}`, 5*time.Second)
+	start := time.Now()
+	_, err := c.Sessions(context.Background())
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err = %v", err)
+	}
+	if d := time.Since(start); d > 3*time.Second {
+		t.Fatalf("took %s", d)
+	}
+}
+
+func TestContextCancel(t *testing.T) {
+	c, f := newClient(t)
+	f.OnDelay([]string{"ls"}, `{"sessions":[]}`, 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	defer cancel()
+	if _, err := c.Sessions(ctx); err == nil {
+		t.Fatal("want error")
+	}
+}
+
+func TestMissingBinary(t *testing.T) {
+	c := rex.New("/nonexistent/rex")
+	if _, err := c.Sessions(context.Background()); err == nil {
+		t.Fatal("want error")
+	}
+}

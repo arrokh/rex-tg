@@ -1,0 +1,6 @@
+⚙️ Running the parser tests to find the failure
+✅ 📖 Read · src/parser.go
+✅ 🔍 Grep · "func parseLine"
+✅ ✏️ Edit · src/parser.go
+▸ 💻 Bash · Run the parser tests
+⏱ 4s · 4 tools

@@ -1,0 +1,36 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "'/opt/fake/tool' codex-hook"
+          }
+        ]
+      },
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/opt/fake/other",
+            "statusMessage": "Working",
+            "commandWindows": "other.exe"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/opt/fake/guard"
+          }
+        ]
+      }
+    ]
+  }
+}
