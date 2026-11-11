@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 const launchdPath = "/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin"
@@ -69,8 +70,26 @@ func (p Paths) bootout() error {
 	return nil
 }
 
+// launchctl bootout returns before launchd has removed the old job. A
+// bootstrap in that window fails with 5 (Input/output error; seen live), so
+// bootstrap tries again for a few seconds.
+const (
+	bootstrapTries = 10
+	bootstrapWait  = 500 * time.Millisecond
+)
+
 func (p Paths) bootstrap() error {
-	out, err := p.run("launchctl", "bootstrap", p.domainTarget(), p.LaunchAgent)
+	var out []byte
+	var err error
+	for try := 0; try < bootstrapTries; try++ {
+		if try > 0 {
+			p.sleep(bootstrapWait)
+		}
+		out, err = p.run("launchctl", "bootstrap", p.domainTarget(), p.LaunchAgent)
+		if err == nil || !strings.Contains(err.Error(), "exit status 5") {
+			break
+		}
+	}
 	if err != nil {
 		return fmt.Errorf("launchctl bootstrap: %w: %s", err, strings.TrimSpace(string(out)))
 	}

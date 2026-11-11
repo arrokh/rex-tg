@@ -42,6 +42,8 @@ type Paths struct {
 	UID string
 	// Now supplies the time used in backup names. Nil means time.Now.
 	Now func() time.Time
+	// Sleep waits between launchctl tries. Nil means time.Sleep.
+	Sleep func(time.Duration)
 
 	// beforeWrite is a test hook called after an edit is computed and before
 	// the file is re-read for the lost-write check.
@@ -75,6 +77,14 @@ func (p Paths) now() time.Time {
 		return p.Now()
 	}
 	return time.Now()
+}
+
+func (p Paths) sleep(d time.Duration) {
+	if p.Sleep != nil {
+		p.Sleep(d)
+		return
+	}
+	time.Sleep(d)
 }
 
 func (p Paths) uid() string {

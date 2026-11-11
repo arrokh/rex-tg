@@ -823,7 +823,7 @@ Housekeeping:
 | Item | Location |
 | --- | --- |
 | Binary | `~/.local/bin/rex-tg` (one Go binary for the daemon, the hooks, and the CLI) |
-| Daemon | launchd agent `~/Library/LaunchAgents/local.rex-tg.plist`. `KeepAlive` starts it again only after a failure (`SuccessfulExit` false), at most every 30 seconds (`ThrottleInterval`). launchd never rotates `launchd.out.log` and `launchd.err.log`, so the daemon empties one that is over 1 MB at every start. |
+| Daemon | launchd agent `~/Library/LaunchAgents/local.rex-tg.plist`. `KeepAlive` starts it again only after a failure (`SuccessfulExit` false), at most every 30 seconds (`ThrottleInterval`). launchd never rotates `launchd.out.log` and `launchd.err.log`, so the daemon empties one that is over 1 MB at every start. `launchctl bootout` returns before the old job is gone, so `rex-tg install` tries `launchctl bootstrap` again for up to 5 seconds while it fails with 5 (Input/output error; seen live). |
 | Config | `~/.config/rex-tg/config.toml` |
 | State | `~/.local/state/rex-tg/`: `rex-tg.db`, `daemon.lock`, `spool/`, `logs/` |
 | Token | Keychain item, service `rex-tg`, account `bot-token` |

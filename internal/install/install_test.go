@@ -54,11 +54,21 @@ type fakeRunner struct {
 	calls []call
 	fail  map[string]error // by first argument
 	out   map[string]string
+	// failTimes limits a failure to the first n calls (by first argument);
+	// without an entry, a failure repeats.
+	failTimes map[string]int
 }
 
 func (f *fakeRunner) run(_ context.Context, name string, args ...string) ([]byte, error) {
 	f.calls = append(f.calls, call{name, strings.Join(args, " ")})
-	return []byte(f.out[args[0]]), f.fail[args[0]]
+	err := f.fail[args[0]]
+	if n, ok := f.failTimes[args[0]]; ok {
+		if n <= 0 {
+			err = nil
+		}
+		f.failTimes[args[0]] = n - 1
+	}
+	return []byte(f.out[args[0]]), err
 }
 
 func newPaths(t *testing.T) Paths {
@@ -69,6 +79,7 @@ func newPaths(t *testing.T) Paths {
 	base := time.Date(2026, 11, 11, 3, 0, 0, 0, time.UTC)
 	p.Now = func() time.Time { n++; return base.Add(time.Duration(n) * time.Second) }
 	p.UID = "501"
+	p.Sleep = func(time.Duration) {} // launchctl tries need no real waits in tests
 	return p
 }
 
@@ -745,5 +756,46 @@ func TestCurrentHookKeepsOldOneUnchanged(t *testing.T) {
 	stop := gjson.Get(read(t, p.ClaudeSettings), "hooks.Stop").Array()
 	if len(stop) != 2 || stop[0].Get("hooks.0.command").String() != "/old/place/rex-tg hook claude" {
 		t.Fatalf("Stop: %v", stop)
+	}
+}
+
+// Right after a bootout, launchd may still remove the old job, and a
+// bootstrap fails with 5 (seen live). The install tries again.
+func TestLaunchdBootstrapRetriesWhileTheOldJobGoesAway(t *testing.T) {
+	p := newPaths(t)
+	fr := &fakeRunner{
+		fail:      map[string]error{"bootstrap": errors.New("exit status 5")},
+		out:       map[string]string{"bootstrap": "Bootstrap failed: 5: Input/output error"},
+		failTimes: map[string]int{"bootstrap": 2},
+	}
+	p.Runner = fr.run
+	var waits int
+	p.Sleep = func(time.Duration) { waits++ }
+	ch, err := InstallLaunchd(p, true)
+	if err != nil {
+		t.Fatalf("install: %v (calls %v)", err, fr.calls)
+	}
+	if !strings.Contains(ch.Note, "loaded") || waits != 2 {
+		t.Fatalf("note %q, waits %d, calls %v", ch.Note, waits, fr.calls)
+	}
+	n := 0
+	for _, c := range fr.calls {
+		if strings.HasPrefix(c.args, "bootstrap") {
+			n++
+		}
+	}
+	if n != 3 {
+		t.Fatalf("bootstrap tries = %d, want 3", n)
+	}
+}
+
+// Other bootstrap errors are not tried again.
+func TestLaunchdBootstrapOtherErrorFails(t *testing.T) {
+	p := newPaths(t)
+	fr := &fakeRunner{fail: map[string]error{"bootstrap": errors.New("exit status 1")}}
+	p.Runner = fr.run
+	p.Sleep = func(time.Duration) { t.Fatal("waited for an error that does not pass") }
+	if _, err := InstallLaunchd(p, true); err == nil {
+		t.Fatal("no error")
 	}
 }
