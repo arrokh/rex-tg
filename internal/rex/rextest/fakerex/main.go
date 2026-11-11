@@ -1,5 +1,6 @@
-// Command fakerex is a fake `rex` executable for tests. It is driven by the
-// directory named in REXTEST_DIR (see package rextest).
+// Command fakerex is a fake `rex` executable for tests. Each test starts it
+// through a symlink named rex in the test's own folder, and the files in that
+// folder drive it (see package rextest).
 package main
 
 import (
@@ -45,9 +46,16 @@ type call struct {
 }
 
 func main() {
-	dir := os.Getenv("REXTEST_DIR")
-	if dir == "" {
-		fmt.Fprintln(os.Stderr, "fakerex: REXTEST_DIR is not set")
+	// On macOS, os.Executable keeps the path of the symlink the fake was
+	// started by, so its folder is the test's folder.
+	exe, err := os.Executable()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "fakerex: find the executable:", err)
+		os.Exit(98)
+	}
+	dir := filepath.Dir(exe)
+	if _, err := os.Stat(filepath.Join(dir, "scenario.json")); err != nil {
+		fmt.Fprintln(os.Stderr, "fakerex: start it through the symlink that rextest.New makes:", err)
 		os.Exit(98)
 	}
 	args := os.Args[1:]

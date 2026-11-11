@@ -407,5 +407,7 @@ Start with `rex-tg doctor`.
 
 - `make build` builds `bin/rex-tg`.
 - `make test` runs the tests.
+- `make core` runs one daemon test per core flow, in a few seconds.
 - `make check` runs gofmt, go vet, staticcheck, and the tests with the race detector.
+- `make e2e` runs the end-to-end tests against a real, isolated Rex server.
 - `docs/implementation.md` says how the packages fit together. Keep it in step with `docs/design.md`.

@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -43,11 +42,7 @@ type stopEnv struct {
 
 func newStopEnv(t *testing.T, think time.Duration) *stopEnv {
 	t.Helper()
-	binDir := t.TempDir()
-	piBin := filepath.Join(binDir, "pi")
-	if out, err := exec.Command("go", "build", "-o", piBin, "./dummyagent").CombinedOutput(); err != nil {
-		t.Fatalf("build dummy agent: %v\n%s", err, out)
-	}
+	piBin := program(t, "./dummyagent", "pi")
 	sock := startRex(t, fmt.Sprintf("stop%d", stopServers.Add(1)))
 
 	home := t.TempDir()

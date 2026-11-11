@@ -66,10 +66,7 @@ type crashEnv struct {
 
 func newCrashEnv(t *testing.T) *crashEnv {
 	t.Helper()
-	bin := filepath.Join(t.TempDir(), "crashharness")
-	if out, err := exec.Command("go", "build", "-o", bin, "./crashharness").CombinedOutput(); err != nil {
-		t.Fatalf("build harness: %v\n%s", err, out)
-	}
+	bin := program(t, "./crashharness", "crashharness")
 	home := t.TempDir()
 	cfg := config.Default(home)
 	cfg.State.Dir = filepath.Join(t.TempDir(), "state")

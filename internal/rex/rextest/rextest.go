@@ -2,7 +2,8 @@
 //
 // The fake is a small Go program (see fakerex) that is built once per test
 // run. Each Fake gets its own folder with a scenario file, a call log, and a
-// wrapper script, so tests do not share state and need no environment changes.
+// symlink to the program, so tests do not share state and need no
+// environment changes.
 package rextest
 
 import (
@@ -108,17 +109,17 @@ func New(t testing.TB) *Fake {
 		t.Fatal(err)
 	}
 	dir := t.TempDir()
-	wrapper := filepath.Join(dir, "rex")
-	script := fmt.Sprintf("#!/bin/sh\nREXTEST_DIR=%s\nexport REXTEST_DIR\nexec %s \"$@\"\n", shellQuote(dir), shellQuote(fake))
-	if err := os.WriteFile(wrapper, []byte(script), 0o700); err != nil {
+	// A symlink, not a script. macOS checks every new executable file the
+	// first time it runs, and with many tests at once that check takes
+	// seconds. The one shared program is checked once.
+	link := filepath.Join(dir, "rex")
+	if err := os.Symlink(fake, link); err != nil {
 		t.Fatal(err)
 	}
-	f := &Fake{t: t, dir: dir, bin: wrapper}
+	f := &Fake{t: t, dir: dir, bin: link}
 	f.save()
 	return f
 }
-
-func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
 
 // Bin returns the path of the fake rex executable.
 func (f *Fake) Bin() string { return f.bin }

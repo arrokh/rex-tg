@@ -53,6 +53,52 @@ func (w *tlog) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
+// Programs built for the tests, once per run: name -> path.
+var (
+	buildMu  sync.Mutex
+	buildDir string
+	built    = map[string]string{}
+)
+
+// program builds a package of this module once per test run, under the file
+// name name, and returns its path. Tests share the file: macOS checks every
+// new executable the first time it runs, and with tests in parallel that
+// check takes seconds.
+func program(t *testing.T, pkg, name string) string {
+	t.Helper()
+	buildMu.Lock()
+	defer buildMu.Unlock()
+	key := pkg + " as " + name
+	if p, ok := built[key]; ok {
+		return p
+	}
+	if buildDir == "" {
+		d, err := os.MkdirTemp("", "rextg-e2e-bin-")
+		if err != nil {
+			t.Fatal(err)
+		}
+		buildDir = d
+	}
+	dir := filepath.Join(buildDir, fmt.Sprint(len(built))) // a folder per program, so the file name is free
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	p := filepath.Join(dir, name)
+	if out, err := exec.Command("go", "build", "-o", p, pkg).CombinedOutput(); err != nil {
+		t.Fatalf("build %s: %v\n%s", pkg, err, out)
+	}
+	built[key] = p
+	return p
+}
+
+func TestMain(m *testing.M) {
+	code := m.Run()
+	if buildDir != "" {
+		_ = os.RemoveAll(buildDir)
+	}
+	os.Exit(code)
+}
+
 // eventually polls cond until it is true or the timeout passes.
 func eventually(t *testing.T, timeout time.Duration, what string, cond func() bool) {
 	t.Helper()
@@ -184,13 +230,9 @@ func TestDaemonEndToEnd(t *testing.T) {
 }
 
 func runFlow(t *testing.T, runtime string) {
-	// Build the dummy agent under the file name "pi".
-	binDir := t.TempDir()
-	piBin := filepath.Join(binDir, runtime)
-	build := exec.Command("go", "build", "-o", piBin, "./dummyagent")
-	if out, err := build.CombinedOutput(); err != nil {
-		t.Fatalf("build dummy agent: %v\n%s", err, out)
-	}
+	// The dummy agent runs under the runtime's file name, which the registry
+	// detects.
+	piBin := program(t, "./dummyagent", runtime)
 
 	sock := startRex(t, runtime)
 

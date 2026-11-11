@@ -17,7 +17,7 @@ Guidance for coding agents (Claude Code, Codex, pi, and others) that work in thi
 
 ## Test routine
 
-- While you work, run the tests of the package you change, for example `go test ./internal/daemon/` (about 25 seconds).
+- While you work, run the tests of the package you change, for example `go test ./internal/daemon/` (about 10 seconds). `make core` runs one daemon test per core flow in a few seconds. Its list of tests is in the `Makefile`.
 - Before a commit, run `make check` once. Also run `make e2e` when the change touches the daemon, Rex, or an agent.
 - Check the real exit status of a test run. A pipe such as `go test … | tail` hides a failure.
 - Run tests many times (`-count=N`) only to hunt a flaky test, not as a routine check.
@@ -28,6 +28,7 @@ Guidance for coding agents (Claude Code, Codex, pi, and others) that work in thi
 - Daemon tests start the whole daemon with the fake Bot API and the fake `rex`. Use them for the core flows and for wiring, one test per flow, not one per case.
 - Never wait for a production delay in a test. The daemon's fixed waits are in `daemon.Timing`, and the daemon tests use the short values in `testTiming`.
 - Daemon tests run in parallel (`newEnv` calls `t.Parallel`). A test that changes the environment (`t.Setenv`) uses `newEnvSerial`.
+- Do not write a new executable file (a script or a binary) for each test. macOS checks every new executable the first time it runs, and with many tests at once each check takes seconds. Build a program once and link to it, as `rextest.New` does.
 
 ## Rules that keep rex-tg safe
 
