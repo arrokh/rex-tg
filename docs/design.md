@@ -246,17 +246,19 @@ Summary of the three formats (details in [agent-transcripts.md](agent-transcript
 
 | | pi | Claude Code | Codex |
 | --- | --- | --- | --- |
-| Detect in a pane | `argv0` is `pi`; the process name is `node` | `argv0` or the invoked path ends in `claude`; the executable is `~/.local/share/claude/versions/<version>`, so the process name can be the version | the executable is the Codex binary (Homebrew Caskroom); name `codex` |
-| Transcript | `~/.pi/agent/sessions/--<cwd>--/<time>_<id>.jsonl` | `~/.claude/projects/<cwd>/<session_id>.jsonl` | `~/.codex/sessions/YYYY/MM/DD/rollout-<time>-<id>.jsonl` |
+| Detect in a pane | `argv0` is `pi`; the process name is `node` | `argv0` is `claude`, or the invoked path ends in `/.local/bin/claude`. The executable is `~/.local/share/claude/versions/<version>`, so the process name is the version string, for example `2.1.322` (S2) | the executable is the Codex binary (Homebrew Caskroom); name `codex` |
+| Transcript | `~/.pi/agent/sessions/--<cwd>--/<time>_<id>.jsonl` | `~/.claude/projects/<cwd folder>/<session_id>.jsonl`. Use the hook's `transcript_path`, because the folder name uses the real path (S2) | `~/.codex/sessions/YYYY/MM/DD/rollout-<time>-<id>.jsonl` |
 | Reply lines | `type=message`, `role=assistant`, `text` blocks | `type=assistant`, `text` block (one block per line) | `response_item`, `payload.type=message`, `role=assistant` |
 | Final or commentary | `stopReason`: `stop` = final, `toolUse` = commentary | `stop_reason`: `end_turn` = final | `payload.phase`: `final_answer` or `commentary` |
 | Tool call and result | `toolCall.id` ↔ `toolResult.toolCallId`, `isError` | `tool_use.id` ↔ `tool_result.tool_use_id`, `is_error` | `call_id` ↔ `call_id` of `*_output` |
 | Deduplication key | `pi:<id>:<entry id>` | `claude:<sessionId>:<uuid>` | `codex:<id>:<payload.id>` |
-| Prompt lines | `role=user`, `text` blocks | `type=user` with text content, not `tool_result`, not `isMeta` | `event_msg` `item_completed` with `UserMessage` (to verify) |
-| Must skip | `toolResult` content, `custom*`, subagent files | `isSidechain`, `attachment`, `api-request*`, `subagents/` | `event_msg` `AgentMessage` and `task_complete` (same text again) |
-| Hook surface | pi extension: `session_start`, `session_shutdown` | `settings.json` hooks | `~/.codex/hooks.json` (`features.hooks = true`) |
+| Prompt lines | `role=user`, `text` blocks | `type=user` with text content, not `tool_result`, not `isMeta` | `event_msg` `item_completed` with `UserMessage` (confirmed in S4) |
+| Must skip | `toolResult` content, `custom*`, subagent files | `isSidechain`, `attachment` (except `queued_command`), `queue-operation`, `api-request*`, text that starts with `[Request interrupted`, `subagents/` | `event_msg` `AgentMessage` and `task_complete` (same text again) |
+| Hook surface | pi extension: `session_start`, `session_shutdown`, `agent_start`, `agent_end` | `settings.json` hooks | `~/.codex/hooks.json`, with `[features] hooks = true` in `~/.codex/config.toml`. Payloads are not checked at runtime (S3) |
 
 Spike S2 records the real `process` output of each agent in a pane. The detection rules are config values, so a new install path needs no code change.
+
+Spike S2 also set the input profile. Each agent takes a paste, then Enter after a 300 ms wait. A message sent during a run steers the current run. Claude Code and Codex stop a running turn with `escape` (observed). For pi, `escape` comes from its source and was not run. Shorter waits were not tested.
 
 Rules for every adapter:
 
@@ -337,7 +339,7 @@ Rules:
 - **Resume.** A session that already belongs to a topic runs again, in any pane. That topic becomes live again, with the new pane as its address. The divider says `resumed`. The last 3 final answers follow, if the topic does not show them yet.
 - **Resume while the topic is busy.** If the topic is live with another session in another pane, the resumed session does not take the topic. `/agents` lists it, and opening it moves it to a new topic. In the same pane there is no conflict: the session that ran there before has stopped, so the resumed session takes the topic back.
 - **Resume under a new session ID.** If an agent gives a resumed session a new ID, rex-tg cannot link it to the old one. The take-over rule still applies in the same pane, so the topic stays the same.
-- **Rex restart.** The restored pane may get a new block ID (spike S5). The session resumes there, for example through rexume, so the topic follows it. If the restored pane starts a new session instead, rex-tg has no history for that pane, so the session appears in `/agents` as a new agent.
+- **Rex restart.** After one restart, the block IDs and the session ID stayed the same (spike S5). A new block ID is still possible, because only one restart was tested. A restored pane does not run its creation command again, so the agent must resume in that pane, for example through rexume. That resume was not tested (S5). The topic then follows the session. If the restored pane starts a new session instead, rex-tg has no history for that pane, so the session appears in `/agents` as a new agent.
 - **Agent exits.** The topic becomes `offline`, and rex-tg posts "🔴 agent stopped". Messages that you send there are refused with a reason.
 - **Deleted topic.** If you delete the topic in Telegram, the next send fails with "message thread not found", and the topic becomes `closed`.
 - **Unlink.** `/unlink` closes the topic in rex-tg. The topic stays in Telegram as history.
@@ -570,7 +572,7 @@ Before rex-tg types anything, all of these checks must pass. It runs them right 
 
 1. The sender is the owner (`from.id`), and the chat is the owner's private chat with the bot.
 2. The topic is `live`.
-3. The pane exists, and the agent's process is the pane's foreground process or one of its ancestors. While a tool runs, the foreground process can be the tool. This check stops rex-tg from typing into a plain shell, where the text would run as a command.
+3. The pane exists, and the agent's process is the pane's foreground process or one of its ancestors. For Claude Code and Codex, the agent stays the foreground process while a tool runs (spike S2). For pi, this was not checked during a tool run. This check stops rex-tg from typing into a plain shell, where the text would run as a command.
 4. The agent is not showing a permission prompt. Free text could pick an answer there. Use the buttons instead, or `/force`.
 
 Which checks apply to which action:
@@ -590,7 +592,7 @@ Waiting (D11):
 - When the agent is working, the message waits in SQLite. rex-tg delivers it when the pane's state becomes `idle` or `done`.
 - After rex-tg types a message, it treats the pane as busy until the transcript records the prompt or the state becomes `working`. If neither happens within 15 seconds, it treats the pane as idle again. This stops it from typing two messages into one prompt.
 - A waiting message expires after 30 minutes, and rex-tg tells you. The time is a config setting.
-- `⚡ Send now` types it at once. What the agent does with it depends on the agent: it may queue it or steer the current turn (spike S2).
+- `⚡ Send now` types it at once. All three agents steer: a message sent during a run joins the current run (spike S2). Claude Code reads it after the current tool result.
 
 Joining messages:
 
@@ -600,7 +602,7 @@ Joining messages:
 How text is typed:
 
 - rex-tg sends a paste event to the pane: `rex api call block.event` with type `paste` and payload `{"text": "…"}`. Then it sends Enter. A paste keeps multi-line text together as one prompt, because the terminal uses bracketed paste when the program asks for it.
-- rex-tg waits a short time between the paste and Enter. Spike S2 sets the delay.
+- rex-tg waits between the paste and Enter. The wait is 300 ms for all three agents, and it worked in the spikes (S2). Shorter waits were not tested.
 - The `inbound` row is `typing` from before the paste until after Enter. If the daemon stops in between, the row stays `typing`. On start, rex-tg marks such rows `unknown` and never types them again. It tells you: "Your message may be in the input box without Enter. Check with /screen." This is the "at most once" rule for typing.
 
 Echo:
@@ -608,6 +610,7 @@ Echo:
 - rex-tg matches the prompt in the transcript to your message by a hash of the normalized text, within 10 minutes.
 - If no hash matches, the first prompt within 30 seconds of the delivery counts as the echo when its normalized text starts with the same 40 characters. Agents sometimes change a prompt slightly when they store it.
 - An echo is not posted to the topic again. It only turns 👀 into 👍.
+- A message sent during a run has no `user` line in Claude Code. Its echo is the `queued_command` attachment (spike S2). Codex writes a `user` line and a `UserMessage` item for it. pi writes a `user` line after the tool result.
 
 ## 10. SQLite schema
 
@@ -886,7 +889,7 @@ testdata/<runtime>/*.jsonl  synthetic transcripts only
 | A second daemon starts | Two copies would poll and send. | The instance lock stops the second copy. |
 | Daemon restarts during a turn | A progress message may be left behind. | The `progress` table lists it. rex-tg keeps editing it, or turns it into a summary line. |
 | Rex server is not running | No pane can be read or typed into. | All topics are `offline`. rex-tg retries every 10 seconds and never starts a server. |
-| Rex server restarts | Panes may get new block IDs. | Topics follow their sessions when the agents resume (section 7). Input is refused until then. |
+| Rex server restarts | Block IDs and the session ID stayed the same after one restart (spike S5). A new block ID is still possible. | Topics follow their sessions when the agents resume (section 7). Input is refused until then. |
 | A hook cannot write its spool file | One report is lost. | The hook still exits 0 without output. The next hook event or the next scan fills the gap. |
 | Transcript replaced or shortened | The offset no longer fits the file. | A new `dev_ino`, or a size below the offset, starts a read from byte 0. The replay guard and the unique keys (section 6) absorb repeats. |
 | Telegram is unreachable | Rows wait in the outbox. | They are sent later, in order. Stale progress edits are dropped. |

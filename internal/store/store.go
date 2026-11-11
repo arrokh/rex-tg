@@ -25,6 +25,26 @@ import (
 //go:embed schema.sql
 var schemaV1 string
 
+// schemaV2 allows the "rich" part format. SQLite cannot alter a CHECK
+// constraint, so the outbox_part table is rebuilt with all rows and its index.
+const schemaV2 = `
+CREATE TABLE outbox_part_new (
+  outbox_id     INTEGER NOT NULL REFERENCES outbox (id),
+  part          INTEGER NOT NULL,
+  state         TEXT NOT NULL CHECK (state IN ('pending', 'sending', 'sent', 'unknown', 'failed')),
+  content       TEXT NOT NULL,
+  format        TEXT NOT NULL CHECK (format IN ('html', 'plain', 'document', 'rich')),
+  filename      TEXT,
+  tg_message_id INTEGER,
+  PRIMARY KEY (outbox_id, part)
+) STRICT;
+INSERT INTO outbox_part_new (outbox_id, part, state, content, format, filename, tg_message_id)
+  SELECT outbox_id, part, state, content, format, filename, tg_message_id FROM outbox_part;
+DROP TABLE outbox_part;
+ALTER TABLE outbox_part_new RENAME TO outbox_part;
+CREATE INDEX outbox_part_state ON outbox_part (state);
+`
+
 // ErrNotFound is returned (wrapped) when a row does not exist.
 var ErrNotFound = errors.New("store: not found")
 
@@ -46,6 +66,7 @@ type migration struct {
 // migrations is the numbered list of schema steps. Append only.
 var migrations = []migration{
 	{version: 1, sql: schemaV1},
+	{version: 2, sql: schemaV2},
 }
 
 // Store is an open database.

@@ -411,3 +411,65 @@ func (s *Sender) Recover(ctx context.Context) error // at start: sending parts b
 ```
 
 Rules: outbox parts per design section 9.1 (claims, parse-error fallback to plain text, 429 waits, unknown never retried, notices with key `notice:unknown:<outbox id>:<part>`, row state from parts), documents through `SendDocument`, muted topics send answers silently, progress messages through the `progress` table (Show, Edit with "not modified" as success and "edit target gone" as a new Show, Repost as new then delete old, Finish as the last edit then the row is deleted; an unknown Show is never retried), edits and deletes retried with backoff, priorities answers > alerts > new progress > progress edits > typing.
+
+## Wave 3 packages
+
+### internal/keychain
+
+```go
+var ErrNotFound error
+func Get(ctx context.Context, service, account string) (string, error) // security find-generic-password -s -a -w
+func Set(ctx context.Context, service, account, secret string) error    // through `security -i` with the command on stdin, so the secret never appears in argv
+func Delete(ctx context.Context, service, account string) error
+```
+
+The token lives under service `rex-tg`, account `bot-token`.
+
+### internal/daemon
+
+```go
+type Options struct {
+	Config    config.Config
+	Token     string
+	Home      string
+	Logger    *slog.Logger
+	Rex       *rex.Client                     // nil: rex.New(Config.Rex.CLI)
+	Telegram  *telegram.Client                // nil: telegram.New(Token, telegram.WithBaseURL(Config.Telegram.APIBase))
+	Now       func() time.Time                // nil: time.Now
+	ProcStart func(pid int) (time.Time, error) // nil: the registry default
+}
+var ErrAlreadyRunning error
+func Run(ctx context.Context, opt Options) error                                   // until ctx ends
+func NewPairingCode(ctx context.Context, st *store.Store, now time.Time) (string, error) // used by `rex-tg login`
+```
+
+KV keys: `owner_user_id`, `owner_chat_id`, `bot_username`, `tg_offset`, `paused`, `pairing_code_hash`, `pairing_expires_at`, `pairing_attempts`, `turn:<thread id>` (the turn tracker snapshot as JSON; the sender owns the `progress` rows).
+
+`Run` does, in order: take the instance lock (`syscall.Flock` on `Config.LockPath()`, fail with `ErrAlreadyRunning`); open the store; `sender.Recover`; `store.RecoverTyping` with one notice per row ("Your message may be in the input box without Enter. Check with /screen."); `getMe` (save `bot_username`; log a warning when `has_topics_enabled` is false); `setMyCommands`; restore tailers and turn trackers for live topics; start the sender, the Rex event stream (restart with backoff), the spool watcher (fsnotify plus a 1 s poll on `Config.SpoolDir()`), the scan ticker, the `getUpdates` loop, and a 250 ms tick; then run one core loop that handles everything below. Only the core loop changes state, so no locks are needed beyond the store's.
+
+Flows (design sections in brackets):
+
+1. **Registry changes** [6, 7]: `SessionStarted`/`TakeOver`/`Resume` start or restart the tailer of that session at its `TailStart`, post the divider (`── <Divider> ──`, kind `divider`, key `divider:<thread>:<conv>:<n>`), and post the backfill (the last `Display.Backfill` final answers from `tail.Scan` through the adapter, kind `backfill`, with their own event keys so nothing repeats). `TopicOffline` posts "🔴 agent stopped" and stops the tailer; `TopicLive` posts "🟢 agent is running again". `StateChanged` goes to the topic's turn tracker; `blocked` with kind `permission` or `question` opens an alert; leaving `blocked` closes the topic's open alerts (buttons removed, state `gone` or `answered`). `PaneGone` makes the topic offline.
+2. **Transcript lines** [4.2, 6, 9]: each batch is parsed with the session's adapter (`LineContext{SessionID, Offset, CWD}`); after a `Reset` batch, events whose `At` is at or before `cursor.LastEventAt` are dropped; a `UserPrompt` is checked with `inbound.MatchEcho` against `store.DeliveredSince` (an echo acks the inbound row, reacts 👍, and goes to the tracker with `echo=true`); events go to `turn.Tracker.Event`; prompts and answers also go to `registry.TranscriptSignal`; tracker `Post`s become outbox items (Markdown through `format.Redact` and `format.Parts(…, 4000)`; more than 4 parts become one `.md` document; `HTML` posts are one part; with `Display.RichMessages`, final answers up to 32768 characters become one `rich` part); all items of a batch plus the new cursor go through one `store.CommitBatch`; progress actions go to `sender.Progress`; `Typing` goes to `sender.Typing` only for the topic used last. The tracker snapshot is saved to KV after each batch and tick that changed it.
+3. **Telegram updates** [8.7, 8.8, 9.5, 11]: each update is stored with `store.InsertInbound` before `tg_offset` moves past it. Before pairing, only `/start <code>` is handled (hash compare, 10-minute expiry, 5 attempts; success saves the owner and answers "Paired"). After pairing, updates from anyone else are dropped. The main chat handles `start`, `agents` (registry `Agents` with buttons: `o:<pane id>` to open, or a URL button to `https://t.me/<bot>/<message_thread_id>` when the session has a topic), `topics`, `status`, `pause`, `unpause`, `help`. A topic message is looked up with `store.ThreadByTopic`; unknown or closed topics answer "This topic is not linked. Use /agents in the main chat."; text goes through `inbound.RouteText`; agent text goes to the `inbound.Joiner`; commands run as in design 8.7 (`info`, `screen` with redacted capture in `<pre>`, `approve`, `deny`, `esc`, `interrupt`, `key`, `force`, `mode`, `verbose`, `reasoning`, `resend` → `store.ResendUnknown`, `unlink`, `mute`, `unmute`, `help`). Edited messages answer "Edits are not sent to the agent." Every callback query is answered.
+4. **Typing** [4.3, 9.5]: joined text becomes a queued inbound message (the first update carries the text; the others are marked done); if the pane is not ready, answer "⏳ Waiting until the agent is idle." with `⚡ Send now` (`s:<update id>`) and `✖ Cancel` (`c:<update id>`). On each tick, for each topic with queued messages, the oldest one is delivered when `registry.Ready` says yes and `inbound.Check` passes: state `typing`, `rex.Paste`, wait `InputProfile.PasteEnterDelay`, `rex.SendKeys(submit)`, state `delivered`, react 👀, `registry.MarkTyped`. A refused message gets 👎 and a reply with the reason. A message older than `InputSettings.QueueExpiry` expires with a reply. The facts for `inbound.Check` come from the store, the registry, `rex.Process` with `registry.AgentInFront`, and the open alerts.
+5. **Alerts** [8.6]: capture the pane, take the last 25 lines (redacted), parse numbered options (`^\s*(?:[❯>›]\s*)?(\d)[.)]\s+(.+)$`) into buttons with the digit as the key, else use `Config.Input(rt).Answers`; always add `Esc`. Store the alert with the SHA-256 of the prompt lines, post it through `sender.Call(PriorityAlert, …)` with buttons `a:<alert id>:<index>`. A button press checks the owner, captures again and compares the hash, sends the keys, marks the alert answered, and removes the buttons. `/approve` and `/deny` press the first and the last non-Esc option.
+6. **Opening a topic** [4.1]: the `o:<pane id>` button resolves the pane's session (an unresolved pane answers "Waiting for the session file…"); `createForumTopic` through `sender.Call`; `store.LinkTopic`; the intro card (design 8.7); the backfill; the tailer starts at the end of the file; a turn tracker is created with the topic's settings.
+7. **Sender events**: `ThreadGone` closes the topic in the store and stops its tailer; `Blocked` and `Conflict` stop the daemon with an error after logging.
+8. **Housekeeping**: `store.Prune` once a day; spool files older than 24 h are deleted; uploads older than 7 days are deleted.
+9. **Phase 6**: photos and documents up to `InputSettings.MaxUploadMB` (default 20) are downloaded to `UploadDir()/<thread id>/` and their path (plus the caption) is delivered like text; voice notes are transcribed when `Voice.WhisperCLI` is set (ffmpeg to 16 kHz WAV, then `<whisper_cli> -m <model> -l <language> -nt -f <wav>`), answered with "🎤 <text>" and delivered like text, else answered "Voice notes need whisper.cpp; see the README."; stickers and others answer "Only text is supported for now."; `/pause` stops all typing (KV `paused`) until `/unpause`; `/mute` and `/unmute` set `thread.muted`.
+
+### cmd/rex-tg
+
+Commands: `daemon [--config F] [--log-stderr]`, `hook <runtime>`, `login [--token-stdin]`, `pair`, `install [--only R] [--no-load]`, `uninstall [--only R] [--force] [--keep-launchd]`, `status`, `doctor`, `version`. The config path defaults to `~/.config/rex-tg/config.toml`.
+
+- `hook`: never prints and always exits 0. Reads at most 1 MiB of stdin, takes `REX_SESSION` and `REX_BLOCK` from the environment, does nothing when `REX_BLOCK` is empty, and writes the spool file described above.
+- `login`: reads the token (from the terminal with echo off, or stdin with `--token-stdin`), checks it with `getMe`, stores it with `keychain.Set`, then runs `pair`.
+- `pair`: opens the store, calls `daemon.NewPairingCode`, and prints "Send /start <code> to @<bot> within 10 minutes." The running daemon handles the code.
+- `daemon`: logs JSON to `LogDir()/rex-tg.log` through lumberjack (10 MB, 3 backups), plus stderr with `--log-stderr`; reads the token with `keychain.Get`; stops cleanly on SIGINT and SIGTERM.
+- `doctor` checks and prints one line each: the Rex CLI path and `whoami`, the token, `getMe` with `has_topics_enabled`, the pairing, the hooks and files from `install.Inspect`, the launchd agent, the database, the folder modes, and whether a daemon holds the lock.
+- `status` opens the store read-only and prints topics, queued and unknown messages, and open alerts.
+
+### Rich messages (Phase 6, opt-in)
+
+`telegram.(*Client).SendRichMessage(ctx, chatID, threadID int64, markdown string, silent bool, markup *InlineKeyboardMarkup) (Message, error)` sends `{"chat_id", "message_thread_id", "rich_message": {"markdown": …}, "disable_notification", "reply_markup"}`. Schema version 2 adds `rich` to `outbox_part.format`. The sender sends `rich` parts with `SendRichMessage`; on a 400 error it falls back to plain text, or to a `.md` document when the text is longer than 4000 characters.

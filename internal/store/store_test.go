@@ -4,7 +4,9 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
+	"time"
 )
 
 func TestOpenFreshAndReopen(t *testing.T) {
@@ -12,7 +14,7 @@ func TestOpenFreshAndReopen(t *testing.T) {
 	s, err := Open(path)
 	noErr(t, err)
 	v := must(s.version(ctx))
-	if v != 1 {
+	if v != 2 {
 		t.Fatalf("version = %d", v)
 	}
 	noErr(t, s.Set(ctx, "x", "1"))
@@ -60,15 +62,15 @@ func TestPragmas(t *testing.T) {
 
 func TestMigrationBackup(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "db")
-	s, err := open(path, migrations)
+	s, err := open(path, migrations[:1])
 	noErr(t, err)
 	noErr(t, s.Set(ctx, "keep", "me"))
 	noErr(t, s.Close())
 
-	next := append(append([]migration{}, migrations...), migration{version: 2, sql: `CREATE TABLE extra (x INTEGER) STRICT;`})
+	next := append(append([]migration{}, migrations...), migration{version: 3, sql: `CREATE TABLE extra (x INTEGER) STRICT;`})
 	s, err = open(path, next)
 	noErr(t, err)
-	if v := must(s.version(ctx)); v != 2 {
+	if v := must(s.version(ctx)); v != 3 {
 		t.Fatalf("version = %d", v)
 	}
 	noErr(t, s.Close())
@@ -91,10 +93,10 @@ func TestMigrationBackup(t *testing.T) {
 
 func TestFailedMigrationKeepsBackup(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "db")
-	s, err := open(path, migrations)
+	s, err := open(path, migrations[:1])
 	noErr(t, err)
 	noErr(t, s.Close())
-	bad := append(append([]migration{}, migrations...), migration{version: 2, sql: `NOT SQL;`})
+	bad := append(append([]migration{}, migrations[:1]...), migration{version: 2, sql: `NOT SQL;`})
 	if _, err := open(path, bad); err == nil {
 		t.Fatal("want error")
 	}
@@ -141,7 +143,7 @@ func TestOpenReadOnly(t *testing.T) {
 
 func TestOpenReadOnlyDoesNotMigrate(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "db")
-	s, err := open(path, migrations)
+	s, err := open(path, migrations[:1])
 	noErr(t, err)
 	noErr(t, s.Close())
 	ro, err := OpenReadOnly(path)
@@ -166,5 +168,73 @@ func TestKV(t *testing.T) {
 	noErr(t, s.Delete(ctx, "a"))
 	if _, ok, _ := s.Get(ctx, "a"); ok {
 		t.Fatal("still there")
+	}
+}
+
+func TestFreshDatabaseIsVersion2(t *testing.T) {
+	s := newStore(t)
+	if v := must(s.version(ctx)); v != 2 {
+		t.Fatalf("version = %d", v)
+	}
+}
+
+func TestMigrateV1ToV2KeepsOutbox(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "db")
+	s, err := open(path, migrations[:1])
+	noErr(t, err)
+	s.now = func() time.Time { return t0 }
+	th, _ := topic(t, s, 5)
+	for i, f := range []string{FormatHTML, FormatPlain, FormatDocument} {
+		_, _, err := s.Enqueue(ctx, OutboxItem{ThreadID: th.ID, Key: "k" + strconv.Itoa(i), Kind: "answer",
+			Parts: []PartContent{{Content: "c" + strconv.Itoa(i), Format: f, Filename: "f.txt"}}})
+		noErr(t, err)
+	}
+	// A v1 database refuses rich parts.
+	if _, _, err := s.Enqueue(ctx, OutboxItem{ThreadID: th.ID, Key: "r", Kind: "answer",
+		Parts: []PartContent{{Content: "x", Format: FormatRich}}}); err == nil {
+		t.Fatal("v1 accepted a rich part")
+	}
+	noErr(t, s.Close())
+
+	s, err = Open(path)
+	noErr(t, err)
+	defer s.Close()
+	s.now = func() time.Time { return t0 }
+	if v := must(s.version(ctx)); v != 2 {
+		t.Fatalf("version = %d", v)
+	}
+	if _, err := os.Stat(path + ".bak-1"); err != nil {
+		t.Fatalf("backup missing: %v", err)
+	}
+	var n int
+	noErr(t, s.db.QueryRowContext(ctx, `SELECT count(*) FROM outbox_part WHERE tg_message_id IS NULL AND state='pending'`).Scan(&n))
+	if n != 3 {
+		t.Fatalf("rows after migration = %d, want 3", n)
+	}
+	var formats string
+	noErr(t, s.db.QueryRowContext(ctx, `SELECT group_concat(format) FROM (SELECT format FROM outbox_part ORDER BY outbox_id)`).Scan(&formats))
+	if formats != "html,plain,document" {
+		t.Fatalf("formats = %q", formats)
+	}
+	noErr(t, s.db.QueryRowContext(ctx, `SELECT count(*) FROM sqlite_master WHERE type='index' AND name='outbox_part_state'`).Scan(&n))
+	if n != 1 {
+		t.Fatal("index outbox_part_state missing")
+	}
+	if _, _, err := s.Enqueue(ctx, OutboxItem{ThreadID: th.ID, Key: "r", Kind: "answer",
+		Parts: []PartContent{{Content: "**x**", Format: FormatRich}}}); err != nil {
+		t.Fatalf("rich part after migration: %v", err)
+	}
+}
+
+func TestInsertRichPart(t *testing.T) {
+	s := newStore(t)
+	th, _ := topic(t, s, 5)
+	id, _, err := s.Enqueue(ctx, OutboxItem{ThreadID: th.ID, Key: "r", Kind: "answer",
+		Parts: []PartContent{{Content: "# hi", Format: FormatRich}}})
+	noErr(t, err)
+	var f string
+	noErr(t, s.db.QueryRowContext(ctx, `SELECT format FROM outbox_part WHERE outbox_id=?`, id).Scan(&f))
+	if f != FormatRich {
+		t.Fatalf("format = %q", f)
 	}
 }

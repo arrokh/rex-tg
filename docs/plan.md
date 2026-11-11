@@ -28,17 +28,17 @@ Proposed by the design and not yet confirmed by you, but none of them blocks the
 | Requirement | Design | Plan | Verification | Status |
 | --- | --- | --- | --- | --- |
 | The main chat lists the active coding agents | 4.1, 6, 8.7 | Phase 1, task 10 | Phase 1 check: a pane that runs pi can be linked from `/agents` | Covered |
-| Picking an agent creates a new two-way topic | 4.1, 7 | Phase 1, task 10; Phase 2 | Phase 1 and 2 checks | Covered; spike S1 confirms private-chat topics |
+| Picking an agent creates a new two-way topic | 4.1, 7 | Phase 1, task 10; Phase 2 | Phase 1 and 2 checks | Covered by design. Spike S1 is pending, so private-chat topics are not yet checked live. |
 | Messages come from each agent's session JSONL when a new reply line appears | 4.2, 5, 6 | Phases 1, 3, 4 | Adapter fixture tests; Phase 1 and 4 checks | Covered; spike S4 confirms when lines are written |
 | Replies go straight into the agent's pane | 4.3, 9.5 | Phase 2 | Phase 2 checks | Covered; spike S2 confirms paste and Enter |
 | SQLite stops duplicate messages | 9.1, 10 | Phase 1, tasks 3 and 8 | Restart and `kill -9` checks; crash tests | Covered as "at most once". An unknown send needs `/resend`. |
-| pi, Claude Code, and Codex are supported | 5, 6 | Phases 1–4 | Phase 4 checks | Covered; spike S2 checks how Claude Code and Codex report state |
+| pi, Claude Code, and Codex are supported | 5, 6 | Phases 1–4 | Phase 4 checks | Covered; spike S2 showed that all three agents report state to Rex |
 | The project lives in `~/work/personal/rex-tg` | — | — | — | Done |
-| Q1 private chat with topics | D1 | Spike S1 | S1 result | Covered |
+| Q1 private chat with topics | D1 | Spike S1 | S1 result | Decided; S1 is pending |
 | Q2 OpenClaw/Hermes display | D10, 8 | Phase 3 | Phase 3 checks | Covered; answers arrive whole, not word by word |
 | Q3 wait until idle | D11, 4.4, 9.5 | Phase 2, task 3 | Phase 2 checks | Covered; depends on the state sources in D3 |
 | Q4 last 3 final answers | D12, 6, 7 | Phase 1, task 10 | Phase 1 check | Covered |
-| Q5 topic follows the session | D5, 7 | Phase 4, task 5; Phase 5, task 4 | Phase 4 and 5 checks | Covered |
+| Q5 topic follows the session | D5, 7 | Phase 4, task 5; Phase 5, task 4 | Phase 4 and 5 checks | Covered. Spike S5: block IDs survived one restart. An agent that resumes in a restored pane is not tested. |
 | Q6 no T3 Code panes | 1, 4.4 | Phase 1, task 5 | Unit test: a `tr3x` pane is not listed | Covered |
 | Q7 Go | D8, 12 | Phase 1, task 1 | `make check` | Covered |
 | Q8 no other hosts | 1 | — | — | Covered |
@@ -302,11 +302,11 @@ Stop or roll back:
 | Risk | Effect | Mitigation |
 | --- | --- | --- |
 | No word-by-word streaming | Answers arrive whole, not as they are written, because the JSONL file holds only complete blocks. | The live progress message shows that the agent is working, and which tools it runs. |
-| Claude Code or Codex do not report state to Rex | "Wait until idle" has no Rex signal for them. | State from hooks and transcript lines (D3). Spike S2 checks this first. |
-| Hooks may not see `REX_BLOCK` | Panes cannot be matched to sessions exactly. | Spike S3 checks this. The scan-and-guess resolver still works. |
+| Claude Code or Codex do not report state to Rex | If Rex did not report, "wait until idle" would have no Rex signal for them. | Closed by spike S2: all three agents report state to Rex. Hooks and transcript lines are the backup (D3). |
+| Hooks may not see `REX_BLOCK` | Panes cannot be matched to sessions exactly. | Claude Code and pi hooks saw `REX_BLOCK` and `REX_SESSION` (spikes S2 and S3). Codex hooks did not run in the spikes, so that check is still open (S3). The scan-and-guess resolver still works. |
 | Transcript formats change | Replies go missing or look wrong after an agent update. | Ignore unknown types, keep fixtures per version, and let `rex-tg doctor` report unknown types. |
-| Topics in private chats are new | A core design choice could fail. | Spike S1 runs first. A private supergroup is the fallback. |
-| Typing into terminal apps is fragile | Text arrives broken or too early, or lands in an open menu. | Spike S2, the safety check, and `/screen` to look first. For pi, injection through the extension API is a fallback. |
+| Topics in private chats are new | A core design choice could fail. | Spike S1 is still pending. It needs your bot token and your phone. A private supergroup is the fallback. |
+| Typing into terminal apps is fragile | Text arrives broken or too early, or lands in an open menu. | Spike S2 used a 300 ms wait between the paste and Enter, and it worked for all three agents. Shorter waits are not tested. A slash menu can take the first Enter (Codex, S2). Also use the safety check and `/screen` to look first. For pi, injection through the extension API is a fallback. |
 | One rate budget for all topics | Busy agents hit Telegram limits, and edits count too. | Merge progress changes, edit at most every 2 seconds, and give answers priority. |
 | Remote typing is powerful | A stolen Telegram account could control the terminals. | Pairing and owner allowlist, the safety check, the token in the Keychain, and Telegram two-step verification. `/pause` in Phase 6. |
 | Replies can contain secrets | Secrets reach Telegram's servers. | Best-effort secret removal, rows without output, and `final` mode. The README states the limit. |

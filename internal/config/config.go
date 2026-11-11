@@ -79,6 +79,9 @@ type Config struct {
 		ShowMacPrompts       bool     `toml:"show_mac_prompts"`
 		ProgressDelay        Duration `toml:"progress_delay"`
 		ProgressEditInterval Duration `toml:"progress_edit_interval"`
+		// RichMessages sends final answers with Telegram's sendRichMessage
+		// (Bot API 10.1) instead of HTML parts. Off by default.
+		RichMessages bool `toml:"rich_messages"`
 	} `toml:"display"`
 	// InputSettings holds the [input] table. It is not called Input because
 	// Config.Input(rt) is a method.

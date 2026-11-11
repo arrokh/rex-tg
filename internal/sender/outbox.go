@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"unicode/utf8"
 
 	"rex-tg/internal/store"
 	"rex-tg/internal/telegram"
@@ -81,6 +82,35 @@ func (s *Sender) sendText(ctx context.Context, threadID, chatID, topicID int64, 
 		v = s.judge(err, threadID)
 	}
 	return m.MessageID, v, err
+}
+
+// maxFallbackText is the longest markdown sent as a plain message when a rich
+// message is rejected; longer text goes out as a .md document.
+const maxFallbackText = 4000
+
+// sendRich sends markdown as a rich message. When Telegram answers 400 (parse
+// error or bad request) nothing was posted, so the text is sent again as plain
+// text, or as a .md document when it is longer than maxFallbackText.
+func (s *Sender) sendRich(ctx context.Context, p store.Part, silent bool) (int64, verdict, error) {
+	if err := s.token(ctx); err != nil {
+		return 0, vUnknown, err
+	}
+	m, err := s.tg.SendRichMessage(ctx, p.ChatID, p.MessageThreadID, p.Content, silent, nil)
+	switch telegram.Classify(err) {
+	case telegram.ClassParseEntities, telegram.ClassBadRequest:
+	default:
+		return m.MessageID, s.judge(err, p.ThreadID), err
+	}
+	s.log.Warn("rich message rejected; falling back", "outbox", p.OutboxID, "part", p.Part, "err", err)
+	if utf8.RuneCountInString(p.Content) <= maxFallbackText {
+		return s.sendText(ctx, p.ThreadID, p.ChatID, p.MessageThreadID, p.Content, false, silent)
+	}
+	if err := s.token(ctx); err != nil {
+		return 0, vUnknown, err
+	}
+	name := fmt.Sprintf("reply-%d.md", p.OutboxID)
+	m, err = s.tg.SendDocument(ctx, p.ChatID, p.MessageThreadID, name, []byte(p.Content), "", silent)
+	return m.MessageID, s.judge(err, p.ThreadID), err
 }
 
 var tagRe = regexp.MustCompile(`<[^>]*>`)
@@ -163,6 +193,8 @@ func (s *Sender) sendPart(ctx context.Context, p store.Part) {
 	switch p.Format {
 	case store.FormatHTML, store.FormatPlain:
 		id, v, serr = s.sendText(ctx, p.ThreadID, p.ChatID, p.MessageThreadID, p.Content, p.Format == store.FormatHTML, silent)
+	case store.FormatRich:
+		id, v, serr = s.sendRich(ctx, p, silent)
 	case store.FormatDocument:
 		if serr = s.token(ctx); serr != nil {
 			v = vUnknown

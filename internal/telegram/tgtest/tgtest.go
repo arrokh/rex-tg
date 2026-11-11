@@ -548,6 +548,40 @@ func (s *Server) handle(method string, p map[string]any, docName string, docData
 		out := s.wire(m)
 		out.Text = text
 		return out, nil
+	case "sendRichMessage":
+		if chat == 0 {
+			return nil, bad("chat_id is empty")
+		}
+		rm, _ := p["rich_message"].(map[string]any)
+		set := 0
+		for _, k := range []string{"markdown", "html", "blocks"} {
+			if v, ok := rm[k]; ok && v != nil {
+				set++
+			}
+		}
+		if set != 1 {
+			return nil, bad("rich_message must have exactly one of markdown, html, or blocks")
+		}
+		text := str(rm, "markdown")
+		if text == "" {
+			return nil, bad("rich message is empty")
+		}
+		if len(utf16.Encode([]rune(text))) > 32768 {
+			return nil, bad("rich message is too long")
+		}
+		thread := num(p, "message_thread_id")
+		if s.threadGone(chat, thread) {
+			return nil, bad("message thread not found")
+		}
+		mk, e := markupOf(p)
+		if e != nil {
+			return nil, e
+		}
+		m := s.addMsg(&Message{ChatID: chat, ThreadID: thread, FromBot: true, Text: text,
+			Markup: mk, Silent: flag(p, "disable_notification")})
+		out := s.wire(m)
+		out.Text = text
+		return out, nil
 	case "editMessageText":
 		m, e := s.editable(chat, num(p, "message_id"))
 		if e != nil {

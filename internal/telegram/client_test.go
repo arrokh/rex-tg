@@ -665,3 +665,68 @@ func TestClassString(t *testing.T) {
 		t.Fatal("String")
 	}
 }
+
+func TestSendRichMessage(t *testing.T) {
+	s, c := setup(t)
+	ctx := context.Background()
+	kb := &telegram.InlineKeyboardMarkup{InlineKeyboard: [][]telegram.InlineKeyboardButton{{{Text: "Go", CallbackData: "go"}}}}
+	m, err := c.SendRichMessage(ctx, chat, 7, "# Title\n\n**bold**", true, kb)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.MessageID == 0 || m.MessageThreadID != 7 {
+		t.Fatalf("message = %+v", m)
+	}
+	calls := s.Calls("sendRichMessage")
+	if len(calls) != 1 {
+		t.Fatalf("calls = %d", len(calls))
+	}
+	p := calls[0].Params
+	rm, _ := p["rich_message"].(map[string]any)
+	if p["chat_id"] != float64(chat) || p["message_thread_id"] != float64(7) || p["disable_notification"] != true ||
+		rm["markdown"] != "# Title\n\n**bold**" || len(rm) != 1 || p["reply_markup"] == nil {
+		t.Fatalf("params = %v", p)
+	}
+	stored := s.Messages(chat)
+	if len(stored) != 1 || stored[0].Text != "# Title\n\n**bold**" || !stored[0].Silent || stored[0].Markup == nil {
+		t.Fatalf("stored = %+v", stored)
+	}
+
+	// Optional fields are omitted.
+	if _, err := c.SendRichMessage(ctx, chat, 0, "x", false, nil); err != nil {
+		t.Fatal(err)
+	}
+	p = s.Calls("sendRichMessage")[1].Params
+	for _, k := range []string{"message_thread_id", "disable_notification", "reply_markup"} {
+		if _, ok := p[k]; ok {
+			t.Errorf("%s should be omitted: %v", k, p)
+		}
+	}
+}
+
+func TestSendRichMessageErrors(t *testing.T) {
+	s, c := setup(t)
+	ctx := context.Background()
+	if _, err := c.SendRichMessage(ctx, chat, 0, "", false, nil); telegram.Classify(err) != telegram.ClassBadRequest {
+		t.Fatalf("empty: %v", err)
+	}
+	s.FailNext("sendRichMessage", 1, 400, "Bad Request: can't parse entities: bad", 0)
+	if _, err := c.SendRichMessage(ctx, chat, 0, "x", false, nil); telegram.Classify(err) != telegram.ClassParseEntities {
+		t.Fatalf("parse: %v", err)
+	}
+	s.FailNext("sendRichMessage", 1, 429, "Too Many Requests: retry after 3", 3)
+	if _, err := c.SendRichMessage(ctx, chat, 0, "x", false, nil); telegram.Classify(err) != telegram.ClassRateLimited {
+		t.Fatalf("rate: %v", err)
+	}
+	s.FailNext("sendRichMessage", 1, 502, "Bad Gateway", 0)
+	if _, err := c.SendRichMessage(ctx, chat, 0, "x", false, nil); telegram.Classify(err) != telegram.ClassUnknownOutcome {
+		t.Fatalf("5xx: %v", err)
+	}
+	s.DeleteTopic(chat, 9)
+	if _, err := c.SendRichMessage(ctx, chat, 9, "x", false, nil); telegram.Classify(err) != telegram.ClassThreadNotFound {
+		t.Fatalf("thread: %v", err)
+	}
+	if n := len(s.Messages(chat)); n != 0 {
+		t.Fatalf("messages stored: %d", n)
+	}
+}

@@ -239,6 +239,25 @@ func (c *Client) SendMessage(ctx context.Context, p SendMessageParams) (Message,
 	return m, err
 }
 
+// SendRichMessage sends markdown as a rich message (Bot API 10.1,
+// sendRichMessage). There is no plain-text fallback field: when Telegram
+// rejects the markdown the caller must send the text another way.
+func (c *Client) SendRichMessage(ctx context.Context, chatID, threadID int64, markdown string, silent bool, markup *InlineKeyboardMarkup) (Message, error) {
+	type richMessage struct {
+		Markdown string `json:"markdown"`
+	}
+	body := struct {
+		ChatID              int64                 `json:"chat_id"`
+		MessageThreadID     int64                 `json:"message_thread_id,omitempty"`
+		RichMessage         richMessage           `json:"rich_message"`
+		DisableNotification bool                  `json:"disable_notification,omitempty"`
+		ReplyMarkup         *InlineKeyboardMarkup `json:"reply_markup,omitempty"`
+	}{chatID, threadID, richMessage{markdown}, silent, markup}
+	var m Message
+	err := c.callJSON(ctx, "sendRichMessage", c.timeout, body, &m)
+	return m, err
+}
+
 // EditMessageText replaces the text (and keyboard) of a message.
 func (c *Client) EditMessageText(ctx context.Context, p EditMessageTextParams) (Message, error) {
 	body := struct {

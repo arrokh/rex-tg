@@ -46,6 +46,9 @@ const (
 	FormatHTML     = "html"
 	FormatPlain    = "plain"
 	FormatDocument = "document"
+	// FormatRich is Markdown sent with sendRichMessage (Phase 6, opt-in).
+	// Schema version 2 adds it to the CHECK constraint.
+	FormatRich = "rich"
 )
 
 // Progress message states.

@@ -2,11 +2,40 @@
 package main
 
 import (
-	"fmt"
+	"context"
 	"os"
+	"path/filepath"
 )
 
+// version is set at build time with -ldflags "-X main.version=...".
+var version = "dev"
+
 func main() {
-	fmt.Fprintln(os.Stderr, "rex-tg: not wired yet")
-	os.Exit(2)
+	os.Exit(run(context.Background(), os.Args[1:], realEnv()))
+}
+
+func realEnv() Env {
+	home, _ := os.UserHomeDir()
+	return Env{
+		Stdin:    os.Stdin,
+		Stdout:   os.Stdout,
+		Stderr:   os.Stderr,
+		Getenv:   os.Getenv,
+		Home:     home,
+		Security: "/usr/bin/security",
+		Executable: func() (string, error) {
+			exe, err := os.Executable()
+			if err != nil {
+				return "", err
+			}
+			if r, err := filepath.EvalSymlinks(exe); err == nil {
+				exe = r
+			}
+			return filepath.Abs(exe)
+		},
+		StdinIsTerminal: func() bool {
+			st, err := os.Stdin.Stat()
+			return err != nil || st.Mode()&os.ModeCharDevice != 0
+		},
+	}
 }

@@ -579,14 +579,19 @@ func TestRecover(t *testing.T) {
 		t.Fatalf("state = %s", st)
 	}
 	e.event(sender.PartUnknown)
-	e.start()
+	stop := e.start()
 	waitFor(t, "notice", func() bool { return len(e.srv.Messages(chat)) == 1 })
 	if got := e.srv.Messages(chat)[0].Text; got != noticeText(id, 0) {
 		t.Fatalf("notice = %q", got)
 	}
+	// Recover runs at start, before Run. Simulate a restart: wait until the
+	// notice (the next outbox row) is recorded as sent, stop, recover again.
+	e.waitState(id+1, store.OutboxSent)
+	stop()
 	if err := e.s.Recover(ctx); err != nil {
 		t.Fatal(err)
 	}
+	e.start()
 	time.Sleep(30 * time.Millisecond)
 	if n := len(e.srv.Messages(chat)); n != 1 {
 		t.Fatalf("messages = %d", n)
@@ -597,5 +602,114 @@ func TestPlainFromHTML(t *testing.T) {
 	got := sender.PlainFromHTML(`<a href="x">a &amp;lt; b</a> &lt;i&gt; <pre><code>x&quot;y</code></pre>`)
 	if want := `a &lt; b <i> x"y`; got != want {
 		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+func TestRichPartSent(t *testing.T) {
+	e := newEnv(t, sender.Options{})
+	loud, muted := e.topic(1), e.topic(2)
+	if err := e.st.SetThreadSettings(ctx, muted.ID, store.ModeProgress, store.VerboseOff, false, true); err != nil {
+		t.Fatal(err)
+	}
+	a := e.enqueue(loud, "a", store.FormatRich, "# Hi\n\n**bold**")
+	b := e.enqueue(muted, "b", store.FormatRich, "muted *rich*")
+	e.start()
+	e.waitState(a, store.OutboxSent)
+	e.waitState(b, store.OutboxSent)
+	if n := len(e.srv.Calls("sendMessage")); n != 0 {
+		t.Fatalf("sendMessage calls = %d, want 0", n)
+	}
+	got := map[string]bool{}
+	for _, m := range e.srv.Messages(chat) {
+		got[m.Text] = m.Silent
+	}
+	if len(got) != 2 || got["# Hi\n\n**bold**"] || !got["muted *rich*"] {
+		t.Fatalf("messages = %v", got)
+	}
+}
+
+func TestRichFallbackToPlainText(t *testing.T) {
+	for _, desc := range []string{"Bad Request: can't parse entities: bad", "Bad Request: something else"} {
+		e := newEnv(t, sender.Options{})
+		th := e.topic(1)
+		id := e.enqueue(th, "k", store.FormatRich, "**raw** markdown")
+		e.srv.FailNext("sendRichMessage", 1, 400, desc, 0)
+		e.start()
+		e.waitState(id, store.OutboxSent)
+		ms := e.srv.Messages(chat)
+		if len(ms) != 1 || ms[0].Text != "**raw** markdown" || ms[0].ParseMode != "" || ms[0].File != nil {
+			t.Fatalf("%q: messages = %+v", desc, ms)
+		}
+		if n := len(e.srv.Calls("sendRichMessage")); n != 1 {
+			t.Fatalf("sendRichMessage calls = %d, want 1", n)
+		}
+	}
+}
+
+func TestRichFallbackToDocument(t *testing.T) {
+	e := newEnv(t, sender.Options{})
+	th := e.topic(1)
+	long := strings.Repeat("é", 4001)
+	id := e.enqueue(th, "k", store.FormatRich, long)
+	e.srv.FailNext("sendRichMessage", 1, 400, "Bad Request: can't parse entities: bad", 0)
+	e.start()
+	e.waitState(id, store.OutboxSent)
+	ms := e.srv.Messages(chat)
+	if len(ms) != 1 || string(ms[0].File) != long || !strings.HasSuffix(ms[0].Filename, ".md") {
+		t.Fatalf("messages = %+v", ms)
+	}
+	if n := len(e.srv.Calls("sendMessage")); n != 0 {
+		t.Fatalf("sendMessage calls = %d, want 0", n)
+	}
+}
+
+func TestRichFallbackAtLimitIsText(t *testing.T) {
+	e := newEnv(t, sender.Options{})
+	th := e.topic(1)
+	text := strings.Repeat("é", 4000)
+	id := e.enqueue(th, "k", store.FormatRich, text)
+	e.srv.FailNext("sendRichMessage", 1, 400, "Bad Request: bad", 0)
+	e.start()
+	e.waitState(id, store.OutboxSent)
+	if ms := e.srv.Messages(chat); len(ms) != 1 || ms[0].Text != text || ms[0].File != nil {
+		t.Fatalf("messages = %d", len(ms))
+	}
+}
+
+func TestRichOtherErrorsFollowPartRules(t *testing.T) {
+	// Thread gone: failed, no fallback.
+	e := newEnv(t, sender.Options{})
+	th := e.topic(1)
+	id := e.enqueue(th, "k", store.FormatRich, "hello")
+	e.srv.DeleteTopic(chat, 1)
+	e.start()
+	e.waitState(id, store.OutboxFailed)
+	if n := len(e.srv.Calls("sendMessage")) + len(e.srv.Calls("sendDocument")); n != 0 {
+		t.Fatalf("fallback calls after thread gone = %d", n)
+	}
+
+	// Rate limit: retried as a rich message.
+	e = newEnv(t, sender.Options{})
+	th = e.topic(1)
+	id = e.enqueue(th, "k", store.FormatRich, "hello")
+	e.srv.FailNext("sendRichMessage", 1, 429, "Too Many Requests: retry after 3", 3)
+	e.start()
+	e.waitState(id, store.OutboxSent)
+	if n := len(e.srv.Calls("sendRichMessage")); n != 2 {
+		t.Fatalf("sendRichMessage calls = %d, want 2", n)
+	}
+	if n := len(e.srv.Calls("sendMessage")); n != 0 {
+		t.Fatalf("sendMessage calls = %d, want 0", n)
+	}
+
+	// Unknown outcome: no fallback, part is unknown.
+	e = newEnv(t, sender.Options{})
+	th = e.topic(1)
+	id = e.enqueue(th, "k", store.FormatRich, "hello")
+	e.srv.FailNext("sendRichMessage", 1, 502, "Bad Gateway", 0)
+	e.start()
+	e.waitState(id, store.OutboxUnknown)
+	if n := len(e.srv.Calls("sendMessage")); n != 0 {
+		t.Fatalf("sendMessage calls = %d, want 0", n)
 	}
 }
