@@ -122,14 +122,16 @@ type Sender struct {
 	events chan Event
 	wake   chan struct{}
 
-	mu      sync.Mutex
-	bucket  bucket
-	jobs    []*job
-	prog    map[int64][]*progOp
-	seq     uint64
-	blocked bool
-	gone    map[int64]bool
-	served  map[int64]uint64
+	mu       sync.Mutex
+	bucket   bucket
+	jobs     []*job
+	prog     map[int64][]*progOp
+	seq      uint64
+	blocked  bool
+	stopped  bool
+	finished map[int64]bool // topics whose progress row holds a finished summary
+	gone     map[int64]bool
+	served   map[int64]uint64
 	// reactions holds the newest reaction per message. An older reaction
 	// that has not been sent yet is skipped, so a message always ends with
 	// the newest one, also when an older one waits for a retry.
@@ -161,6 +163,7 @@ func New(st *store.Store, tg *telegram.Client, opt Options) *Sender {
 		bucket:    newBucket(opt.RatePerSecond, opt.Burst, opt.Now()),
 		prog:      map[int64][]*progOp{},
 		gone:      map[int64]bool{},
+		finished:  map[int64]bool{},
 		served:    map[int64]uint64{},
 		reactions: map[[2]int64]uint64{},
 	}
@@ -217,18 +220,22 @@ type jobResult struct {
 	err   error
 }
 
-func (s *Sender) addJob(j *job) bool {
+func (s *Sender) addJob(j *job) error {
 	s.mu.Lock()
+	if s.stopped {
+		s.mu.Unlock()
+		return ErrStopped
+	}
 	if s.blocked {
 		s.mu.Unlock()
-		return false
+		return ErrBlocked
 	}
 	s.seq++
 	j.seq = s.seq
 	s.jobs = append(s.jobs, j)
 	s.mu.Unlock()
 	s.Wake()
-	return true
+	return nil
 }
 
 // Call runs fn with the Telegram client once the budget allows, in the order of
@@ -254,8 +261,8 @@ func (s *Sender) Call(prio Priority, fn func(ctx context.Context, tg *telegram.C
 		}
 		return jobResult{err: err}
 	}
-	if !s.addJob(j) {
-		return ErrBlocked
+	if err := s.addJob(j); err != nil {
+		return err
 	}
 	return <-j.done
 }
@@ -331,8 +338,14 @@ func (s *Sender) Typing(chatID, threadID int64) {
 func (s *Sender) Run(ctx context.Context) error {
 	s.mu.Lock()
 	s.blocked = false
+	s.stopped = false
 	s.mu.Unlock()
-	defer s.drain(ErrStopped)
+	defer func() {
+		s.mu.Lock()
+		s.stopped = true
+		s.mu.Unlock()
+		s.drain(ErrStopped)
+	}()
 
 	for ctx.Err() == nil {
 		w := s.pick(ctx)

@@ -68,6 +68,12 @@ func Run(ctx context.Context, opt Options) error {
 	if err := os.MkdirAll(cfg.State.Dir, 0o700); err != nil {
 		return fmt.Errorf("daemon: create state folder: %w", err)
 	}
+	// MkdirAll leaves the mode of an existing folder alone; older installs made them 0755.
+	for _, dir := range []string{cfg.State.Dir, cfg.LogDir(), cfg.SpoolDir(), cfg.UploadDir()} {
+		if err := os.Chmod(dir, 0o700); err != nil && !errors.Is(err, os.ErrNotExist) {
+			log.Warn("restrict folder mode", "dir", dir, "err", err)
+		}
+	}
 	lock, err := acquireLock(cfg.LockPath())
 	if err != nil {
 		return err

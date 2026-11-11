@@ -121,6 +121,7 @@ func (p *progRun) save(row store.Progress) {
 }
 
 func (p *progRun) drop() {
+	p.s.setFinished(p.th.ID, false)
 	if err := p.s.st.DeleteProgress(p.bg, p.th.ID); err != nil {
 		p.s.log.Error("progress: delete failed", "thread", p.th.ID, "err", err)
 	}
@@ -140,7 +141,42 @@ func (p *progRun) backoffOrDrop() bool {
 	return true
 }
 
+func (s *Sender) setFinished(tid int64, v bool) {
+	s.mu.Lock()
+	if v {
+		s.finished[tid] = true
+	} else {
+		delete(s.finished, tid)
+	}
+	s.mu.Unlock()
+}
+
+func (s *Sender) isFinished(tid int64) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.finished[tid]
+}
+
+// finishedTurnKey marks a kept summary row in the store, so the mark also
+// holds after a restart (the in-memory flag is lost then).
+const finishedTurnKey = "finished"
+
+// rowFinished reports whether the topic's row is a finished summary.
+func (p *progRun) rowFinished() bool {
+	return p.s.isFinished(p.th.ID) || (p.has && p.row.TurnKey == finishedTurnKey)
+}
+
+// startFresh forgets a finished summary row so that a new message is posted.
+func (p *progRun) startFresh() {
+	if p.has && p.rowFinished() {
+		p.drop()
+		p.has = false
+		p.row = store.Progress{}
+	}
+}
+
 func (p *progRun) show() {
+	p.startFresh()
 	if p.has {
 		switch p.row.State {
 		case store.ProgressShown:
@@ -199,8 +235,8 @@ func (p *progRun) post(html string, keepOld int64) {
 }
 
 func (p *progRun) edit() {
-	if !p.has {
-		return
+	if !p.has || p.rowFinished() {
+		return // the turn is over; its summary is final
 	}
 	switch p.row.State {
 	case store.ProgressShown:
@@ -249,6 +285,7 @@ func (p *progRun) editText(html string) verdict {
 }
 
 func (p *progRun) repost() {
+	p.startFresh()
 	if !p.has || p.row.State == store.ProgressWaiting {
 		p.post(p.op.html, 0)
 		return
@@ -268,6 +305,13 @@ func (p *progRun) finish() {
 		return
 	}
 	switch p.editText(p.op.html) {
+	case vOK, vNotModified:
+		// Keep the row: a corrected summary may follow a late final answer.
+		// The next Show for this topic starts a new message.
+		p.row.EditedAt = p.s.now()
+		p.row.TurnKey = finishedTurnKey
+		p.save(p.row)
+		p.s.setFinished(p.th.ID, true)
 	case vRetry:
 		p.retry(0)
 	case vUnknown:

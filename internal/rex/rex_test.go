@@ -273,3 +273,32 @@ func TestMissingBinary(t *testing.T) {
 		t.Fatal("want error")
 	}
 }
+
+func TestPasteErrorDoesNotLeakText(t *testing.T) {
+	c, f := newClient(t)
+	f.OnEchoStdin([]string{"api", "call"}, 1)
+	text := "secret \"quoted\"\nline two"
+	err := c.Paste(context.Background(), "session:a", "block:1", text)
+	var re *rex.Error
+	if !errors.As(err, &re) {
+		t.Fatalf("err %v", err)
+	}
+	for _, bad := range []string{"secret", "line two", `\"quoted\"`} {
+		if strings.Contains(re.Stderr, bad) || strings.Contains(err.Error(), bad) {
+			t.Fatalf("leaked %q in %q", bad, re.Stderr)
+		}
+	}
+	if !strings.Contains(re.Stderr, "[text]") {
+		t.Fatalf("stderr %q", re.Stderr)
+	}
+}
+
+func TestStderrCapped(t *testing.T) {
+	c, f := newClient(t)
+	f.OnError([]string{"ls"}, strings.Repeat("x", 5000), 1)
+	_, err := c.Sessions(context.Background())
+	var re *rex.Error
+	if !errors.As(err, &re) || len(re.Stderr) > 510 {
+		t.Fatalf("stderr len %d", len(re.Stderr))
+	}
+}

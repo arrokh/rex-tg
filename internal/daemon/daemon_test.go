@@ -1664,3 +1664,105 @@ func TestUnlinkRefusesWaitingMessages(t *testing.T) {
 	p.Final("job over")
 	e.never("typing for an unlinked topic", 1000*time.Millisecond, func() bool { return len(e.pastes()) > 0 })
 }
+
+// piTopicCfg is piTopic with a change to the config before the daemon starts.
+func piTopicCfg(t *testing.T, id string, tweak func(*env)) (*env, *piLog, int64) {
+	t.Helper()
+	e := newEnv(t)
+	tweak(e)
+	e.seedOwner()
+	p := e.newPi(id)
+	p.User("start")
+	p.Final("ready")
+	e.start()
+	e.hookPi(p, "startup")
+	thread := e.openTopic()
+	e.waitText(thread, "ready")
+	e.pi = p
+	return e, p, thread
+}
+
+func TestAgentGoneBeforeThePasteIsRefused(t *testing.T) {
+	e, _, thread := piTopicCfg(t, "pi-gone-before", func(e *env) { e.cfg.Rex.ScanInterval.Duration = time.Hour })
+	time.Sleep(300 * time.Millisecond)
+	e.fake.OnDelay([]string{"block", "call", "-s", rexSess, "-b", rexBlock, "process"},
+		fmt.Sprintf(`{"foreground":{"pid":%d,"name":"node","argv0":"pi","cwd":%q},"ancestors":[]}`, piPID, paneCWD), 600*time.Millisecond)
+	before := len(e.rexCallsMatching("process"))
+	id := e.say(thread, "echo hi > /tmp/x")
+	e.waitFor("the safety check to start", func() bool { return len(e.rexCallsMatching("process")) > before })
+	e.setProcess("zsh", "-zsh", 777) // the agent exits while the check is running
+	e.waitFor("the thumbs down", func() bool { m, _ := e.message(id); return m.Reaction == "👎" })
+	e.waitText(thread, "Not sent")
+	if len(e.pastes()) != 0 || len(e.keys()) != 0 {
+		t.Errorf("typed into a shell: %v %v", e.pastes(), e.keys())
+	}
+}
+
+func TestAgentGoneOrPauseAfterThePasteStopsEnter(t *testing.T) {
+	for _, how := range []string{"shell", "pause"} {
+		t.Run(how, func(t *testing.T) {
+			e, _, thread := piTopicCfg(t, "pi-after-"+how, func(e *env) {
+				e.cfg.Agents.Pi.PasteEnterDelay.Duration = 700 * time.Millisecond
+			})
+			id := e.say(thread, "rm -rf important")
+			e.waitFor("the paste", func() bool { return len(e.pastes()) == 1 })
+			if how == "shell" {
+				e.setProcess("zsh", "-zsh", 777)
+			} else {
+				e.say(0, "/pause")
+			}
+			e.waitText(thread, "may be in the input box")
+			e.waitFor("the thumbs down", func() bool { m, _ := e.message(id); return m.Reaction == "👎" })
+			e.never("Enter after the checks failed", 800*time.Millisecond, func() bool { return len(e.keys()) > 0 })
+		})
+	}
+}
+
+func TestKeyCommandRejectsOptions(t *testing.T) {
+	e, _, thread := piTopic(t, "pi-keys")
+	e.say(thread, "/key -b block:other enter")
+	e.waitText(thread, "Key names use")
+	e.say(thread, "/key ctrl+c")
+	e.waitFor("the valid key", func() bool { return len(e.keys()) == 1 })
+	if got := e.keys(); got[0] != "ctrl+c" {
+		t.Errorf("keys = %v (the rejected command must send nothing)", got)
+	}
+}
+
+const pemKey = "-----BEGIN RSA PRIV" + "ATE KEY-----\nFAKEPEMLINEONEFAKEPEMLINEONEFAKEPEMLINEONEFAKEPEMLINEONEFAKEPEM\nFAKEPEMLINETWOFAKEPEMLINETWOFAKEPEMLINETWOFAKEPEMLINETWOFAKEPEM\n-----END RSA PRIV" + "ATE KEY-----"
+
+func TestScreenRedactsMultiLineKeys(t *testing.T) {
+	e, _, thread := piTopic(t, "pi-pem")
+	e.setScreen("before\n" + pemKey + "\nafter\n")
+	e.say(thread, "/screen")
+	m := e.waitText(thread, "after")
+	if strings.Contains(m.Text, "FAKEPEMLINEONE") || strings.Contains(m.Text, "FAKEPEMLINETWO") {
+		t.Errorf("key body on screen: %q", m.Text)
+	}
+	e.setScreen("Do you want to proceed?\n" + pemKey + "\n❯ 1. Yes\n  2. No\n")
+	e.setStatus("blocked", "permission")
+	a := e.waitText(thread, "Permission needed")
+	if strings.Contains(a.Text, "FAKEPEMLINEONE") || strings.Contains(a.Text, "FAKEPEMLINETWO") {
+		t.Errorf("key body in alert: %q", a.Text)
+	}
+}
+
+func TestStateFoldersAreRestrictedAtStart(t *testing.T) {
+	e := newEnv(t)
+	e.seedOwner()
+	for _, d := range []string{e.cfg.State.Dir, e.cfg.LogDir(), e.cfg.SpoolDir(), e.cfg.UploadDir()} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	e.start()
+	e.waitFor("the daemon to start", func() bool { return len(e.tg.Calls("getMe")) > 0 })
+	for _, d := range []string{e.cfg.State.Dir, e.cfg.LogDir(), e.cfg.SpoolDir(), e.cfg.UploadDir()} {
+		if fi, err := os.Stat(d); err != nil || fi.Mode().Perm() != 0o700 {
+			t.Errorf("%s mode = %v, %v; want 0700", d, fi.Mode().Perm(), err)
+		}
+	}
+}

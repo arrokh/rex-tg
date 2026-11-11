@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os/exec"
-	"strings"
 	"time"
 )
 
@@ -150,11 +149,11 @@ func (c *Client) streamEvents(ctx context.Context, events chan<- Event, errs cha
 	}
 	switch {
 	case scanErr != nil:
-		errs <- &Error{Command: "events", Stderr: strings.TrimSpace(stderr.String()), Err: fmt.Errorf("read output: %w", scanErr)}
+		errs <- &Error{Command: "events", Stderr: cleanStderr(stderr.String(), nil), Err: fmt.Errorf("read output: %w", scanErr)}
 	case waitErr != nil:
-		errs <- &Error{Command: "events", Stderr: strings.TrimSpace(stderr.String()), Err: waitErr}
+		errs <- &Error{Command: "events", Stderr: cleanStderr(stderr.String(), nil), Err: waitErr}
 	default:
-		errs <- &Error{Command: "events", Stderr: strings.TrimSpace(stderr.String()), Err: fmt.Errorf("stream ended")}
+		errs <- &Error{Command: "events", Stderr: cleanStderr(stderr.String(), nil), Err: fmt.Errorf("stream ended")}
 	}
 }
 

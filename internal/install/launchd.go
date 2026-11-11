@@ -81,8 +81,8 @@ func InstallLaunchd(p Paths, load bool) (Change, error) {
 	if err := p.validate(); err != nil {
 		return Change{Path: p.LaunchAgent}, err
 	}
-	if err := os.MkdirAll(p.LogDir, 0o755); err != nil {
-		return Change{Path: p.LaunchAgent}, fmt.Errorf("create log folder: %w", err)
+	if err := p.prepareLogs(); err != nil {
+		return Change{Path: p.LaunchAgent}, err
 	}
 	ch, err := p.installFile(p.LaunchAgent, p.plist(), 0o644)
 	if err != nil || !load {
@@ -111,4 +111,26 @@ func UninstallLaunchd(p Paths, unload bool) (Change, error) {
 		}
 	}
 	return removeFile(p.LaunchAgent)
+}
+
+// prepareLogs creates the state folder and LogDir as 0700 and pre-creates the
+// launchd log files as 0600 (existing files are left alone).
+func (p Paths) prepareLogs() error {
+	state := filepath.Dir(p.LogDir)
+	if err := os.MkdirAll(filepath.Dir(state), 0o755); err != nil {
+		return fmt.Errorf("create log folder: %w", err)
+	}
+	for _, d := range []string{state, p.LogDir} {
+		if err := os.MkdirAll(d, 0o700); err != nil {
+			return fmt.Errorf("create log folder: %w", err)
+		}
+	}
+	for _, n := range []string{"launchd.out.log", "launchd.err.log"} {
+		f, err := os.OpenFile(filepath.Join(p.LogDir, n), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+		if err != nil {
+			return fmt.Errorf("create log file: %w", err)
+		}
+		f.Close()
+	}
+	return nil
 }

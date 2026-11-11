@@ -33,8 +33,8 @@ func (r *Registry) signal(ctx context.Context, pane store.Pane, mem *paneMem, st
 	if at.IsZero() {
 		at = now
 	}
-	if !prompt && at.Before(mem.stateAt) {
-		return nil, nil // older than what we know
+	if at.Before(mem.stateAt) {
+		return nil, nil // older than what we know, also a replayed prompt line
 	}
 	if state != "blocked" {
 		kind = ""

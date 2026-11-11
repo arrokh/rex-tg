@@ -13,11 +13,12 @@ import (
 )
 
 type rule struct {
-	Args    []string `json:"args"`
-	Stdout  string   `json:"stdout"`
-	Stderr  string   `json:"stderr"`
-	Exit    int      `json:"exit"`
-	DelayMS int      `json:"delay_ms"`
+	Args      []string `json:"args"`
+	Stdout    string   `json:"stdout"`
+	Stderr    string   `json:"stderr"`
+	Exit      int      `json:"exit"`
+	DelayMS   int      `json:"delay_ms"`
+	EchoStdin bool     `json:"echo_stdin"`
 }
 
 type scenario struct {
@@ -76,6 +77,9 @@ func main() {
 	}
 	fmt.Fprint(os.Stdout, r.Stdout)
 	fmt.Fprint(os.Stderr, r.Stderr)
+	if r.EchoStdin {
+		fmt.Fprint(os.Stderr, string(stdin))
+	}
 	os.Exit(r.Exit)
 }
 

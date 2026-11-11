@@ -58,11 +58,12 @@ func buildFake() (string, error) {
 }
 
 type rule struct {
-	Args    []string `json:"args"`
-	Stdout  string   `json:"stdout"`
-	Stderr  string   `json:"stderr"`
-	Exit    int      `json:"exit"`
-	DelayMS int      `json:"delay_ms"`
+	Args      []string `json:"args"`
+	Stdout    string   `json:"stdout"`
+	Stderr    string   `json:"stderr"`
+	Exit      int      `json:"exit"`
+	DelayMS   int      `json:"delay_ms"`
+	EchoStdin bool     `json:"echo_stdin"`
 }
 
 type scenario struct {
@@ -143,6 +144,11 @@ func (f *Fake) On(prefix []string, stdout string, exit int) {
 // OnError is like On with a failing exit code and a stderr text.
 func (f *Fake) OnError(prefix []string, stderr string, exit int) {
 	f.add(rule{Args: prefix, Stderr: stderr, Exit: exit})
+}
+
+// OnEchoStdin makes the fake print its stdin to stderr and exit with code.
+func (f *Fake) OnEchoStdin(prefix []string, exit int) {
+	f.add(rule{Args: prefix, Exit: exit, EchoStdin: true})
 }
 
 // OnDelay is like On, but the fake waits for delay before it answers.

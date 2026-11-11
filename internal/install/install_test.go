@@ -597,3 +597,47 @@ func TestInstallRequiresAbsoluteBinary(t *testing.T) {
 		t.Error("want error")
 	}
 }
+
+func TestLaunchdLogPermissions(t *testing.T) {
+	p := newPaths(t)
+	p.Runner = (&fakeRunner{}).run
+	existing := filepath.Join(p.LogDir, "launchd.err.log")
+	// Pre-existing file must be kept untouched.
+	if err := os.MkdirAll(p.LogDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write(t, existing, "keep", 0o644)
+	if err := os.Chmod(filepath.Dir(p.LogDir), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	os.RemoveAll(filepath.Dir(p.LogDir))
+	if err := os.MkdirAll(p.LogDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	write(t, existing, "keep", 0o644)
+	if _, err := InstallLaunchd(p, false); err != nil {
+		t.Fatal(err)
+	}
+	if read(t, existing) != "keep" {
+		t.Error("existing log truncated")
+	}
+	out := filepath.Join(p.LogDir, "launchd.out.log")
+	for path, want := range map[string]os.FileMode{out: 0o600, existing: 0o644} {
+		if fi, err := os.Stat(path); err != nil || fi.Mode().Perm() != want {
+			t.Errorf("%s: %v %v", path, fi, err)
+		}
+	}
+	// Fresh home: folders are 0700.
+	q := newPaths(t)
+	if _, err := InstallLaunchd(q, false); err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range []string{filepath.Dir(q.LogDir), q.LogDir} {
+		if fi, err := os.Stat(d); err != nil || fi.Mode().Perm() != 0o700 {
+			t.Errorf("%s: %v %v", d, fi, err)
+		}
+	}
+	if fi, _ := os.Stat(filepath.Join(q.LogDir, "launchd.err.log")); fi.Mode().Perm() != 0o600 {
+		t.Errorf("err log mode %v", fi.Mode())
+	}
+}

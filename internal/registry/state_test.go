@@ -65,7 +65,7 @@ func TestPromptMeansWorkingAfterStaleDone(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			e, id := stateEnv(t)
 			e.status("b1", "done", "", e.at(20))
-			prompt(e, e.at(19)) // reaches us after the done, with an older time
+			prompt(e, e.at(25)) // newer than the done Rex still shows
 			if got := e.paneState("b1"); got != "working" {
 				t.Fatalf("state = %q", got)
 			}
@@ -90,7 +90,7 @@ func TestPiAgentStartIsWorkingAfterStaleDone(t *testing.T) {
 	e.rx.setBlock(sess1, "b1", piProc(100, cwdA))
 	e.piHook("b1", "session_start", "p1", "startup", e.at(1))
 	e.status("b1", "done", "", e.at(20))
-	e.piHook("b1", "agent_start", "p1", "", e.at(19))
+	e.piHook("b1", "agent_start", "p1", "", e.at(25))
 	if got := e.paneState("b1"); got != "working" {
 		t.Fatalf("state = %q", got)
 	}
@@ -298,5 +298,23 @@ func TestAgentsView(t *testing.T) {
 	e.event(rex.BlockClosed, "b2")
 	if views, _ = e.reg.Agents(e.ctx); len(views) != 1 {
 		t.Errorf("closed pane still listed: %d", len(views))
+	}
+}
+
+func TestReplayedOldPromptIsIgnored(t *testing.T) {
+	e, id := stateEnv(t)
+	e.status("b1", "working", "", e.at(10))
+	e.status("b1", "idle", "", e.at(20))
+	// After an unclean restart the tailer re-reads an old prompt line.
+	ch, err := e.reg.TranscriptSignal(e.ctx, e.conv(agents.Claude, "c1").ID, Signal{State: "working", Kind: "prompt", At: e.at(10)})
+	if err != nil || len(ch) != 0 {
+		t.Fatalf("got %v, %v", ch, err)
+	}
+	e.claudeHook("b1", "UserPromptSubmit", "c1", "", e.at(12)) // same for an old hook
+	if got := e.paneState("b1"); got != "idle" {
+		t.Fatalf("state = %q", got)
+	}
+	if ok, why := e.ready(id, e.at(30)); !ok {
+		t.Errorf("not ready: %s", why)
 	}
 }

@@ -46,7 +46,9 @@ func (s *Sender) judge(err error, threadID int64) verdict {
 	case telegram.ClassDeleteTargetGone:
 		return vDeleteGone
 	case telegram.ClassThreadNotFound:
-		s.threadGone(threadID)
+		if threadID != 0 { // reactions and other calls have no topic to report
+			s.threadGone(threadID)
+		}
 		return vGone
 	case telegram.ClassBlocked:
 		s.block(threadID)
@@ -226,7 +228,8 @@ func (s *Sender) finishPart(ctx context.Context, p store.Part, id int64, v verdi
 	switch v {
 	case vOK:
 		werr = s.st.MarkPartSent(ctx, p.OutboxID, p.Part, id)
-	case vRetry:
+	case vRetry, vBlocked:
+		// Nothing was delivered: keep the part for after the user unblocks the bot.
 		werr = s.st.ReleasePart(ctx, p.OutboxID, p.Part)
 	case vUnknown:
 		werr = s.st.MarkPartUnknown(ctx, p.OutboxID, p.Part)
@@ -237,8 +240,6 @@ func (s *Sender) finishPart(ctx context.Context, p store.Part, id int64, v verdi
 		switch v {
 		case vGone:
 			reason = "topic not found"
-		case vBlocked:
-			reason = "bot blocked"
 		default:
 			if err != nil {
 				reason = err.Error()

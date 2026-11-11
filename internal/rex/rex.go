@@ -158,6 +158,28 @@ func (c *Client) globals() []string {
 
 // run executes one non-streaming command and returns its stdout.
 func (c *Client) run(ctx context.Context, name string, stdin []byte, args ...string) ([]byte, error) {
+	return c.runScrub(ctx, name, stdin, nil, args...)
+}
+
+// maxStderr caps the stderr kept in an Error.
+const maxStderr = 500
+
+// cleanStderr removes every secret, trims, and caps the text at maxStderr bytes.
+func cleanStderr(s string, secrets []string) string {
+	for _, x := range secrets {
+		if x != "" {
+			s = strings.ReplaceAll(s, x, "[text]")
+		}
+	}
+	s = strings.TrimSpace(s)
+	if len(s) > maxStderr {
+		s = strings.ToValidUTF8(s[:maxStderr], "") + "..."
+	}
+	return s
+}
+
+// runScrub is run, but removes the secrets from the stderr kept in errors.
+func (c *Client) runScrub(ctx context.Context, name string, stdin []byte, secrets []string, args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, c.bin, append(c.globals(), args...)...)
@@ -172,7 +194,7 @@ func (c *Client) run(ctx context.Context, name string, stdin []byte, args ...str
 		if ctx.Err() != nil {
 			err = fmt.Errorf("%w (limit %s)", ctx.Err(), c.timeout)
 		}
-		return nil, &Error{Command: name, Stderr: strings.TrimSpace(errb.String()), Err: err}
+		return nil, &Error{Command: name, Stderr: cleanStderr(errb.String(), secrets), Err: err}
 	}
 	return out.Bytes(), nil
 }
@@ -253,7 +275,14 @@ func (c *Client) Paste(ctx context.Context, session, block, text string) error {
 	if err != nil {
 		return fmt.Errorf("rex api call block.event: %w", err)
 	}
-	_, err = c.run(ctx, "api call block.event", body, "api", "call", "-s", session, "block.event", "-")
+	secrets := []string{text}
+	if len(text) > 0 {
+		if q, jerr := json.Marshal(text); jerr == nil {
+			secrets = append([]string{string(q[1 : len(q)-1])}, secrets...)
+		}
+		secrets = append([]string{string(body)}, secrets...)
+	}
+	_, err = c.runScrub(ctx, "api call block.event", body, secrets, "api", "call", "-s", session, "block.event", "-")
 	return err
 }
 

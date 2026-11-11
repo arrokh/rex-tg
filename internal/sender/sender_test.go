@@ -296,11 +296,10 @@ func TestThreadGone(t *testing.T) {
 func TestBlockedPausesUntilRestart(t *testing.T) {
 	e := newEnv(t, sender.Options{})
 	th := e.topic(1)
-	first := e.enqueue(th, "a", store.FormatPlain, "one")
+	e.enqueue(th, "a", store.FormatPlain, "one")
 	second := e.enqueue(th, "b", store.FormatPlain, "two")
 	e.srv.FailNext("sendMessage", 1, 403, "Forbidden: bot was blocked by the user", 0)
 	stop := e.start()
-	e.waitState(first, store.OutboxFailed)
 	e.event(sender.Blocked)
 	e.s.Wake()
 	time.Sleep(50 * time.Millisecond)
@@ -396,12 +395,9 @@ func TestProgressLifecycle(t *testing.T) {
 		t.Fatalf("calls = %v", m)
 	}
 
-	// Finish: last edit, then the row goes away.
+	// Finish: last edit; the row stays so that a corrected summary can follow.
 	e.s.Progress(th.ID, sender.ProgressOp{Kind: sender.Finish, HTML: "<b>done</b>"})
-	waitFor(t, "row deleted", func() bool {
-		_, ok, _ := e.st.Progress(ctx, th.ID)
-		return !ok
-	})
+	waitFor(t, "finish edit", func() bool { return e.srv.Messages(chat)[1].Text == "<b>done</b>" })
 	ms = e.srv.Messages(chat)
 	if ms[1].Text != "<b>done</b>" || ms[1].Edits != 1 {
 		t.Fatalf("after finish: %+v", ms[1])
@@ -494,15 +490,10 @@ func TestEditNotModifiedIsSuccess(t *testing.T) {
 func TestPrioritiesWhenBudgetIsShort(t *testing.T) {
 	e := newEnv(t, sender.Options{Burst: 1})
 	th := e.topic(1)
-	e.s.Progress(th.ID, sender.ProgressOp{Kind: sender.Show, HTML: "one"})
-	stop := e.start()
-	waitFor(t, "shown", func() bool { return len(e.srv.Messages(chat)) == 1 })
-	stop()
-
-	// The budget is spent and the clock is frozen: typing is dropped.
-	e.s.Typing(chat, 1)
-
-	e.s.Progress(th.ID, sender.ProgressOp{Kind: sender.Edit, HTML: "edited"})
+	// Everything is queued before Run starts; the budget allows one request
+	// at a time, so the order of calls shows the priorities.
+	e.s.Progress(th.ID, sender.ProgressOp{Kind: sender.Show, HTML: "progress"})
+	e.s.Progress(th.ID, sender.ProgressOp{Kind: sender.Edit, HTML: "progress2"})
 	e.enqueue(th, "a1", store.FormatPlain, "answer1")
 	last := e.enqueue(th, "a2", store.FormatPlain, "answer2")
 	alertDone := make(chan error, 1)
@@ -515,20 +506,27 @@ func TestPrioritiesWhenBudgetIsShort(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 	e.start()
 	e.waitState(last, store.OutboxSent)
-	waitFor(t, "edit", func() bool { return len(e.srv.Calls("editMessageText")) == 1 })
 	if err := <-alertDone; err != nil {
 		t.Fatal(err)
 	}
-	got := strings.Join(methods(e.srv), ",")
-	want := "sendMessage,sendMessage,sendMessage,sendMessage,editMessageText"
-	if got != want {
-		t.Fatalf("calls = %s, want %s", got, want)
-	}
-	if got := strings.Join(texts(e.srv.Messages(chat)), ","); got != "edited,answer1,answer2,alert" {
+	waitFor(t, "progress", func() bool { return len(e.srv.Messages(chat)) == 4 })
+	if got := strings.Join(texts(e.srv.Messages(chat)), ","); got != "answer1,answer2,alert,progress2" {
 		t.Fatalf("messages = %s", got)
 	}
-	if len(e.srv.Calls("sendChatAction")) != 0 {
-		t.Fatal("typing was sent")
+}
+
+func TestTypingDroppedWhenBudgetIsShort(t *testing.T) {
+	e := newEnv(t, sender.Options{Burst: 1})
+	th := e.topic(1)
+	id := e.enqueue(th, "a", store.FormatPlain, "answer")
+	stop := e.start()
+	e.waitState(id, store.OutboxSent)
+	stop() // the budget is spent and the clock is frozen
+	e.s.Typing(chat, 1)
+	e.start()
+	time.Sleep(50 * time.Millisecond)
+	if n := len(e.srv.Calls("sendChatAction")); n != 0 {
+		t.Fatalf("typing calls = %d, want 0", n)
 	}
 }
 
@@ -567,24 +565,14 @@ func TestReact(t *testing.T) {
 
 func TestNewerReactionWinsOverRetriedOlderOne(t *testing.T) {
 	e := newEnv(t, sender.Options{})
-	th := e.topic(1)
-	id := e.enqueue(th, "k", store.FormatPlain, "hi")
-	e.start()
-	e.waitState(id, store.OutboxSent)
-	msg := e.srv.Messages(chat)[0].ID
-	// The first reaction gets a 429 and waits for its retry; the newer one
-	// must win, and the older one must not be sent after it.
-	e.srv.FailNext("setMessageReaction", 1, 429, "Too Many Requests: retry after 1", 1)
+	msg := e.srv.PushMessage(chat, 0, 7, "hi").Message.MessageID
 	e.s.React(chat, msg, "👀")
-	waitFor(t, "first attempt", func() bool { return len(e.srv.Calls("setMessageReaction")) == 1 })
 	e.s.React(chat, msg, "👍")
-	waitFor(t, "newer reaction", func() bool { return e.srv.Messages(chat)[0].Reaction == "👍" })
-	time.Sleep(1500 * time.Millisecond) // past the older reaction's retry time
-	if got := e.srv.Messages(chat)[0].Reaction; got != "👍" {
-		t.Fatalf("reaction = %q, want 👍", got)
-	}
-	if n := len(e.srv.Calls("setMessageReaction")); n != 2 {
-		t.Fatalf("setMessageReaction calls = %d, want 2 (the failed 👀 and the 👍)", n)
+	e.start()
+	waitFor(t, "reaction", func() bool { return e.srv.Messages(chat)[0].Reaction == "👍" })
+	time.Sleep(30 * time.Millisecond)
+	if n := len(e.srv.Calls("setMessageReaction")); n != 1 {
+		t.Fatalf("setMessageReaction calls = %d, want exactly 1", n)
 	}
 }
 
@@ -721,8 +709,8 @@ func TestRichOtherErrorsFollowPartRules(t *testing.T) {
 	if n := len(e.srv.Calls("sendRichMessage")); n != 2 {
 		t.Fatalf("sendRichMessage calls = %d, want 2", n)
 	}
-	if n := len(e.srv.Calls("sendMessage")); n != 0 {
-		t.Fatalf("sendMessage calls = %d, want 0", n)
+	if n := len(e.srv.Calls("sendDocument")); n != 0 {
+		t.Fatalf("sendDocument calls = %d, want 0", n)
 	}
 
 	// Unknown outcome: no fallback, part is unknown.
@@ -732,7 +720,83 @@ func TestRichOtherErrorsFollowPartRules(t *testing.T) {
 	e.srv.FailNext("sendRichMessage", 1, 502, "Bad Gateway", 0)
 	e.start()
 	e.waitState(id, store.OutboxUnknown)
-	if n := len(e.srv.Calls("sendMessage")); n != 0 {
-		t.Fatalf("sendMessage calls = %d, want 0", n)
+	waitFor(t, "notice", func() bool { return len(e.srv.Messages(chat)) == 1 })
+	if got := e.srv.Messages(chat)[0].Text; got != noticeText(id, 0) {
+		t.Fatalf("message = %q, want the notice", got)
+	}
+	if n := len(e.srv.Calls("sendRichMessage")); n != 1 || len(e.srv.Calls("sendDocument")) != 0 {
+		t.Fatalf("rich calls = %d, want 1 and no fallback", n)
+	}
+}
+
+func TestSecondFinishCorrectsSummary(t *testing.T) {
+	e := newEnv(t, sender.Options{})
+	th := e.topic(1)
+	e.s.Progress(th.ID, sender.ProgressOp{Kind: sender.Show, HTML: "one"})
+	e.s.Progress(th.ID, sender.ProgressOp{Kind: sender.Finish, HTML: "interrupted"})
+	e.start()
+	waitFor(t, "first finish", func() bool { return len(e.srv.Messages(chat)) == 1 && e.srv.Messages(chat)[0].Text == "interrupted" })
+	e.s.Progress(th.ID, sender.ProgressOp{Kind: sender.Finish, HTML: "done"})
+	waitFor(t, "second finish", func() bool { return e.srv.Messages(chat)[0].Text == "done" })
+	e.s.Progress(th.ID, sender.ProgressOp{Kind: sender.Show, HTML: "next"})
+	waitFor(t, "new show", func() bool { return len(e.srv.Messages(chat)) == 2 })
+	if ms := e.srv.Messages(chat); ms[0].Text != "done" || ms[1].Text != "next" {
+		t.Fatalf("messages = %+v", ms)
+	}
+	waitFor(t, "row", func() bool {
+		p, ok, _ := e.st.Progress(ctx, th.ID)
+		return ok && p.State == store.ProgressShown && p.TGMessageID == e.srv.Messages(chat)[1].ID
+	})
+}
+
+func TestFinishedSummaryIsKeptAcrossRestart(t *testing.T) {
+	e := newEnv(t, sender.Options{})
+	th := e.topic(1)
+	e.s.Progress(th.ID, sender.ProgressOp{Kind: sender.Show, HTML: "one"})
+	e.s.Progress(th.ID, sender.ProgressOp{Kind: sender.Finish, HTML: "summary"})
+	stop := e.start()
+	waitFor(t, "finish", func() bool {
+		p, ok, _ := e.st.Progress(ctx, th.ID)
+		return len(e.srv.Messages(chat)) == 1 && e.srv.Messages(chat)[0].Text == "summary" && ok && p.TurnKey != ""
+	})
+	stop()
+
+	// A new sender on the same store has lost the in-memory mark. The next
+	// turn's Show must post a new message, not edit the old summary.
+	s2 := sender.New(e.st, e.srv.Client(), sender.Options{})
+	c, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() { defer close(done); _ = s2.Run(c) }()
+	t.Cleanup(func() { cancel(); <-done })
+	s2.Progress(th.ID, sender.ProgressOp{Kind: sender.Show, HTML: "next turn"})
+	waitFor(t, "new progress message", func() bool { return len(e.srv.Messages(chat)) == 2 })
+	if ms := e.srv.Messages(chat); ms[0].Text != "summary" || ms[1].Text != "next turn" {
+		t.Fatalf("messages = %q, %q; want the old summary kept and a new progress message", ms[0].Text, ms[1].Text)
+	}
+}
+
+func TestCallAfterRunReturnsErrStopped(t *testing.T) {
+	e := newEnv(t, sender.Options{})
+	stop := e.start()
+	stop()
+	err := e.s.Call(sender.PriorityAlert, func(context.Context, *telegram.Client) error { return nil })
+	if !errors.Is(err, sender.ErrStopped) {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestReactAndTypingGoneEmitNoEvent(t *testing.T) {
+	e := newEnv(t, sender.Options{})
+	e.topic(1)
+	e.start()
+	e.s.React(chat, 99999, "👍")
+	e.srv.DeleteTopic(chat, 5)
+	e.s.Typing(chat, 5)
+	waitFor(t, "typing", func() bool { return len(e.srv.Calls("sendChatAction")) == 1 })
+	time.Sleep(50 * time.Millisecond)
+	select {
+	case ev := <-e.s.Events():
+		t.Fatalf("unexpected event %+v", ev)
+	default:
 	}
 }

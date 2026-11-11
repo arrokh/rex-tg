@@ -99,9 +99,9 @@ func alertMarkup(id int64, opts []store.AlertOption) *telegram.InlineKeyboardMar
 func preBlock(lines []string, limit int) string {
 	clean := make([]string, len(lines))
 	for i, l := range lines {
-		clean[i] = format.Redact(strings.TrimRight(l, " \t\r"))
+		clean[i] = strings.TrimRight(l, " \t\r")
 	}
-	text := strings.Join(clean, "\n")
+	text := format.Redact(strings.Join(clean, "\n")) // once, so multi-line secrets match
 	if r := []rune(text); len(r) > limit {
 		text = "…" + string(r[len(r)-limit:])
 	}
@@ -173,7 +173,7 @@ func (d *daemon) createAlert(th store.Thread, kind string) {
 	}
 	text := head
 	if len(lines) > 0 {
-		text += "\n" + preBlock(lines, alertMaxText)
+		text += "\n" + preBlock(lastLines(format.Redact(screen), alertLines), alertMaxText)
 	}
 	var msg telegram.Message
 	err = d.snd.Call(sender.PriorityAlert, func(ctx context.Context, tg *telegram.Client) error {

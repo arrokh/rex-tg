@@ -10,7 +10,6 @@ import (
 	"strings"
 	"time"
 
-	"rex-tg/internal/format"
 	"rex-tg/internal/inbound"
 	"rex-tg/internal/store"
 	"rex-tg/internal/telegram"
@@ -84,7 +83,7 @@ func (d *daemon) media(u telegram.Update, m *telegram.Message, th store.Thread) 
 				return
 			}
 			text = strings.TrimSpace(text)
-			d.replyTopic(th, fmt.Sprintf("voice:%d", update), "🎤 "+format.Escape(text))
+			d.replyTopic(th, fmt.Sprintf("voice:%d", update), "🎤 "+esc(text))
 			d.emit(evQueueText{threadID: th.ID, orig: update, tgMsg: msg, text: text, kind: "voice", action: inbound.ActText})
 		})
 	default:

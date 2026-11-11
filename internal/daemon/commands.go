@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -125,13 +126,13 @@ func (d *daemon) renderAgents(views []registry.AgentView) (string, *telegram.Inl
 		}
 		switch {
 		case v.Conversation == nil:
-			fmt.Fprintf(&b, "\n%s %s · (waiting for session)", emoji, format.Escape(name))
+			fmt.Fprintf(&b, "\n%s %s · (waiting for session)", emoji, esc(name))
 		default:
 			guess := ""
 			if v.Resolution == store.SourceGuess {
 				guess = " (guess)"
 			}
-			fmt.Fprintf(&b, "\n%s %s · %s%s", emoji, format.Escape(name), label, guess)
+			fmt.Fprintf(&b, "\n%s %s · %s%s", emoji, esc(name), label, guess)
 		}
 		var detail []string
 		if v.Conversation != nil && v.Conversation.Title != "" {
@@ -141,7 +142,7 @@ func (d *daemon) renderAgents(views []registry.AgentView) (string, *telegram.Inl
 			detail = append(detail, "Rex: "+v.Pane.Label)
 		}
 		if len(detail) > 0 {
-			fmt.Fprintf(&b, "\n   %s", format.Escape(strings.Join(detail, "   ")))
+			fmt.Fprintf(&b, "\n   %s", esc(strings.Join(detail, "   ")))
 		}
 		btn := telegram.InlineKeyboardButton{Text: "Open " + name, CallbackData: fmt.Sprintf("o:%d", v.Pane.ID)}
 		if v.Thread != nil && v.Thread.Status != store.ThreadClosed {
@@ -226,7 +227,7 @@ func (d *daemon) topicsText() string {
 		if th.Muted {
 			mute = " 🔕"
 		}
-		fmt.Fprintf(&b, "\n%s %s · %s%s", emoji, format.Escape(th.Name), th.Status, mute)
+		fmt.Fprintf(&b, "\n%s %s · %s%s", emoji, esc(th.Name), th.Status, mute)
 	}
 	if n == 0 {
 		return "No topics yet. Use /agents to open one."
@@ -290,6 +291,12 @@ func (d *daemon) topicCommand(u telegram.Update, m *telegram.Message, th store.T
 		d.keysCommand(th, upd, keys)
 	case "key":
 		keys := strings.Fields(r.Args)
+		for _, k := range keys {
+			if !keyNameRe.MatchString(k) {
+				reply("key", "Key names use letters, digits, + - _ only, for example ctrl+c or down.")
+				return
+			}
+		}
 		if len(keys) == 0 || len(keys) > 10 {
 			reply("key", "Usage: /key &lt;keys&gt;, for example /key ctrl+c or /key down enter. At most 10 keys.")
 			return
@@ -328,15 +335,15 @@ func (d *daemon) topicCommand(u telegram.Update, m *telegram.Message, th store.T
 func (d *daemon) infoText(th store.Thread) string {
 	ctx := d.ctx
 	var b strings.Builder
-	fmt.Fprintf(&b, "ℹ️ <b>%s</b>\nTopic: %s", format.Escape(th.Name), th.Status)
+	fmt.Fprintf(&b, "ℹ️ <b>%s</b>\nTopic: %s", esc(th.Name), th.Status)
 	if conv, err := d.st.Conversation(ctx, th.CurrentConversationID); err == nil {
 		title := conv.Title
 		if title == "" {
 			title = conv.NativeID
 		}
-		fmt.Fprintf(&b, "\nSession: %s (%s)", format.Escape(format.Truncate(title, 100)), conv.Runtime)
+		fmt.Fprintf(&b, "\nSession: %s (%s)", esc(format.Truncate(title, 100)), conv.Runtime)
 		if conv.CWD != "" {
-			fmt.Fprintf(&b, "\nFolder: %s", format.Escape(d.tildePath(conv.CWD)))
+			fmt.Fprintf(&b, "\nFolder: %s", esc(d.tildePath(conv.CWD)))
 		}
 	}
 	if p, ok, err := d.st.PaneByConversation(ctx, th.CurrentConversationID); err == nil && ok {
@@ -344,7 +351,7 @@ func (d *daemon) infoText(th store.Thread) string {
 		if state == "" {
 			state = "unknown"
 		}
-		fmt.Fprintf(&b, "\nPane: %s · state %s", format.Escape(firstNonEmpty(p.Label, p.Block)), format.Escape(state))
+		fmt.Fprintf(&b, "\nPane: %s · state %s", esc(firstNonEmpty(p.Label, p.Block)), format.Escape(state))
 		if !p.StateAt.IsZero() {
 			fmt.Fprintf(&b, " since %s", p.StateAt.Local().Format("15:04:05"))
 		}
@@ -393,7 +400,7 @@ func (d *daemon) screenCommand(th store.Thread, upd int64, args string) {
 			d.replyTopic(th, tag, "Could not read the screen: Rex is not reachable.")
 			return
 		}
-		lines := lastLines(screen, n)
+		lines := lastLines(format.Redact(screen), n) // before cutting, so a multi-line secret is whole
 		if len(lines) == 0 {
 			d.replyTopic(th, tag, "The screen is empty.")
 			return
@@ -555,3 +562,10 @@ func answerWord(label string) string {
 	}
 	return ""
 }
+
+// esc redacts secrets, then escapes the text for Telegram HTML.
+func esc(s string) string { return format.Escape(format.Redact(s)) }
+
+// keyNameRe is what /key accepts: plain key names such as enter, ctrl+c, or
+// f5. Anything that starts with a dash could be read as an option of rex.
+var keyNameRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9+_-]*$`)

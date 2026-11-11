@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -354,17 +355,55 @@ func (d *daemon) startTyping(th store.Thread, in store.Inbound, res prepResult) 
 	})
 }
 
-// typeInto pastes the text, waits, and presses the submit key.
+// Outcomes of typeInto that are not plain failures.
+var (
+	errPausedBefore = errors.New("typing is paused")
+	errGoneBefore   = errors.New("the agent is not in front")
+	errRetryBefore  = errors.New("the pane could not be checked")
+	errStoppedAfter = errors.New("the text was pasted but Enter was not pressed")
+	errPaste        = errors.New("the paste failed")
+	errSubmit       = errors.New("pressing the submit key failed")
+)
+
+// safeNow re-checks, right before a key goes out, that typing is not paused
+// and that the prepared agent process is still in front of the pane.
+func (d *daemon) safeNow(pane store.Pane) (paused, inFront bool, err error) {
+	if d.paused.Load() {
+		return true, false, nil
+	}
+	proc, err := d.rx.Process(d.ctx, pane.Session, pane.Block)
+	if err != nil {
+		return false, false, err
+	}
+	return false, registry.AgentInFront(proc, pane.PID, pane.ProcessName), nil
+}
+
+// typeInto pastes the text, waits, and presses the submit key. The safety
+// checks run again before the paste and before the submit key. Errors never
+// carry Rex's output, which could hold the typed text.
 func (d *daemon) typeInto(pane store.Pane, text string, delay time.Duration, submit string) error {
 	ctx := d.ctx
+	paused, front, err := d.safeNow(pane)
+	switch {
+	case err != nil:
+		return errRetryBefore
+	case paused:
+		return errPausedBefore
+	case !front:
+		return errGoneBefore
+	}
 	if err := d.rx.Paste(ctx, pane.Session, pane.Block, text); err != nil {
-		return fmt.Errorf("paste: %w", err)
+		return errPaste
 	}
 	if delay > 0 && !sleepCtx(ctx, delay) {
 		return ctx.Err()
 	}
+	// Enter must not reach a shell, and /pause must stop it too.
+	if paused, front, err := d.safeNow(pane); err != nil || paused || !front {
+		return errStoppedAfter
+	}
 	if err := d.rx.SendKeys(ctx, pane.Session, pane.Block, submit); err != nil {
-		return fmt.Errorf("submit: %w", err)
+		return errSubmit
 	}
 	if err := d.reg.MarkTyped(ctx, pane.ID, d.now()); err != nil {
 		d.log.Warn("mark typed", "err", err)
@@ -378,8 +417,21 @@ func (d *daemon) onTyped(e evTyped) {
 	delete(d.busy, e.thread)
 	d.dirty[e.thread] = true
 	now := d.now()
+	switch {
+	case errors.Is(e.err, errPausedBefore), errors.Is(e.err, errRetryBefore):
+		// Nothing was typed. The message waits and is checked again.
+		if err := d.st.SetInboundState(d.ctx, e.in.UpdateID, store.InboundQueued, "", now); err != nil {
+			d.log.Warn("typing: state", "err", err)
+		}
+		return
+	case errors.Is(e.err, errGoneBefore):
+		if th, err := d.st.Thread(d.ctx, e.thread); err == nil {
+			d.refuse(th, e.in, inbound.ReasonAgentNotFront)
+		}
+		return
+	}
 	if e.err != nil {
-		d.log.Warn("typing failed", "thread", e.thread, "err", e.err)
+		d.log.Warn("typing failed", "thread", e.thread, "reason", e.err.Error()) // no raw Rex output: it may hold the text
 		if err := d.st.SetInboundState(d.ctx, e.in.UpdateID, store.InboundUnknown, "typing failed", now); err != nil {
 			d.log.Warn("typing: state", "err", err)
 		}
