@@ -70,9 +70,58 @@ func TestPairing(t *testing.T) {
 	})
 	e2.start()
 	e2.tg.PushMessage(chatID, 0, ownerID, "/start "+expired)
-	e2.never("pairing with an expired code", 700*time.Millisecond, func() bool { return len(e2.botMessages(0)) > 0 })
+	// The code is right, so the sender is the owner and is told it expired.
+	e2.waitText(0, "expired")
 	if _, ok, _ := e2.peek().Get(context.Background(), "owner_user_id"); ok {
 		t.Fatal("an expired code paired the owner")
+	}
+}
+
+// With Threaded Mode, Telegram puts every private-chat message in a topic,
+// and it creates a topic for a new conversation. There is no main chat.
+func TestThreadedPrivateChatHasNoMainChat(t *testing.T) {
+	const auto = 77 // a topic that Telegram created for the user's message
+	e := newEnv(t)
+	var code string
+	e.withStore(func(st *store.Store) {
+		var err error
+		if code, err = daemon.NewPairingCode(context.Background(), st, time.Now()); err != nil {
+			t.Fatal(err)
+		}
+	})
+	p := e.newPi("pi-threaded")
+	p.User("question")
+	p.Final("answer")
+	e.start()
+
+	// Pairing from a topic answers in that topic.
+	e.tg.PushMessage(chatID, auto, ownerID, "/start "+code)
+	e.waitText(auto, "Paired")
+
+	// A topic that is not linked to an agent works as the main chat.
+	e.hookPi(p, "startup")
+	e.waitFor("a resolved pane", func() bool {
+		pn, ok, err := e.peek().PaneByBlock(context.Background(), "local", rexBlock)
+		return err == nil && ok && pn.ConversationID != 0
+	})
+	e.say(auto, "/agents")
+	list := e.waitText(auto, "Active agents")
+	if e.hasText(auto, "not linked") {
+		t.Fatalf("/agents in an unlinked topic was answered as unlinked: %s", e.dump())
+	}
+
+	// Plain text there is not typed anywhere; it gets a hint.
+	e.say(auto, "hello")
+	e.waitText(auto, "not linked to an agent")
+
+	// The open button answers in the topic where it was pressed.
+	e.pressButton(list, buttonData(list, "Open"))
+	e.waitText(auto, "Opened")
+	if len(e.botMessages(0)) != 0 {
+		t.Fatalf("the bot wrote outside the topics: %s", e.dump())
+	}
+	if len(e.pastes()) != 0 {
+		t.Fatalf("typed into the pane: %v", e.pastes())
 	}
 }
 
@@ -1431,7 +1480,11 @@ func TestPairingExpiryUsesTheInjectedClock(t *testing.T) {
 	opt.Now = func() time.Time { return time.Now().Add(11 * time.Minute) }
 	e.startWith(opt)
 	e.tg.PushMessage(chatID, 0, ownerID, "/start "+code)
-	e.never("pairing after the code expired", 700*time.Millisecond, func() bool { return len(e.botMessages(0)) > 0 })
+	// The right code, but expired by the injected clock: the owner is told so.
+	e.waitText(0, "expired")
+	if e.hasText(0, "Paired") {
+		t.Fatalf("paired after the code expired: %s", e.dump())
+	}
 	if _, ok, _ := e.peek().Get(context.Background(), "owner_user_id"); ok {
 		t.Fatal("paired with an expired code")
 	}

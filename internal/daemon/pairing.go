@@ -79,14 +79,18 @@ func (d *daemon) tryPair(m *telegram.Message) {
 		d.log.Warn("pairing is locked; run rex-tg login again", "from", m.From.ID)
 		return
 	}
-	if exp := d.kvInt("pairing_expires_at"); exp == 0 || d.now().UnixMilli() > exp {
-		d.log.Warn("pairing code expired", "from", m.From.ID)
-		return
-	}
 	got := codeHash(r.Args)
 	if subtle.ConstantTimeCompare([]byte(got), []byte(want)) != 1 {
 		d.kvSetInt("pairing_attempts", attempts+1)
 		d.log.Warn("wrong pairing code", "from", m.From.ID, "attempts", attempts+1)
+		return
+	}
+	// The code is right, so the sender is the owner: an expired code gets an
+	// answer, in the topic the code was sent from (Threaded Mode puts every
+	// message in a topic). A wrong code still gets no answer.
+	if exp := d.kvInt("pairing_expires_at"); exp == 0 || d.now().UnixMilli() > exp {
+		d.log.Warn("pairing code expired", "from", m.From.ID)
+		d.say(m.Chat.ID, m.MessageThreadID, "⌛ This pairing code has expired. Run <code>rex-tg pair</code> on your Mac for a new one.", nil)
 		return
 	}
 	d.kvSetInt("owner_user_id", m.From.ID)
@@ -98,5 +102,5 @@ func (d *daemon) tryPair(m *telegram.Message) {
 	}
 	d.ownerUser, d.ownerChat = m.From.ID, m.Chat.ID
 	d.log.Info("paired", "owner", m.From.ID)
-	d.say(m.Chat.ID, 0, "✅ Paired. Use /agents to list the agents in your Rex panes. /help lists the commands.", nil)
+	d.say(m.Chat.ID, m.MessageThreadID, "✅ Paired. Use /agents to list the agents in your Rex panes. /help lists the commands.", nil)
 }

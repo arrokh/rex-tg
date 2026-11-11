@@ -15,7 +15,7 @@ import (
 
 const (
 	textOnly      = "Only text is supported for now."
-	notLinkedText = "This topic is not linked. Use /agents in the main chat."
+	notLinkedText = "This topic is not linked to an agent. Send /agents to list the agents and open one."
 )
 
 // onUpdates stores and routes a batch of updates (flow 3). The poll offset
@@ -126,6 +126,18 @@ func (d *daemon) mainMessage(u telegram.Update, m *telegram.Message) {
 func (d *daemon) topicMessage(u telegram.Update, m *telegram.Message) {
 	th, ok, err := d.st.ThreadByTopic(d.ctx, m.Chat.ID, m.MessageThreadID)
 	if err != nil || !ok || th.Status == store.ThreadClosed {
+		// With Threaded Mode, a private chat has no main chat: Telegram puts
+		// every message in a topic and creates one for a new conversation.
+		// A topic that is not linked to an agent therefore works as the
+		// main chat, and the answer stays in that topic.
+		if m.Text != "" {
+			if r := inbound.RouteText(m.Text, false, d.botUser); r.Kind == inbound.RouteCommand {
+				if d.recorded(u, m, "command", m.Text, 0, store.InboundDone) {
+					d.mainCommand(r, m.Chat.ID, m.MessageThreadID, false)
+				}
+				return
+			}
+		}
 		if d.recorded(u, m, "other", "", 0, store.InboundDone) {
 			d.say(m.Chat.ID, m.MessageThreadID, notLinkedText, nil)
 		}
@@ -198,7 +210,11 @@ func (d *daemon) onCallback(u telegram.Update) {
 	switch parts[0] {
 	case "o":
 		if id, ok := arg(1); ok {
-			d.openTopic(cb.ID, id)
+			var replyThread int64 // answer where the button was pressed
+			if cb.Message != nil {
+				replyThread = cb.Message.MessageThreadID
+			}
+			d.openTopic(cb.ID, id, replyThread)
 			return
 		}
 	case "s":

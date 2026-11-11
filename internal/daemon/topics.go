@@ -195,8 +195,9 @@ func (d *daemon) onState(c registry.Change) {
 }
 
 // openTopic creates the Telegram topic for the session in a pane (flow 6).
-// The `o:<pane id>` button calls it.
-func (d *daemon) openTopic(cbID string, paneID int64) {
+// The `o:<pane id>` button calls it. replyThread is the topic where the button
+// was pressed (0 outside topics); the link to the new topic is posted there.
+func (d *daemon) openTopic(cbID string, paneID, replyThread int64) {
 	if d.opening[paneID] {
 		d.answerCallback(cbID, "Opening…", false)
 		return
@@ -226,7 +227,7 @@ func (d *daemon) openTopic(cbID string, paneID int64) {
 			return
 		case v.Thread != nil && v.Thread.Status != store.ThreadClosed:
 			d.answerCallback(cbID, "This session already has a topic.", false)
-			d.say(chat, 0, "↗ "+format.Escape(v.Thread.Name), linkMarkup("Open topic", d.topicLink(v.Thread.MessageThreadID)))
+			d.say(chat, replyThread, "↗ "+format.Escape(v.Thread.Name), linkMarkup("Open topic", d.topicLink(v.Thread.MessageThreadID)))
 			return
 		}
 		conv := *v.Conversation
@@ -245,7 +246,7 @@ func (d *daemon) openTopic(cbID string, paneID int64) {
 		}
 		d.emit(evTopicCreated{chatID: chat, threadID: ft.MessageThreadID, name: name, convID: conv.ID, title: title})
 		d.answerCallback(cbID, "Topic created", false)
-		d.say(chat, 0, "🔗 Opened "+format.Escape(name), linkMarkup("Open topic", d.topicLink(ft.MessageThreadID)))
+		d.say(chat, replyThread, "🔗 Opened "+format.Escape(name), linkMarkup("Open topic", d.topicLink(ft.MessageThreadID)))
 	})
 }
 
