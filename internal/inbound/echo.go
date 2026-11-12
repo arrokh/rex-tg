@@ -85,7 +85,9 @@ func prefix(s string) string {
 // in the 10 minutes before at (oldest first). Otherwise it takes the first
 // item delivered in the 30 seconds before at whose body starts with the same
 // 40 characters as the prompt. Both compare the texts without image paths and
-// image markers (see Hash). It returns the update ID.
+// image markers (see Hash). A prompt that is only an image matches only
+// within those 30 seconds, because all such prompts look the same. It returns
+// the update ID.
 func MatchEcho(prompt string, at time.Time, delivered []Delivered) (int64, bool) {
 	items := make([]Delivered, len(delivered))
 	copy(items, delivered)
@@ -95,8 +97,14 @@ func MatchEcho(prompt string, at time.Time, delivered []Delivered) (int64, bool)
 		return !d.DeliveredAt.After(at) && !d.DeliveredAt.Before(at.Add(-w))
 	}
 	h := Hash(prompt)
+	window := hashWindow
+	if echoText(prompt) == "" {
+		// Only an image: every such prompt looks the same, so a match must be
+		// as close in time as the prefix check (a photo typed a moment ago).
+		window = prefixWindow
+	}
 	for _, d := range items {
-		if within(d, hashWindow) && d.BodyHash == h {
+		if within(d, window) && d.BodyHash == h {
 			return d.UpdateID, true
 		}
 	}

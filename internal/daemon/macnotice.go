@@ -54,19 +54,33 @@ type evMacSent struct {
 // showMacNotice shows the notice of a topic's hold in the state that html
 // renders (core): a post for a new hold, else an edit.
 func (d *daemon) showMacNotice(th store.Thread, html string) {
-	n := d.macNotes[th.ID]
+	n := d.storedMacNote(th)
 	if n == nil {
 		n = &macNote{chat: th.ChatID}
-		if v, ok, err := d.st.Get(d.ctx, macNoticeKey(th.ID)); err == nil && ok {
-			// The hold began before a restart: edit its notice.
-			if _, err := fmt.Sscanf(v, "%d:%d", &n.chat, &n.msg); err != nil {
-				n.chat, n.msg = th.ChatID, 0
-			}
-		}
 		d.macNotes[th.ID] = n
 	}
 	n.want = html
 	d.pushMacNotice(th, n)
+}
+
+// storedMacNote returns the notice of a topic's hold: the one in memory, or
+// after a restart the one in the store (core). Nil when there is none.
+func (d *daemon) storedMacNote(th store.Thread) *macNote {
+	if n := d.macNotes[th.ID]; n != nil {
+		return n
+	}
+	v, ok, err := d.st.Get(d.ctx, macNoticeKey(th.ID))
+	if err != nil || !ok {
+		return nil
+	}
+	n := &macNote{}
+	if _, err := fmt.Sscanf(v, "%d:%d", &n.chat, &n.msg); err != nil || n.msg == 0 {
+		return nil
+	}
+	// The hold began before a restart. Its text is not known, so the next
+	// state edits it in full.
+	d.macNotes[th.ID] = n
+	return n
 }
 
 // pushMacNotice sends the wanted state of a notice when it is not on its way

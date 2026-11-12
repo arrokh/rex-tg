@@ -10,7 +10,8 @@ import (
 // one. So the daemon watches the binary that launchd starts (Options.SelfPath,
 // a stable path that survives an upgrade). When it changed and the new file
 // stayed the same for one more check (the copy is complete), the daemon
-// waits until no message is being typed and stops with ErrUpdated. launchd
+// waits until no message is being typed and no send is under way, and
+// stops with ErrUpdated. launchd
 // starts it again from the same path, now the new binary.
 //
 // Nothing of the topics is lost: the links of topics and sessions, the
@@ -82,6 +83,9 @@ func (d *daemon) checkUpdate(now time.Time) {
 	}
 	if len(d.delivering) > 0 || len(d.busy) > 0 {
 		return // never stop between a paste and its Enter
+	}
+	if !d.snd.Idle() {
+		return // nor in the middle of a send: it would look lost after the start
 	}
 	d.fatal = ErrUpdated
 }

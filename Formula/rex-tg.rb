@@ -25,9 +25,11 @@ class RexTg < Formula
         rex-tg install    # add the hooks and the launchd job
         # then send /start <code> to your bot, and run: rex-tg doctor
 
-      If you installed rex-tg before with `make install`, remove
-      ~/.local/bin/rex-tg, or run `rex-tg install` again from this binary.
-      Then the hooks and launchd point at one binary.
+      If you installed rex-tg before with `make install`, run
+        #{opt_bin}/rex-tg install
+        ln -sf #{opt_bin}/rex-tg ~/.local/bin/rex-tg
+      The link keeps agents that run already working; they read their hooks
+      when they started. Then everything uses this one binary.
       After `brew upgrade rex-tg`, the daemon restarts itself within about
       a minute, and the topics stay linked. Run `rex-tg install` again only
       when the release notes say the hooks changed. `rex-tg doctor` checks it.

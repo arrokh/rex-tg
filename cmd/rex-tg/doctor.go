@@ -108,8 +108,8 @@ func doctorCmd(ctx context.Context, args []string, env Env) int {
 		d.ok("this binary: %s", p.Binary)
 		// A second copy (an old `make install` next to Homebrew) makes a bare
 		// `rex-tg install` point the hooks at whichever comes first on PATH.
-		if old := filepath.Join(env.Home, ".local", "bin", "rex-tg"); old != p.Binary && install.FileExists(old) {
-			d.warn("another copy is at %s; remove it, so the hooks, launchd, and your shell use one binary", old)
+		if old := filepath.Join(env.Home, ".local", "bin", "rex-tg"); old != p.Binary && install.FileExists(old) && !sameBinary(old, p.Binary) {
+			d.warn("another copy is at %s; replace it with a link to %s, so the hooks, launchd, and your shell use one binary", old, p.Binary)
 		}
 		hookLine(d, "Claude hooks", rep.Claude)
 		hookLine(d, "Codex hooks", rep.Codex)
@@ -172,6 +172,17 @@ func fileLine(d *doctorOut, name string, f install.FileReport) {
 	default:
 		d.warn("%s is %s: missing, or it names another rex-tg binary (%s); run `rex-tg install` with this binary", name, f.State, f.Path)
 	}
+}
+
+// sameBinary tells whether two paths lead to one file, for example a link in
+// ~/.local/bin to the Homebrew binary.
+func sameBinary(a, b string) bool {
+	fa, err := os.Stat(a)
+	if err != nil {
+		return false
+	}
+	fb, err := os.Stat(b)
+	return err == nil && os.SameFile(fa, fb)
 }
 
 // lockHeld tries a non-blocking flock and releases it at once.

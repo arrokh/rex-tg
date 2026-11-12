@@ -362,8 +362,13 @@ func (d *daemon) work(th store.Thread, acts []turn.Action) []store.OutboxItem {
 			d.boardDirty()
 		case turn.HeldAnswer:
 			d.holdAnswer(th.ID, a)
-			if n := d.macNotes[th.ID]; n != nil {
-				d.pushMacNotice(th, n) // the notice gets its "📄 Last answer" button
+			if n := d.storedMacNote(th); n != nil {
+				if n.want == "" { // after a restart: the text the tracker kept
+					n.want = d.tracker(th).MacNoticeHTML()
+				}
+				if n.want != "" {
+					d.pushMacNotice(th, n) // the notice gets its "📄 Last answer" button
+				}
 			}
 		}
 	}

@@ -229,11 +229,32 @@ func (d *daemon) applyControl(th store.Thread, conv store.Conversation, c agents
 		}
 	}
 	d.replyTopic(th, tag, "⚙️ Sending <code>"+format.Escape(text)+"</code> to the agent.")
-	d.emit(evQueueText{threadID: th.ID, orig: orig, tgMsg: tgMsg, text: text, kind: "text", action: inbound.ActText})
-	// Some agents record a setting only at their next turn (Codex). Keep the
-	// new value now, so a second change right after does not undo the first.
-	// The transcript corrects it when it shows another value.
-	d.ctlMerge(conv.ID, map[string]string{c.Name: v}, false)
+	// Some agents record a setting only at their next turn (Codex). The new
+	// value is kept once the command is typed (onTyped), so a second change
+	// right after does not undo the first. A command that is refused,
+	// cancelled, or expires changes nothing. The transcript corrects the
+	// value when it shows another one.
+	d.emit(evQueueText{threadID: th.ID, orig: orig, tgMsg: tgMsg, text: text, kind: "text", action: inbound.ActText,
+		ctl: &ctlSet{conv: conv.ID, name: c.Name, value: v}})
+}
+
+// ctlSet is the value that a queued control command sets, kept until the
+// command is typed (core: daemon.ctlPending, by row id).
+type ctlSet struct {
+	conv        int64
+	name, value string
+}
+
+// controlTyped keeps the value of a control command that was typed (core).
+func (d *daemon) controlTyped(row int64, typed bool) {
+	p, ok := d.ctlPending[row]
+	if !ok {
+		return
+	}
+	delete(d.ctlPending, row)
+	if typed {
+		d.ctlMerge(p.conv, map[string]string{p.name: p.value}, false)
+	}
 }
 
 // maxControlButtons caps the buttons of a card.

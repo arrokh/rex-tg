@@ -13,6 +13,7 @@ import (
 	"io"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"rex-tg/internal/store"
@@ -117,6 +118,7 @@ const (
 
 // Sender writes to Telegram.
 type Sender struct {
+	inflight   atomic.Int64 // requests to Telegram under way (execute)
 	st         *store.Store
 	tg         *telegram.Client
 	now        func() time.Time
@@ -614,7 +616,13 @@ func (s *Sender) pick(ctx context.Context) work {
 	return best
 }
 
+// Idle reports whether no request to Telegram is under way, so a stop now
+// cuts no send in half.
+func (s *Sender) Idle() bool { return s.inflight.Load() == 0 }
+
 func (s *Sender) execute(ctx context.Context, w work) {
+	s.inflight.Add(1)
+	defer s.inflight.Add(-1)
 	switch w.kind {
 	case wPart:
 		s.sendPart(ctx, w.part)

@@ -501,3 +501,24 @@ func TestDaemonWatchesItsBinaryOnlyUnderLaunchd(t *testing.T) {
 		}
 	}
 }
+
+func TestSameBinary(t *testing.T) {
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "rex-tg")
+	other := filepath.Join(dir, "other")
+	link := filepath.Join(dir, "link")
+	for _, f := range []string{bin, other} {
+		if err := os.WriteFile(f, []byte(f), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink(bin, link); err != nil {
+		t.Fatal(err)
+	}
+	if !sameBinary(link, bin) {
+		t.Error("a link to the binary counts as another copy")
+	}
+	if sameBinary(other, bin) || sameBinary(filepath.Join(dir, "none"), bin) {
+		t.Error("another file counts as the same binary")
+	}
+}

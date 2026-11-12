@@ -135,8 +135,11 @@ func Run(ctx context.Context, opt Options) error {
 	if opt.HasProgram != nil {
 		d.hasProgram = opt.HasProgram
 	}
-	if d.self = newSelfWatch(opt.SelfPath); d.self != nil {
+	switch d.self = newSelfWatch(opt.SelfPath); {
+	case d.self != nil:
 		log.Info("restarts itself when its binary is replaced", "path", opt.SelfPath)
+	case opt.SelfPath != "":
+		log.Warn("cannot watch the binary; after an update, restart the daemon by hand", "path", opt.SelfPath)
 	}
 	return d.run(ctx)
 }

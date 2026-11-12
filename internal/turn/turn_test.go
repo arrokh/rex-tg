@@ -873,6 +873,20 @@ func TestMacHoldSurvivesARestart(t *testing.T) {
 	}
 }
 
+func TestMacHoldEndsWhenTheSettingIsOffAfterARestart(t *testing.T) {
+	x := newH(t, turn.Config{}, macHold)
+	x.ev(prompt("p1", "on the mac"), 0)
+	off := turn.Settings{Mode: "progress", ShowMacPrompts: true}
+	x.k = turn.Restore(turn.Config{}, off, x.k.Snapshot())
+	as := x.ev(text("a1", agents.Final, "the answer"), 5)
+	if p := find[turn.Post](t, as); p.Markdown != "the answer" {
+		t.Errorf("with mac_notice off, the answer of a turn held before is %s, want posted", types(as))
+	}
+	if strings.Contains(types(as), "MacNotice") || strings.Contains(types(as), "HeldAnswer") {
+		t.Errorf("hold actions with mac_notice off: %s", types(as))
+	}
+}
+
 func TestMacNoticeOffShowsMacTurns(t *testing.T) {
 	x := newH(t, turn.Config{}, turn.Settings{Mode: "progress", ShowMacPrompts: true})
 	as := x.ev(prompt("p1", "typed on the mac"), 0)

@@ -8,6 +8,7 @@ This file has the details that the [README](../README.md) leaves out.
 
 ```sh
 brew tap arrokh/rex-tg https://github.com/arrokh/rex-tg
+brew trust --formula arrokh/rex-tg/rex-tg   # Homebrew asks for this for a third-party tap
 brew install rex-tg           # the newest release
 brew install --HEAD rex-tg    # or: build `main`
 ```
@@ -20,7 +21,12 @@ The repository is private. Homebrew gets it with `git clone`, so the tap and the
 
 Upgrade with `brew upgrade rex-tg` (add `--fetch-HEAD` for a HEAD install). The daemon restarts itself within about a minute, and the topics stay linked. Run `rex-tg install` again only when the release notes say the hooks changed. `rex-tg doctor` checks it.
 
-If you installed with `make install` before, remove `~/.local/bin/rex-tg`, or run `rex-tg install` again from the brew binary. Then the hooks and launchd point at one binary.
+If you installed with `make install` before, move to the brew binary in two steps:
+
+1. Run `"$(brew --prefix)/bin/rex-tg" install`. The hooks, the pi extension, and launchd then name the brew binary, and the daemon restarts with it.
+2. Replace the old copy with a link: `ln -sf "$(brew --prefix)/opt/rex-tg/bin/rex-tg" ~/.local/bin/rex-tg`. Do not just delete it: agents that run already read their hook settings when they started, and keep calling the old path until they restart.
+
+`rex-tg doctor` warns while a second copy is left.
 
 To remove: run `rex-tg uninstall` first, then `brew uninstall rex-tg`.
 

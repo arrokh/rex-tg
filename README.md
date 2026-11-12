@@ -29,6 +29,7 @@ Not supported: T3 Code panes, and Rex servers on other computers.
 2. **Install.** With Homebrew:
    ```sh
    brew tap arrokh/rex-tg https://github.com/arrokh/rex-tg
+   brew trust --formula arrokh/rex-tg/rex-tg   # Homebrew asks for this for a third-party tap
    brew install rex-tg
    ```
    Or build from source:

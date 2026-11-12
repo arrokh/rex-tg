@@ -510,6 +510,7 @@ The first line is the topic name (section 7), the state, and how long the agent 
 - Edits make no sound, come at most every 3 seconds, and happen only when the text changes. Older lists stay as they were.
 - Pin the live list to keep it at hand. Its message number is kept in the key-value table (`agents_board`), so it stays live after a restart.
 - A redraw uses the registry's state, so it runs no Rex scan. `↻ Refresh` scans first.
+- The list stays within Telegram's limits (4096 characters, 100 buttons): at most 20 agents, and then "… and N more". The waiting ones come first, so they are never cut.
 
 Commands in the main chat: `/agents`, `/new` (start an agent, see below), `/topics` (topics and their states), `/status` (daemon health), `/help`.
 
@@ -726,7 +727,7 @@ Echo:
 
 - rex-tg matches the prompt in the transcript to your message by a hash of the normalized text, within 10 minutes.
 - If no hash matches, the first prompt within 30 seconds of the delivery counts as the echo when its normalized text starts with the same 40 characters. Agents sometimes change a prompt slightly when they store it.
-- Both checks compare the texts without paths to image files (`.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`) and without `[Image #N]` markers. For a photo from Telegram, rex-tg types the caption and the file's path. Claude Code attaches the image and stores `[Image #N]` and the caption instead of the path (seen live, 2026-11-12). An agent that does not attach images keeps the path.
+- Both checks compare the texts without paths to image files (`.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`) and without `[Image #N]` markers. A prompt that is only an image matches only within 30 seconds, because all such prompts look the same. For a photo from Telegram, rex-tg types the caption and the file's path. Claude Code attaches the image and stores `[Image #N]` and the caption instead of the path (seen live, 2026-11-12). An agent that does not attach images keeps the path.
 - An echo is not posted to the topic again. It only turns 👀 into 👍.
 - A message sent during a run has no `user` line in Claude Code. Its echo is the `queued_command` attachment (spike S2). Codex writes a `user` line and a `UserMessage` item for it. pi writes a `user` line after the tool result.
 
@@ -735,7 +736,7 @@ Echo:
 `brew upgrade rex-tg` and `make install` replace the binary. The running daemon keeps the old one, so it must restart, and nothing of the topics may be lost.
 
 - The hooks, the pi extension, and the launchd job name a stable path: `~/.local/bin/rex-tg`, or Homebrew's `<prefix>/opt/rex-tg/bin/rex-tg`, never the versioned Cellar folder (`install.StablePath`).
-- The daemon watches that path every 20 seconds, but only when launchd runs it: launchd puts the job's label in `XPC_SERVICE_NAME`. A daemon started by hand keeps running the old binary, because nothing would start it again. When the binary changed, and stayed the same for one more check (the copy is complete), the daemon waits until no message is being typed. Then it stops cleanly with exit status 75.
+- The daemon watches that path every 20 seconds, but only when launchd runs it: launchd puts the job's label in `XPC_SERVICE_NAME`. A daemon started by hand keeps running the old binary, because nothing would start it again. When the binary changed, and stayed the same for one more check (the copy is complete), the daemon waits until no message is being typed and no request to Telegram is under way. Then it stops cleanly with exit status 75.
 - launchd (`KeepAlive`, `SuccessfulExit` false) starts it again from the same path, now the new binary.
 - The links of topics and sessions, the transcript cursors, the turn snapshots, the queue, the outbox, the Mac hold, and the live board are in the database. The token is in the Keychain, and the proxy is in the config. So the new daemon goes on where the old one stopped, as after any restart. Telegram keeps the updates of the pause; the stored poll offset reads them.
 - `rex-tg install` runs again only when a release changes the hooks. `rex-tg doctor` reports hooks that point at another binary.

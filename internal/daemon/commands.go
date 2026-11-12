@@ -140,7 +140,12 @@ func (d *daemon) renderAgents(views []registry.AgentView, mac map[int64]bool, no
 		fmt.Fprintf(&b, "<b>Active agents (%d)</b>", len(views))
 	}
 	var rows [][]telegram.InlineKeyboardButton
-	for _, v := range views {
+	more := 0
+	for i, v := range views {
+		if len(rows) >= maxBoardAgents || b.Len() >= maxBoardText {
+			more = len(views) - i // Telegram takes 4096 characters and 100 buttons
+			break
+		}
 		emoji, state := stateEmoji(v.Pane.State)
 		if since := agoText(now, v.Pane.StateAt); since != "" && v.Conversation != nil {
 			state += " · " + since
@@ -169,12 +174,22 @@ func (d *daemon) renderAgents(views []registry.AgentView, mac map[int64]bool, no
 		}
 		rows = append(rows, []telegram.InlineKeyboardButton{{Text: text, CallbackData: fmt.Sprintf("o:%d", v.Pane.ID)}})
 	}
+	if more > 0 {
+		fmt.Fprintf(&b, "\n… and %d more (the ones that wait for you come first).", more)
+	}
 	if len(views) > 0 {
 		b.WriteString("\n\n<i>This list updates by itself.</i>")
 	}
 	rows = append(rows, []telegram.InlineKeyboardButton{{Text: "↻ Refresh", CallbackData: "ag:r"}})
 	return b.String(), &telegram.InlineKeyboardMarkup{InlineKeyboard: rows}
 }
+
+// The list stays within Telegram's limits (4096 characters, 100 buttons): at
+// most maxBoardAgents agents, and no new one after maxBoardText characters.
+const (
+	maxBoardAgents = 20
+	maxBoardText   = 3500
+)
 
 // agoText is a short, coarse age, such as "3m" or "2h". It changes seldom,
 // so the live board needs few edits.

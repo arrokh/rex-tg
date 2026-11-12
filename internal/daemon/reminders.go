@@ -34,6 +34,7 @@ type reminder struct {
 	n         int       // reminders sent (or on their way)
 	chat, msg int64     // the newest reminder message, 0 when none is known
 	last      time.Time // when the newest reminder was claimed
+	prev      time.Time // last before that claim, to give a claim back
 	busy      bool      // a send or a delete is on its way
 }
 
@@ -41,6 +42,7 @@ type reminder struct {
 type evReminder struct {
 	alert     int64
 	chat, msg int64
+	notSent   bool // the send surely never left: the claim is given back
 }
 
 // reminderOf returns the reminder state of an alert, loading it after a
@@ -88,8 +90,8 @@ func (d *daemon) tickReminders(now time.Time) {
 	}
 	if !d.remindSwept {
 		// Reminders of alerts that closed while the daemon was stopped.
-		d.remindSwept = true
 		if keys, err := d.st.KeysWithPrefix(d.ctx, remindPrefix); err == nil {
+			d.remindSwept = true // else the next look tries again
 			for _, k := range keys {
 				var id int64
 				if _, err := fmt.Sscanf(k, remindPrefix+"%d", &id); err == nil && !open[id] {
@@ -114,10 +116,12 @@ func (d *daemon) tickReminders(now time.Time) {
 		if err != nil || th.Status != store.ThreadLive {
 			continue
 		}
+		oldChat, oldMsg := r.chat, r.msg
 		r.n++
-		r.busy, r.last = true, now
+		r.busy, r.prev, r.last = true, r.last, now
+		r.chat, r.msg = 0, 0    // the old one is deleted below
 		d.saveReminder(a.ID, r) // before the send: never twice
-		d.sendReminder(th, a, r.n, now, r.chat, r.msg)
+		d.sendReminder(th, a, r.n, now, oldChat, oldMsg)
 	}
 	for id, r := range d.reminders {
 		if !open[id] && !r.busy {
@@ -149,7 +153,7 @@ func (d *daemon) sendReminder(th store.Thread, a store.Alert, n int, now time.Ti
 		if err != nil && d.ctx.Err() == nil {
 			d.log.Warn("reminder: send", "alert", alert, "n", n, "err", err)
 		}
-		d.emit(evReminder{alert: alert, chat: chat, msg: msg.MessageID})
+		d.emit(evReminder{alert: alert, chat: chat, msg: msg.MessageID, notSent: telegram.Classify(err) == telegram.ClassNotSent})
 	})
 }
 
@@ -171,6 +175,9 @@ func (d *daemon) onReminder(e evReminder) {
 	r.chat, r.msg = e.chat, e.msg
 	if e.msg == 0 {
 		r.chat = 0
+	}
+	if e.notSent && r.n > 0 {
+		r.n, r.last = r.n-1, r.prev // it never left this Mac: try it again later
 	}
 	d.saveReminder(e.alert, r)
 }

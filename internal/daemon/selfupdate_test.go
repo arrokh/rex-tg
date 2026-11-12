@@ -3,8 +3,14 @@ package daemon
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
+
+	"rex-tg/internal/agents"
+	"rex-tg/internal/registry"
+	"rex-tg/internal/store"
 )
 
 func TestSelfWatchWaitsUntilTheNewBinarySettles(t *testing.T) {
@@ -68,5 +74,34 @@ func TestAgoTextAndStateRank(t *testing.T) {
 	}
 	if !(stateRank("blocked") < stateRank("working") && stateRank("working") < stateRank("idle") && stateRank("idle") < stateRank("error")) {
 		t.Error("waiting agents must come first, then working, then idle")
+	}
+}
+
+func TestAgentListStaysWithinTelegramLimits(t *testing.T) {
+	now := time.Date(2026, 11, 12, 10, 0, 0, 0, time.UTC)
+	var views []registry.AgentView
+	for i := range 40 {
+		state := "idle"
+		if i == 39 {
+			state = "blocked" // the last one waits: it must still be shown
+		}
+		views = append(views, registry.AgentView{
+			Pane:         store.Pane{ID: int64(i + 1), Label: strings.Repeat("long pane name ", 4), State: state, StateAt: now.Add(-time.Hour)},
+			Runtime:      agents.Claude,
+			Conversation: &store.Conversation{CWD: "/work/" + strings.Repeat("folder", 8), Title: strings.Repeat("a long session title ", 5)},
+		})
+	}
+	text, markup := (&daemon{}).renderAgents(views, nil, now)
+	if n := utf8.RuneCountInString(text); n > 4096 {
+		t.Errorf("text has %d characters, over Telegram's 4096", n)
+	}
+	if len(markup.InlineKeyboard) > 100 {
+		t.Errorf("%d button rows, over Telegram's 100", len(markup.InlineKeyboard))
+	}
+	if !strings.Contains(text, "more") || !strings.Contains(text, "Active agents (40)") {
+		t.Errorf("text does not say that more agents run: %q", text[len(text)-200:])
+	}
+	if !strings.Contains(text, "waiting for you") {
+		t.Error("the agent that waits was cut, but it must come first")
 	}
 }

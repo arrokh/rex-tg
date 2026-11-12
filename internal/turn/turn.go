@@ -216,8 +216,23 @@ func New(cfg Config, s Settings) *Tracker {
 // turns runs (Settings.MacNotice).
 func (t *Tracker) OnMac() bool { return t.onMac && t.set.MacNotice }
 
+// MacNoticeHTML is the last notice of the Mac hold that the tracker asked
+// for, or "" (it is part of the Snapshot, so it survives a restart).
+func (t *Tracker) MacNoticeHTML() string { return t.macNote }
+
 // SetSettings changes the display settings. They apply from the next event.
-func (t *Tracker) SetSettings(s Settings) { t.set = s }
+func (t *Tracker) SetSettings(s Settings) {
+	t.set = s
+	t.dropHoldIfOff()
+}
+
+// dropHoldIfOff ends a Mac hold when MacNotice is off, so a turn held before
+// the setting changed (a restart with a new config) still shows its answer.
+func (t *Tracker) dropHoldIfOff() {
+	if !t.set.MacNotice {
+		t.onMac, t.quiet, t.macNote = false, false, ""
+	}
+}
 
 func (t *Tracker) progressMode() bool {
 	return t.set.Mode == "" || t.set.Mode == "progress"
@@ -687,6 +702,7 @@ func Restore(cfg Config, s Settings, snap Snapshot) *Tracker {
 	t.shown, t.lastEdit, t.dirty, t.pendingRepost, t.finishHeld = snap.Shown, snap.LastEdit, snap.Dirty, snap.PendingRepost, snap.FinishHeld
 	t.lastHTML, t.lastTyping = snap.LastHTML, snap.LastTyping
 	t.onMac, t.macPrompt, t.macNote, t.quiet, t.fromTG = snap.OnMac, snap.MacPrompt, snap.MacNote, snap.Quiet, snap.FromTG
+	t.dropHoldIfOff()
 	for _, c := range snap.Calls {
 		t.calls = append(t.calls, call{id: c.ID, name: c.Name, kind: c.Kind, label: c.Label, status: c.Status})
 	}

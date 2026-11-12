@@ -501,6 +501,7 @@ func (d *daemon) onTyped(e evTyped) {
 		return
 	}
 	if e.err != nil {
+		d.controlTyped(e.in.UpdateID, false)
 		d.log.Warn("typing failed", "thread", e.thread, "reason", e.err.Error()) // no raw Rex output: it may hold the text
 		if err := d.st.SetInboundState(d.ctx, e.in.UpdateID, store.InboundUnknown, "typing failed", now); err != nil {
 			d.log.Warn("typing: state", "err", err)
@@ -515,6 +516,7 @@ func (d *daemon) onTyped(e evTyped) {
 	if err := d.st.SetInboundState(d.ctx, e.in.UpdateID, store.InboundDelivered, "", now); err != nil {
 		d.log.Warn("typing: state", "err", err)
 	}
+	d.controlTyped(e.in.UpdateID, true)
 	d.react(e.in, "👀")
 	if dl != nil && dl.echoKey != "" {
 		// The agent recorded the prompt before the typing call returned.

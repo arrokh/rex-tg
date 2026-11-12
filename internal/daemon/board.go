@@ -35,6 +35,7 @@ type evBoard struct {
 	html      string
 	redraw    bool // the end of a redraw, not a new board
 	gone      bool // the message was deleted
+	failed    bool // the edit failed: draw again at the next chance
 }
 
 // macThreads lists the topics whose session is in use on the Mac (core), for
@@ -90,6 +91,9 @@ func (d *daemon) onBoard(e evBoard) {
 			return
 		}
 		b.shown = e.html
+		if e.failed {
+			b.dirty = true // spaced by Timing.BoardEdit; the sender backs off too
+		}
 		return
 	}
 	// A change may have come between the drawing and now, while this was not
@@ -142,6 +146,7 @@ func (d *daemon) tickBoard(now time.Time) {
 		case telegram.Classify(err) == telegram.ClassEditTargetGone:
 			res.gone = true
 		case d.ctx.Err() == nil:
+			res.failed = true
 			d.log.Debug("agents board: edit", "err", err)
 		}
 	})

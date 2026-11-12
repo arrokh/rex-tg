@@ -321,6 +321,9 @@ func TestMatchEcho(t *testing.T) {
 		// path. Both are the photo.
 		{"claude image marker", "[Image #3]the red button", []inbound.Delivered{d(1, "the red button\n/tmp/up/7/12-photo.jpg", time.Second)}, 1, true},
 		{"claude image without caption", "[Image #1]", []inbound.Delivered{d(1, "/tmp/up/7/5-photo.jpg", time.Second)}, 1, true},
+		// All image-only prompts look the same, so an old photo is no match:
+		// a pasted image on the Mac minutes later is not its echo.
+		{"image only, photo minutes ago", "[Image #1]", []inbound.Delivered{d(1, "/tmp/up/7/5-photo.jpg", 5*time.Minute)}, 0, false},
 		{"image path kept", "look\n/tmp/up/7/5-shot.PNG", []inbound.Delivered{d(1, "look\n/tmp/up/7/5-shot.PNG", time.Second)}, 1, true},
 		{"image marker with a long caption", "[Image #2]" + p40 + "!", []inbound.Delivered{d(1, p40+"?\n/tmp/up/7/6-photo.jpg", 5*time.Second)}, 1, true},
 		{"other file paths still count", "read /tmp/up/7/9-a.pdf", []inbound.Delivered{d(1, "read /tmp/up/7/9-b.pdf", time.Second)}, 0, false},

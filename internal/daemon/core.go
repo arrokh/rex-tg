@@ -69,6 +69,7 @@ type (
 		threadID, orig, tgMsg int64
 		text, kind            string
 		action                inbound.Action
+		ctl                   *ctlSet // a control command: its value counts once typed
 	}
 	evOpenDone struct{ paneID int64 }
 	evTailScan tailScan
@@ -182,6 +183,7 @@ type daemon struct {
 	reminders            map[int64]*reminder // reminders of open alerts, by alert
 	lastRemind           time.Time           // the last look for due reminders
 	remindSwept          bool                // stale reminders of closed alerts were dropped
+	ctlPending           map[int64]ctlSet    // queued control commands, by row id
 	vimNoticed           map[int64]bool      // inbound rows told that pi-vim did not react
 	alertBusy            map[int64]bool
 	opening              map[int64]bool      // panes whose topic is being created
@@ -219,6 +221,7 @@ func newDaemon(cfg config.Config, home string, log *slog.Logger, now func() time
 		waitNoticed: map[int64]bool{},
 		macNotes:    map[int64]*macNote{},
 		reminders:   map[int64]*reminder{},
+		ctlPending:  map[int64]ctlSet{},
 		vimNoticed:  map[int64]bool{},
 		alertBusy:   map[int64]bool{},
 		opening:     map[int64]bool{},
@@ -340,7 +343,9 @@ func (d *daemon) handle(ev any) {
 	case evTopicCreated:
 		d.onTopicCreated(e)
 	case evQueueText:
-		d.queueText(e.threadID, e.orig, e.tgMsg, e.text, e.kind, e.action)
+		if d.queueText(e.threadID, e.orig, e.tgMsg, e.text, e.kind, e.action) && e.ctl != nil {
+			d.ctlPending[-e.orig] = *e.ctl // the row's id
+		}
 	case evTailScan:
 		d.onTailScan(e)
 	case evRestart:
