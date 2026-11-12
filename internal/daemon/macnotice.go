@@ -172,9 +172,15 @@ func (d *daemon) onMacSent(e evMacSent) {
 // button goes, with the held answer. The next hold posts a new notice at the
 // bottom of the topic, where the user sees it.
 func (d *daemon) endMacNotice(th store.Thread) {
-	n := d.macNotes[th.ID]
+	n := d.storedMacNote(th)
 	d.forgetMac(th.ID)
-	if n != nil {
+	switch {
+	case n == nil:
+	case n.want == "" && !n.busy:
+		// Loaded from the store after a restart: its text is not known, so
+		// only its button goes.
+		d.removeButtons(n.chat, n.msg)
+	default:
 		n.closing = true
 		d.pushMacNotice(th, n)
 	}
@@ -185,6 +191,43 @@ func (d *daemon) endMacNotice(th store.Thread) {
 func (d *daemon) forgetMac(thread int64) {
 	delete(d.macNotes, thread)
 	for _, k := range []string{macNoticeKey(thread), macAnswerKey(thread)} {
+		if err := d.st.Delete(d.ctx, k); err != nil {
+			d.log.Warn("mac notice: forget", "key", k, "err", err)
+		}
+	}
+}
+
+// sweepMacNotices runs from the tick until it worked once (core). With
+// MacNotice off, a hold from before the start is gone (the trackers drop it),
+// so its notice loses its "📄 Last answer" button and the stored state goes.
+// Else that button would post an old answer, and turning MacNotice on again
+// would edit the old notice far up the topic.
+func (d *daemon) sweepMacNotices() {
+	if d.macSwept {
+		return
+	}
+	if d.cfg.Display.MacNotice {
+		d.macSwept = true
+		return
+	}
+	notices, err := d.st.KeysWithPrefix(d.ctx, "mac_notice:")
+	if err != nil {
+		return // the next tick tries again
+	}
+	answers, err := d.st.KeysWithPrefix(d.ctx, "mac_answer:")
+	if err != nil {
+		return
+	}
+	d.macSwept = true
+	for _, k := range notices {
+		var chat, msg int64
+		if v, ok, err := d.st.Get(d.ctx, k); err == nil && ok {
+			if _, err := fmt.Sscanf(v, "%d:%d", &chat, &msg); err == nil {
+				d.removeButtons(chat, msg)
+			}
+		}
+	}
+	for _, k := range append(notices, answers...) {
 		if err := d.st.Delete(d.ctx, k); err != nil {
 			d.log.Warn("mac notice: forget", "key", k, "err", err)
 		}

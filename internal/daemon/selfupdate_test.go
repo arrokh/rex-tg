@@ -105,3 +105,17 @@ func TestAgentListStaysWithinTelegramLimits(t *testing.T) {
 		t.Error("the agent that waits was cut, but it must come first")
 	}
 }
+
+func TestWaitedText(t *testing.T) {
+	for d, want := range map[time.Duration]string{
+		3 * time.Second:                 "3 s",
+		10 * time.Minute:                "10 min",
+		59*time.Minute + 59*time.Second: "59 min",
+		2*time.Hour + 5*time.Minute:     "2h 05m",
+		time.Minute + 30*time.Second:    "1 min",
+	} {
+		if got := waitedText(d); got != want {
+			t.Errorf("waitedText(%s) = %q, want %q", d, got, want)
+		}
+	}
+}

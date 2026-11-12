@@ -426,12 +426,12 @@ The user may write in the pane on the Mac for a while, then go on from the phone
 - When an answer was held, the notice has a `📄 Last answer` button. It posts the newest held answer, like any answer, once.
 - A message from Telegram ends the hold. Its turn is shown as usual. The old notice keeps its text, but loses its button, and the held answer is dropped. The next Mac prompt starts a new hold with a new notice at the bottom of the topic.
 - A turn that Telegram already sees stays shown: a Mac prompt sent into a running Telegram turn only updates the notice, and the turn's end sets it to done.
-- A prompt that does not match the text rex-tg typed (an echo miss, section 9.5) is still taken as from Telegram when rex-tg typed into that pane within the last 30 seconds. So a turn that Telegram started is never held.
+- A prompt that does not match the text rex-tg typed (an echo miss, section 9.5) is still taken as from Telegram when rex-tg typed into that pane within the last 30 seconds, and the prompt of that message was not seen yet. So a turn that Telegram started is never held.
 - A turn that no person started, such as a Claude Code task notification, follows the current state: held during a hold, shown otherwise.
 - Permission prompts and alerts are not held. They need an answer, and the user may have left the Mac.
 - A post of the notice whose outcome is unknown is not repeated (at most once). The hold then goes on without a notice.
-- The tracker (`internal/turn`) decides what is held. The daemon keeps the notice's message number and the held answer in the key-value table, so a restart keeps both.
-- With `mac_notice = false`, Mac turns are shown as before, with `💻 You (on Mac)` when `show_mac_prompts` is on.
+- The tracker (`internal/turn`) decides what is held. The daemon keeps the notice's message number and the held answer in the key-value table, so a restart keeps both. A message from Telegram after a restart still removes the old notice's button.
+- With `mac_notice = false`, Mac turns are shown as before, with `💻 You (on Mac)` when `show_mac_prompts` is on. A hold from before a restart with `mac_notice = false` ends: its notice loses its button, and the held answer is dropped.
 
 ### 8.5 Receipts and status signals
 

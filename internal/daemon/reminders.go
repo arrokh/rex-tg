@@ -158,6 +158,9 @@ func (d *daemon) sendReminder(th store.Thread, a store.Alert, n int, now time.Ti
 }
 
 func waitedText(d time.Duration) string {
+	if d < time.Minute { // only with a short remind_after
+		return fmt.Sprintf("%d s", int(d/time.Second))
+	}
 	if d < time.Hour {
 		return fmt.Sprintf("%d min", int(d/time.Minute))
 	}

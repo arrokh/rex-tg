@@ -38,6 +38,8 @@ type agent struct {
 	ask                  string
 
 	pending atomic.Int32 // prompts submitted and not yet answered
+	waiting atomic.Bool  // a permission question is open: a digit answers it
+	keys    chan string  // the digits that answer the questions
 
 	logMu sync.Mutex
 
@@ -139,6 +141,7 @@ func (a *agent) run() error {
 	}
 
 	prompts := make(chan string, 16)
+	a.keys = make(chan string, 4)
 	go a.readInput(prompts)
 	for p := range prompts {
 		if err := a.answer(p); err != nil {
@@ -255,6 +258,11 @@ func (a *agent) readInput(out chan<- string) {
 			}
 			c := pending[0]
 			pending = pending[1:]
+			if a.waiting.Load() && c >= '0' && c <= '9' {
+				a.record(map[string]any{"ev": "key", "text": string(c)})
+				a.keys <- string(c)
+				continue
+			}
 			if c == '\r' || c == '\n' {
 				text := strings.ReplaceAll(string(line), "\r", "\n")
 				line = line[:0]
@@ -275,7 +283,9 @@ func (a *agent) readInput(out chan<- string) {
 	}
 }
 
-// answer simulates a run: working, then the transcript lines, then done.
+// answer simulates a run: working, then the transcript lines, then done. A
+// prompt "ask: <question>" first asks for permission, as Claude Code does
+// before a tool runs, and waits for a digit; the answer then names it.
 func (a *agent) answer(prompt string) error {
 	a.status("working", "e2e")
 	a.hook("UserPromptSubmit")
@@ -283,8 +293,18 @@ func (a *agent) answer(prompt string) error {
 	if err := a.append("user", prompt, ""); err != nil {
 		return err
 	}
+	reply := "ECHO: " + prompt
+	if q, ok := strings.CutPrefix(prompt, "ask: "); ok && a.format != "pi" {
+		fmt.Print("\r\n " + q + "\r\n ❯ 1. Yes\r\n   2. No\r\n")
+		a.waiting.Store(true)
+		a.hook("PermissionRequest")
+		k := <-a.keys
+		a.waiting.Store(false)
+		a.status("working", "e2e")
+		reply += " (answer " + k + ")"
+	}
 	time.Sleep(a.think)
-	if err := a.append("assistant", "ECHO: "+prompt, "stop"); err != nil {
+	if err := a.append("assistant", reply, "stop"); err != nil {
 		return err
 	}
 	a.record(map[string]any{"ev": "done", "text": prompt})

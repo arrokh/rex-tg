@@ -183,6 +183,7 @@ type daemon struct {
 	reminders            map[int64]*reminder // reminders of open alerts, by alert
 	lastRemind           time.Time           // the last look for due reminders
 	remindSwept          bool                // stale reminders of closed alerts were dropped
+	macSwept             bool                // with MacNotice off, holds from before the start were cleared
 	ctlPending           map[int64]ctlSet    // queued control commands, by row id
 	vimNoticed           map[int64]bool      // inbound rows told that pi-vim did not react
 	alertBusy            map[int64]bool
@@ -429,6 +430,7 @@ func (d *daemon) tick() {
 	}
 	d.tickBoard(now)
 	d.tickReminders(now)
+	d.sweepMacNotices()
 	d.checkUpdate(now)
 }
 

@@ -524,9 +524,10 @@ func (d *daemon) onBatch(ev evBatch) {
 const typedRecentlyWindow = 30 * time.Second
 
 // typedRecently tells whether rex-tg is typing into a topic's pane, or typed
-// a message there within typedRecentlyWindow.
+// a message there within typedRecentlyWindow, whose prompt the transcript has
+// not shown yet. A message whose prompt was seen is no longer in question.
 func (d *daemon) typedRecently(thread int64, now time.Time) bool {
-	if d.delivering[thread] != nil {
+	if dl := d.delivering[thread]; dl != nil && dl.echoKey == "" {
 		return true
 	}
 	rows, err := d.st.DeliveredSince(d.ctx, thread, now.Add(-typedRecentlyWindow))
