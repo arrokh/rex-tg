@@ -256,6 +256,24 @@ func (c *Client) Blocks(ctx context.Context, session string) ([]Block, error) {
 	return r.Blocks, nil
 }
 
+// Window is one tab of a Rex session.
+type Window struct {
+	ID    string `json:"window_id"`
+	Label string `json:"label"`
+}
+
+// Windows runs `rex window ls -s session --json`: the tabs of a session and
+// their names.
+func (c *Client) Windows(ctx context.Context, session string) ([]Window, error) {
+	var r struct {
+		Windows []Window `json:"windows"`
+	}
+	if err := c.runJSON(ctx, "window ls", &r, "window", "ls", "-s", session, "--json"); err != nil {
+		return nil, err
+	}
+	return r.Windows, nil
+}
+
 // Process calls the block method `process`.
 func (c *Client) Process(ctx context.Context, session, block string) (Process, error) {
 	var p Process

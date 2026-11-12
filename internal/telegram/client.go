@@ -302,6 +302,9 @@ type linkPreview struct {
 
 type replyParameters struct {
 	MessageID int64 `json:"message_id"`
+	// AllowSendingWithoutReply sends the message also when the replied
+	// message was deleted.
+	AllowSendingWithoutReply bool `json:"allow_sending_without_reply"`
 }
 
 // GetMe returns the bot's own user.
@@ -349,7 +352,7 @@ func (c *Client) SendMessage(ctx context.Context, p SendMessageParams) (Message,
 		DisableNotification: p.DisableNotification, ReplyMarkup: p.ReplyMarkup,
 		LinkPreviewOptions: linkPreview{true}}
 	if p.ReplyToMessageID != 0 {
-		body.ReplyParameters = &replyParameters{p.ReplyToMessageID}
+		body.ReplyParameters = &replyParameters{MessageID: p.ReplyToMessageID, AllowSendingWithoutReply: true}
 	}
 	var m Message
 	err := c.callJSON(ctx, "sendMessage", c.timeout, body, &m)

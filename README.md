@@ -26,7 +26,12 @@ Not supported: T3 Code panes, and Rex servers on other computers.
 
 1. **Make the bot.** In @BotFather, send `/newbot` and keep the token. Treat it like an SSH key.
    Then open Bot Settings > Threaded Mode and turn it on.
-2. **Build and install.**
+2. **Install.** With Homebrew:
+   ```sh
+   brew tap arrokh/rex-tg https://github.com/arrokh/rex-tg
+   brew install --HEAD rex-tg    # plain `brew install rex-tg` once a release exists
+   ```
+   Or build from source:
    ```sh
    mise install
    make install      # puts the binary in ~/.local/bin/rex-tg
@@ -50,7 +55,7 @@ With Threaded Mode, every message is in a topic. A topic that is not linked to a
 
 | Command | What it does |
 | --- | --- |
-| `/agents` | Lists the agents in Rex panes. Tap one to open its topic. |
+| `/agents` | Lists the agents in Rex panes, the ones that wait for you first. The list updates by itself; pin it. Tap an agent to open its topic. |
 | `/new` | Starts an agent in a new Rex tab. Pick the agent and a folder. `/new pi ~/work/app` does it in one step. |
 | `/topics` | Lists the topics and their states. |
 | `/status` | Shows the daemon's health. |
@@ -59,7 +64,7 @@ With Threaded Mode, every message is in a topic. A topic that is not linked to a
 
 ### In a topic
 
-Your text goes to the agent. Text that starts with `/` also goes to the agent (for example `/compact` or `/model`), except these rex-tg commands:
+Your text goes to the agent. Text that starts with `/` also goes to the agent (for example `/compact`), except these rex-tg commands:
 
 | Command | What it does |
 | --- | --- |
@@ -68,6 +73,8 @@ Your text goes to the agent. Text that starts with `/` also goes to the agent (f
 | `/approve`, `/deny` | Answers the open permission prompt. |
 | `/esc`, `/interrupt`, `/key <keys>` | Sends Escape, stops the turn, or presses keys. |
 | `/force <text>` | Types text even when a prompt is open. |
+| `/model [name]` | Shows the agent's model with buttons, or changes it. |
+| `/effort [level]` | Shows the thinking effort with buttons, or changes it. |
 | `/mode progress\|block\|final` | Sets how replies appear. |
 | `/verbose on\|full\|off` | Shows each tool call (`on`), and also its output (`full`). |
 | `/reasoning on\|off` | Shows the agent's thinking, when the agent stores it. |
@@ -75,7 +82,7 @@ Your text goes to the agent. Text that starts with `/` also goes to the agent (f
 | `/mute`, `/unmute` | Answers arrive without or with sound. |
 | `/unlink` | Closes the topic in rex-tg. |
 
-To send an agent a command that has a bot command's name, use two slashes: `//help` sends `/help` to the agent.
+To send an agent a command that has a bot command's name, use two slashes: `//help` sends `/help` to the agent, and `//model` sends the agent's own `/model`.
 
 ### What you see
 
@@ -85,7 +92,8 @@ To send an agent a command that has a bot command's name, use two slashes: `//he
 - **Answer:** a new message. A long answer comes in numbered parts, such as `(1/3)`.
 - **Images:** when an answer names an image file on your Mac, rex-tg sends the picture too.
 - **Permission prompts:** the bot shows the bottom of the pane, with one button per answer.
-- **💻 You (on Mac):** a prompt that you typed in the pane on the Mac.
+- **⏰ Still waiting for your answer:** a prompt has waited 10 minutes. Tap the reminder to jump to the prompt.
+- **💻 In use on the Mac:** you typed in the pane on the Mac. The replies stay on the Mac, and this one notice shows the latest prompt. `📄 Last answer` shows the newest answer. Write in the topic to go on in Telegram.
 - **🔴:** the agent stopped, or its pane closed.
 
 ### Photos, files, and voice
@@ -107,7 +115,7 @@ proxy = "socks5h://127.0.0.1:40000"  # when your network blocks or drops Telegra
 
 [display]
 mode = "progress"         # progress, block, or final
-show_mac_prompts = true   # show prompts typed on the Mac
+mac_notice = true         # one notice while you work on the Mac
 send_images = true        # send images that an answer names
 ```
 
@@ -115,6 +123,7 @@ send_images = true        # send images that an answer names
 
 - `rex-tg status` shows topics, queued messages, and alerts.
 - The log is `~/.local/state/rex-tg/logs/rex-tg.log`.
+- Update: `brew upgrade rex-tg` (or `git pull && make install`). The daemon restarts itself within a minute, when no message is being typed. Topics stay linked to their sessions.
 - Restart the daemon: `launchctl kickstart -k gui/$(id -u)/local.rex-tg`.
 - Stop the daemon: `launchctl bootout gui/$(id -u)/local.rex-tg`. Start it again with `rex-tg install`.
 - Remove rex-tg: `rex-tg uninstall`. It keeps the database and the token. See [Codex notes](docs/reference.md#uninstall).

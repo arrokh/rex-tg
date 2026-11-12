@@ -273,7 +273,8 @@ func (d *daemon) tracker(th store.Thread) *turn.Tracker {
 }
 
 func (d *daemon) settings(th store.Thread) turn.Settings {
-	return turn.Settings{Mode: th.Mode, Verbose: th.Verbose, Reasoning: th.Reasoning, ShowMacPrompts: d.cfg.Display.ShowMacPrompts}
+	return turn.Settings{Mode: th.Mode, Verbose: th.Verbose, Reasoning: th.Reasoning,
+		ShowMacPrompts: d.cfg.Display.ShowMacPrompts, MacNotice: d.cfg.Display.MacNotice}
 }
 
 // saveSnapshot stores the tracker's state when it changed.
@@ -353,6 +354,17 @@ func (d *daemon) work(th store.Thread, acts []turn.Action) []store.OutboxItem {
 			if d.lastThread == th.ID {
 				d.snd.Typing(th.ChatID, th.MessageThreadID)
 			}
+		case turn.MacNotice:
+			d.showMacNotice(th, a.HTML)
+			d.boardDirty()
+		case turn.MacBack:
+			d.endMacNotice(th)
+			d.boardDirty()
+		case turn.HeldAnswer:
+			d.holdAnswer(th.ID, a)
+			if n := d.macNotes[th.ID]; n != nil {
+				d.pushMacNotice(th, n) // the notice gets its "📄 Last answer" button
+			}
 		}
 	}
 	return items
@@ -431,6 +443,7 @@ func (d *daemon) onBatch(ev evBatch) {
 	var items []store.OutboxItem
 
 	for _, ln := range ev.b.Lines {
+		d.noteSeen(conv.ID, a, ln.Data) // model and effort, see controls.go
 		evs, err := a.ParseLine(ln.Data, agents.LineContext{SessionID: conv.NativeID, Offset: ln.Offset, CWD: conv.CWD})
 		if err != nil {
 			d.log.Debug("skipping a transcript line", "conversation", conv.ID, "offset", ln.Offset, "err", err)
@@ -456,6 +469,12 @@ func (d *daemon) onBatch(ev evBatch) {
 			case agents.UserPrompt:
 				if !e.Auto { // no person typed it, so it is no Telegram message
 					echo = d.echo(th, e, now)
+					if !echo && d.cfg.Display.MacNotice && d.typedRecently(th.ID, now) {
+						// The text did not match, but rex-tg typed into this
+						// pane a moment ago. Never hold that turn: its answer
+						// would not reach Telegram.
+						echo = true
+					}
 				}
 				d.signal(conv.ID, registry.Signal{State: "working", Kind: "prompt", At: at})
 			case agents.AssistantText:
@@ -493,6 +512,20 @@ func (d *daemon) onBatch(ev evBatch) {
 	}
 	d.snd.Wake()
 	d.saveSnapshot(th.ID, tr)
+}
+
+// typedRecentlyWindow is how long after typing a prompt that does not match
+// the typed text still counts as possibly from Telegram (the Mac hold).
+const typedRecentlyWindow = 30 * time.Second
+
+// typedRecently tells whether rex-tg is typing into a topic's pane, or typed
+// a message there within typedRecentlyWindow.
+func (d *daemon) typedRecently(thread int64, now time.Time) bool {
+	if d.delivering[thread] != nil {
+		return true
+	}
+	rows, err := d.st.DeliveredSince(d.ctx, thread, now.Add(-typedRecentlyWindow))
+	return err == nil && len(rows) > 0
 }
 
 // echo tells whether a transcript prompt is a message that rex-tg typed. An

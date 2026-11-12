@@ -60,6 +60,10 @@ type RuntimeInput struct {
 	// Answers are the fallback permission answers when the screen shows no
 	// numbered options.
 	Answers []Answer `toml:"answers"`
+	// Choices replaces the buttons that a setting command offers, by control
+	// name: [agents.claude.choices] model = ["opus", "sonnet"]. A control
+	// that is not listed keeps the agent's own choices.
+	Choices map[string][]string `toml:"choices"`
 }
 
 // Config is the whole configuration.
@@ -89,9 +93,13 @@ type Config struct {
 		Codex          RuntimeInput `toml:"codex"`
 	} `toml:"agents"`
 	Display struct {
-		Mode                 string   `toml:"mode"` // progress, block, final
-		Backfill             int      `toml:"backfill"`
-		ShowMacPrompts       bool     `toml:"show_mac_prompts"`
+		Mode           string `toml:"mode"` // progress, block, final
+		Backfill       int    `toml:"backfill"`
+		ShowMacPrompts bool   `toml:"show_mac_prompts"`
+		// MacNotice holds the turns that start on the Mac: the topic gets one
+		// notice instead of their prompts, progress, and answers, until a
+		// message from Telegram. On by default.
+		MacNotice            bool     `toml:"mac_notice"`
 		ProgressDelay        Duration `toml:"progress_delay"`
 		ProgressEditInterval Duration `toml:"progress_edit_interval"`
 		// RichMessages sends final answers with Telegram's sendRichMessage
@@ -101,6 +109,12 @@ type Config struct {
 		// topic, right after the answer. On by default.
 		SendImages bool `toml:"send_images"`
 	} `toml:"display"`
+	// Alerts holds the [alerts] table: reminders of permission prompts and
+	// questions that wait for an answer.
+	Alerts struct {
+		RemindAfter Duration `toml:"remind_after"` // the first reminder, and the gap between two; 0 turns them off
+		Reminders   int      `toml:"reminders"`    // the most reminders for one prompt
+	} `toml:"alerts"`
 	// InputSettings holds the [input] table. It is not called Input because
 	// Config.Input(rt) is a method.
 	InputSettings struct {
@@ -166,6 +180,9 @@ func Default(home string) Config {
 	c.Display.Mode = "progress"
 	c.Display.Backfill = 3
 	c.Display.ShowMacPrompts = true
+	c.Display.MacNotice = true
+	c.Alerts.RemindAfter = Duration{10 * time.Minute}
+	c.Alerts.Reminders = 3
 	c.Display.SendImages = true
 	c.Display.ProgressDelay = secs(2)
 	c.Display.ProgressEditInterval = secs(2)
@@ -241,9 +258,19 @@ func (c Config) validate() error {
 		default:
 			return fmt.Errorf("agents.%s.while_working %q: want steer, queue, or unknown", name, in.WhileWorking)
 		}
+		for control, vals := range in.Choices {
+			for _, v := range vals {
+				if !agents.ValidValue(v) {
+					return fmt.Errorf("agents.%s.choices.%s: %q is not a valid value (letters, digits, and . _ : / [ ] - only)", name, control, v)
+				}
+			}
+		}
 		if len(in.Launch) == 0 || strings.TrimSpace(in.Launch[0]) == "" {
 			return fmt.Errorf("agents.%s.launch: want a program, such as [%q]", name, name)
 		}
+	}
+	if c.Alerts.RemindAfter.Duration < 0 || c.Alerts.Reminders < 0 {
+		return errors.New("alerts.remind_after and alerts.reminders must not be negative")
 	}
 	if c.Telegram.RatePerSecond <= 0 {
 		return errors.New("telegram.rate_per_second must be positive")

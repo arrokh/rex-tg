@@ -2,7 +2,7 @@ STATICCHECK := go run honnef.co/go/tools/cmd/staticcheck@v0.8.2
 BIN := bin/rex-tg
 INSTALL_DIR ?= $(HOME)/.local/bin
 
-.PHONY: build test core check fmt install e2e clean
+.PHONY: build test core check fmt install e2e clean formula-release
 
 build:
 	go build -o $(BIN) ./cmd/rex-tg
@@ -46,6 +46,11 @@ install: build
 
 e2e:
 	go test -tags e2e -count=1 ./e2e/...
+
+# formula-release prints the stable url lines of Formula/rex-tg.rb for a
+# pushed tag (git tag and revision). Usage: make formula-release TAG=v0.1.0
+formula-release:
+	@scripts/formula-release.sh $(TAG)
 
 clean:
 	rm -rf bin

@@ -254,7 +254,8 @@ func (d *daemon) onCallback(u telegram.Update) {
 	case "ag":
 		chat, msg := cb.Message.Chat.ID, cb.Message.MessageID
 		d.answerCallback(cb.ID, "", false)
-		d.spawn(func() { d.refreshAgents(chat, msg) })
+		mac := d.macThreads()
+		d.spawn(func() { d.refreshAgents(chat, msg, mac) })
 		return
 	case "rs":
 		if id, ok := arg(1); ok {
@@ -263,6 +264,12 @@ func (d *daemon) onCallback(u telegram.Update) {
 		}
 	case "nw":
 		d.newButton(cb, parts[1:])
+		return
+	case macAnswerData:
+		d.macAnswerButton(cb)
+		return
+	case "cf":
+		d.controlButton(u.UpdateID, cb, parts[1:])
 		return
 	}
 	d.answerCallback(cb.ID, "Unknown button.", false)

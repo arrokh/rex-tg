@@ -32,6 +32,11 @@ type Settings struct {
 	Verbose        string // off (default), on, or full
 	Reasoning      bool
 	ShowMacPrompts bool
+	// MacNotice holds turns that start on the Mac: instead of the prompt,
+	// progress, and answer, the topic gets one notice that is edited as the
+	// turns go on. A message from Telegram ends the hold. ShowMacPrompts
+	// counts only when MacNotice is off.
+	MacNotice bool
 }
 
 // Config holds timing and size limits. Zero fields take their defaults.
@@ -82,7 +87,8 @@ func (c Config) withDefaults() Config {
 }
 
 // Action is an instruction for the caller. The concrete types are Post,
-// ShowProgress, EditProgress, RepostProgress, FinishProgress, and Typing.
+// ShowProgress, EditProgress, RepostProgress, FinishProgress, Typing,
+// MacNotice, MacBack, and HeldAnswer.
 type Action interface{ isAction() }
 
 // Post asks the caller to send a new message. Key is the key of the event that
@@ -112,12 +118,31 @@ type FinishProgress struct{ HTML string }
 // Typing asks for a "typing" chat action.
 type Typing struct{}
 
+// MacNotice asks to show that the session is in use on the Mac. The caller
+// posts one notice, silently, and edits it with each later MacNotice until a
+// MacBack.
+type MacNotice struct{ HTML string }
+
+// MacBack says that a message from Telegram ended the hold. The caller stops
+// editing the notice; the next MacNotice posts a new one.
+type MacBack struct{}
+
+// HeldAnswer is the answer of a held turn. It is not posted; the caller keeps
+// the newest one, so that the notice can offer it.
+type HeldAnswer struct {
+	Key      string
+	Markdown string
+}
+
 func (Post) isAction()           {}
 func (ShowProgress) isAction()   {}
 func (EditProgress) isAction()   {}
 func (RepostProgress) isAction() {}
 func (FinishProgress) isAction() {}
 func (Typing) isAction()         {}
+func (MacNotice) isAction()      {}
+func (MacBack) isAction()        {}
+func (HeldAnswer) isAction()     {}
 
 type phase string
 
@@ -171,12 +196,25 @@ type Tracker struct {
 	lastHTML      string // last progress or summary HTML sent
 
 	lastTyping time.Time
+
+	// The hold of turns that start on the Mac (Settings.MacNotice). onMac,
+	// macPrompt, and macNote last across turns; quiet and fromTG belong to
+	// one turn.
+	onMac     bool   // the last prompt that a person typed came from the Mac
+	macPrompt string // that prompt, redacted and cut
+	macNote   string // the last notice HTML asked for
+	quiet     bool   // this turn is held: nothing of it is posted
+	fromTG    bool   // a message from Telegram is part of this turn
 }
 
 // New returns a Tracker with no turn in progress.
 func New(cfg Config, s Settings) *Tracker {
 	return &Tracker{cfg: cfg.withDefaults(), set: s}
 }
+
+// OnMac reports whether the session is in use on the Mac: a hold of Mac
+// turns runs (Settings.MacNotice).
+func (t *Tracker) OnMac() bool { return t.onMac && t.set.MacNotice }
 
 // SetSettings changes the display settings. They apply from the next event.
 func (t *Tracker) SetSettings(s Settings) { t.set = s }
@@ -186,12 +224,17 @@ func (t *Tracker) progressMode() bool {
 }
 
 func (t *Tracker) startTurn(now time.Time) {
-	*t = Tracker{cfg: t.cfg, set: t.set, ph: phActive, start: now}
+	*t = Tracker{cfg: t.cfg, set: t.set, ph: phActive, start: now,
+		onMac: t.onMac, macPrompt: t.macPrompt, macNote: t.macNote,
+		quiet: t.onMac && t.set.MacNotice}
 }
 
 // post appends a Post and, when the progress message is above it, schedules a
-// repost.
+// repost. A held turn posts nothing.
 func (t *Tracker) post(out []Action, p Post) []Action {
+	if t.quiet {
+		return out
+	}
 	if t.shown && t.ph == phActive {
 		t.pendingRepost = true
 	}
@@ -208,12 +251,30 @@ func (t *Tracker) Event(ev agents.Event, echo bool, now time.Time) []Action {
 		if t.ph == phEnding {
 			out = t.finalize(out, now)
 		}
+		mac := !echo && !ev.Auto // typed on the Mac
+		hold := mac && t.set.MacNotice
+		if echo && t.onMac {
+			t.onMac, t.macNote = false, ""
+			out = append(out, MacBack{})
+		}
+		if hold {
+			t.onMac, t.macPrompt = true, truncate(strings.TrimSpace(r(ev.Text)), maxMacPrompt)
+		}
 		if t.ph != phActive {
 			out = t.flushHeld(out, now)
 			t.startTurn(now)
 		}
+		if echo {
+			t.fromTG, t.quiet = true, false // the rest of this turn is shown
+		}
+		if hold && !t.shown && !t.fromTG {
+			t.quiet = true // a turn that Telegram already sees stays shown
+		}
 		t.unblock()
-		if !echo && !ev.Auto && t.set.ShowMacPrompts {
+		switch {
+		case hold:
+			out = t.macNotice(out, macWorking)
+		case mac && t.set.ShowMacPrompts:
 			out = t.post(out, Post{Key: ev.Key, Kind: "prompt", Markdown: macPrompt(r(ev.Text))})
 		}
 
@@ -332,8 +393,13 @@ func (t *Tracker) markDirty() {
 func (t *Tracker) answer(out []Action, ev agents.Event, now time.Time) []Action {
 	isErr := ev.Phase == agents.Error
 	text := t.cfg.Redact(ev.Text)
+	held := t.held()
 	if strings.TrimSpace(text) != "" {
-		out = append(out, Post{Key: ev.Key, Kind: "answer", Markdown: text})
+		if held {
+			out = append(out, HeldAnswer{Key: ev.Key, Markdown: text})
+		} else {
+			out = append(out, Post{Key: ev.Key, Kind: "answer", Markdown: text})
+		}
 	}
 	kind := "final"
 	if isErr {
@@ -363,7 +429,27 @@ func (t *Tracker) answer(out []Action, ev agents.Event, now time.Time) []Action 
 			out = t.finishIfChanged(out, now)
 		}
 	}
+	if t.quiet || t.OnMac() {
+		out = t.macNotice(out, macEnd(t.endKind)) // also a shown turn that a Mac prompt joined
+	}
 	return out
+}
+
+// held reports whether an answer now belongs to a held turn: the turn is
+// held, or no turn runs while the session is in use on the Mac.
+func (t *Tracker) held() bool {
+	return t.quiet || (t.ph == phNone && t.onMac && t.set.MacNotice)
+}
+
+// macNotice asks for the notice of the Mac hold in the given state, unless
+// it would not change.
+func (t *Tracker) macNotice(out []Action, state string) []Action {
+	h := macNoticeHTML(t.macPrompt, state)
+	if h == t.macNote {
+		return out
+	}
+	t.macNote = h
+	return append(out, MacNotice{HTML: h})
 }
 
 func (t *Tracker) toEnding(kind string, now time.Time) {
@@ -380,13 +466,21 @@ func (t *Tracker) finalize(out []Action, now time.Time) []Action {
 		return out
 	}
 	if t.progressMode() && !t.answered && t.commentaryPending && strings.TrimSpace(t.commentary) != "" {
-		out = append(out, Post{Key: t.commentaryKey, Kind: "answer", Markdown: t.cfg.Redact(t.commentary)})
+		md := t.cfg.Redact(t.commentary)
+		if t.quiet {
+			out = append(out, HeldAnswer{Key: t.commentaryKey, Markdown: md})
+		} else {
+			out = append(out, Post{Key: t.commentaryKey, Kind: "answer", Markdown: md})
+		}
 		t.answered = true
 		t.commentaryPending = false
 	}
 	t.ph = phEnded
 	if t.shown {
 		out = t.finish(out, now)
+	}
+	if t.quiet || t.OnMac() {
+		out = t.macNotice(out, macEnd(t.endKind)) // also a shown turn that a Mac prompt joined
 	}
 	return out
 }
@@ -479,6 +573,9 @@ func (t *Tracker) Tick(now time.Time) []Action {
 	default:
 		return nil
 	}
+	if t.quiet {
+		return nil // a held turn shows no typing and no progress
+	}
 
 	if !t.blocked && (t.lastTyping.IsZero() || now.Sub(t.lastTyping) >= t.cfg.TypingInterval) {
 		t.lastTyping = now
@@ -552,6 +649,11 @@ type Snapshot struct {
 	FinishHeld        bool           `json:"finish_held,omitempty"`
 	LastHTML          string         `json:"last_html,omitempty"`
 	LastTyping        time.Time      `json:"last_typing"`
+	OnMac             bool           `json:"on_mac,omitempty"`
+	MacPrompt         string         `json:"mac_prompt,omitempty"`
+	MacNote           string         `json:"mac_note,omitempty"`
+	Quiet             bool           `json:"quiet,omitempty"`
+	FromTG            bool           `json:"from_tg,omitempty"`
 }
 
 // Active reports whether the snapshot holds a turn that has not ended.
@@ -566,6 +668,7 @@ func (t *Tracker) Snapshot() Snapshot {
 		Answered: t.answered, ErrText: t.errText, Blocked: t.blocked,
 		Shown: t.shown, LastEdit: t.lastEdit, Dirty: t.dirty, PendingRepost: t.pendingRepost, FinishHeld: t.finishHeld,
 		LastHTML: t.lastHTML, LastTyping: t.lastTyping,
+		OnMac: t.onMac, MacPrompt: t.macPrompt, MacNote: t.macNote, Quiet: t.quiet, FromTG: t.fromTG,
 	}
 	for _, c := range t.calls {
 		s.Calls = append(s.Calls, SnapshotCall{ID: c.id, Name: c.name, Kind: c.kind, Label: c.label, Status: c.status})
@@ -583,6 +686,7 @@ func Restore(cfg Config, s Settings, snap Snapshot) *Tracker {
 	t.answered, t.errText, t.blocked = snap.Answered, snap.ErrText, snap.Blocked
 	t.shown, t.lastEdit, t.dirty, t.pendingRepost, t.finishHeld = snap.Shown, snap.LastEdit, snap.Dirty, snap.PendingRepost, snap.FinishHeld
 	t.lastHTML, t.lastTyping = snap.LastHTML, snap.LastTyping
+	t.onMac, t.macPrompt, t.macNote, t.quiet, t.fromTG = snap.OnMac, snap.MacPrompt, snap.MacNote, snap.Quiet, snap.FromTG
 	for _, c := range snap.Calls {
 		t.calls = append(t.calls, call{id: c.ID, name: c.Name, kind: c.Kind, label: c.Label, status: c.Status})
 	}

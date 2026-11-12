@@ -28,6 +28,11 @@ import (
 // ErrAlreadyRunning means another daemon holds the instance lock.
 var ErrAlreadyRunning = errors.New("daemon: another rex-tg daemon is already running")
 
+// ErrUpdated is returned by Run when the rex-tg binary was replaced (an
+// upgrade). The caller exits with an error, so launchd starts the new
+// binary; the topics, cursors, and queue are in the database and carry over.
+var ErrUpdated = errors.New("daemon: the rex-tg binary was replaced; restarting with the new one")
+
 // Options configures Run. Nil test seams use the real implementations.
 type Options struct {
 	Config    config.Config
@@ -46,6 +51,10 @@ type Options struct {
 	// folders of user programs. Tests set it, so the programs of the
 	// machine that runs them do not count.
 	HasProgram func(name string) bool
+	// SelfPath is the binary that launchd starts (a stable path, see
+	// install.StablePath). When it is replaced, Run returns ErrUpdated as
+	// soon as no message is being typed. Empty turns this off.
+	SelfPath string
 }
 
 // Run runs the daemon until ctx ends. It returns nil when ctx ended, and an
@@ -125,6 +134,9 @@ func Run(ctx context.Context, opt Options) error {
 	d := newDaemon(cfg, home, log, now, st, tg, rx, snd, opt.ProcStart, timing)
 	if opt.HasProgram != nil {
 		d.hasProgram = opt.HasProgram
+	}
+	if d.self = newSelfWatch(opt.SelfPath); d.self != nil {
+		log.Info("restarts itself when its binary is replaced", "path", opt.SelfPath)
 	}
 	return d.run(ctx)
 }

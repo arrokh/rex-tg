@@ -242,3 +242,19 @@ func TestLocalHTTPAPIBaseIsAllowed(t *testing.T) {
 		}
 	}
 }
+
+func TestChoices(t *testing.T) {
+	c, err := Load(write(t, "[agents.claude.choices]\nmodel = [\"opus\", \"claude-x\"]\n"), "/h")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := c.Input(agents.Claude).Choices["model"]; len(got) != 2 || got[1] != "claude-x" {
+		t.Errorf("choices = %v", got)
+	}
+	if got := c.Input(agents.Pi).Choices["model"]; len(got) != 0 {
+		t.Errorf("default choices = %v", got)
+	}
+	if _, err := Load(write(t, "[agents.codex.choices]\nmodel = [\"a b\"]\n"), "/h"); err == nil || !strings.Contains(err.Error(), "agents.codex.choices.model") {
+		t.Errorf("a bad value gave %v", err)
+	}
+}

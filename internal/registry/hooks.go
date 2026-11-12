@@ -316,7 +316,7 @@ func (r *Registry) Scan(ctx context.Context) ([]Change, error) {
 			}
 			recs, err := r.rx.ProgramStatus(ctx, sess.ID, b.ID)
 			if err != nil {
-				r.opt.Logger.Warn("scan: program status", "block", b.ID, "err", err)
+				r.logScanErr("scan: program status", "block", b.ID, err)
 				continue
 			}
 			if len(recs) == 0 {

@@ -748,3 +748,138 @@ func TestStoppedTurnSummary(t *testing.T) {
 		t.Fatalf("summary %q", got)
 	}
 }
+
+// macHold is a topic that holds the turns that start on the Mac.
+var macHold = turn.Settings{Mode: "progress", ShowMacPrompts: true, MacNotice: true}
+
+// ticks runs Tick every second from a to b and returns all actions.
+func (x *h) ticks(a, b float64) []turn.Action {
+	var out []turn.Action
+	for s := a; s <= b; s++ {
+		out = append(out, x.tick(s)...)
+	}
+	return out
+}
+
+func TestMacTurnIsHeldBehindOneNotice(t *testing.T) {
+	x := newH(t, turn.Config{}, macHold)
+	as := x.ev(prompt("p1", "fix the login page"), 0)
+	if types(as) != "MacNotice" {
+		t.Fatalf("Mac prompt: %s, want one MacNotice", types(as))
+	}
+	n := find[turn.MacNotice](t, as)
+	for _, want := range []string{"In use on the Mac", "working…", "fix the login page", "Write here to go on in Telegram"} {
+		if !strings.Contains(n.HTML, want) {
+			t.Errorf("notice %q lacks %q", n.HTML, want)
+		}
+	}
+	got := append(x.ev(call("c1", "t1", "Read", agents.ToolRead, "a.go"), 1), x.ticks(1, 10)...)
+	got = append(got, x.ev(text("a1", agents.Final, "Fixed it."), 11)...)
+	if s := types(got); s != "HeldAnswer,MacNotice" {
+		t.Fatalf("held turn: %s, want only HeldAnswer,MacNotice", s)
+	}
+	if a := find[turn.HeldAnswer](t, got); a.Key != "a1" || a.Markdown != "Fixed it." {
+		t.Errorf("held answer = %+v", a)
+	}
+	if n := find[turn.MacNotice](t, got); !strings.Contains(n.HTML, "✅ done") {
+		t.Errorf("end notice = %q, want done", n.HTML)
+	}
+
+	// The next turn on the Mac edits the same notice.
+	as = x.ev(prompt("p2", "now the signup page"), 20)
+	if n := find[turn.MacNotice](t, as); !strings.Contains(n.HTML, "now the signup page") || !strings.Contains(n.HTML, "working…") {
+		t.Errorf("second notice = %q", n.HTML)
+	}
+}
+
+func TestTelegramMessageEndsTheMacHold(t *testing.T) {
+	x := newH(t, turn.Config{}, macHold)
+	x.ev(prompt("p1", "on the mac"), 0)
+	x.ev(text("a1", agents.Final, "ok"), 1)
+
+	// Typing a Telegram message reports "working" before its prompt line.
+	x.k.State(turn.StateWorking, at(10))
+	if got := x.tick(10); got != nil {
+		t.Errorf("held before the echo: %s", types(got))
+	}
+	as := x.k.Event(prompt("p2", "from the phone"), true, at(10.5))
+	if types(as) != "MacBack" {
+		t.Fatalf("echo: %s, want MacBack", types(as))
+	}
+	got := x.ticks(11, 13)
+	if !strings.Contains(types(got), "Typing") || !strings.Contains(types(got), "ShowProgress") {
+		t.Errorf("Telegram turn not shown: %s", types(got))
+	}
+	as = x.ev(text("a2", agents.Final, "done"), 14)
+	if p := find[turn.Post](t, as); p.Kind != "answer" || p.Markdown != "done" {
+		t.Errorf("answer = %+v, want it posted", p)
+	}
+
+	// A new Mac prompt starts a new hold with a new notice.
+	if as := x.ev(prompt("p3", "back at the desk"), 30); types(as) != "MacNotice" {
+		t.Errorf("new hold: %s", types(as))
+	}
+}
+
+func TestMacPromptDuringATelegramTurnKeepsItShown(t *testing.T) {
+	x := newH(t, turn.Config{}, macHold)
+	x.k.Event(prompt("p1", "from the phone"), true, at(0))
+	x.ticks(0, 3)
+	as := x.ev(prompt("p2", "steer from the mac"), 4)
+	if types(as) != "MacNotice" {
+		t.Fatalf("Mac prompt mid-turn: %s", types(as))
+	}
+	as = x.ev(text("a1", agents.Final, "answer for the phone"), 5)
+	if p := find[turn.Post](t, as); p.Markdown != "answer for the phone" {
+		t.Errorf("the Telegram turn's answer was held: %s", types(as))
+	}
+	if n := find[turn.MacNotice](t, as); !strings.Contains(n.HTML, "done") {
+		t.Errorf("the notice stays at working after the turn ended: %s", types(as))
+	}
+}
+
+func TestAutomaticTurnDuringTheMacHoldIsHeld(t *testing.T) {
+	x := newH(t, turn.Config{}, macHold)
+	x.ev(prompt("p1", "on the mac"), 0)
+	x.ev(text("a1", agents.Final, "ok"), 1)
+	e := prompt("n1", "<task-notification>x</task-notification>")
+	e.Auto = true
+	got := append(x.ev(e, 10), x.ticks(10, 14)...)
+	got = append(got, x.ev(text("a2", agents.Final, "the task ended"), 15)...)
+	if s := types(got); s != "HeldAnswer" {
+		t.Errorf("automatic turn on the Mac: %s, want only HeldAnswer", s)
+	}
+}
+
+func TestMacHoldSurvivesARestart(t *testing.T) {
+	cfg := turn.Config{}
+	x := newH(t, cfg, macHold)
+	x.ev(prompt("p1", "on the mac"), 0)
+	b, err := json.Marshal(x.k.Snapshot())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var snap turn.Snapshot
+	if err := json.Unmarshal(b, &snap); err != nil {
+		t.Fatal(err)
+	}
+	x.k = turn.Restore(cfg, macHold, snap)
+	got := append(x.ticks(1, 5), x.ev(text("a1", agents.Final, "ok"), 6)...)
+	if s := types(got); s != "HeldAnswer,MacNotice" {
+		t.Errorf("after restore: %s", s)
+	}
+	if as := x.k.Event(prompt("p2", "phone"), true, at(10)); types(as) != "MacBack" {
+		t.Errorf("echo after restore: %s", types(as))
+	}
+}
+
+func TestMacNoticeOffShowsMacTurns(t *testing.T) {
+	x := newH(t, turn.Config{}, turn.Settings{Mode: "progress", ShowMacPrompts: true})
+	as := x.ev(prompt("p1", "typed on the mac"), 0)
+	if p := find[turn.Post](t, as); p.Kind != "prompt" {
+		t.Fatalf("prompt not posted: %s", types(as))
+	}
+	if as := x.ev(text("a1", agents.Final, "ok"), 1); types(as) != "Post" {
+		t.Errorf("answer: %s", types(as))
+	}
+}

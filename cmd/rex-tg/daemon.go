@@ -14,6 +14,7 @@ import (
 	"gopkg.in/natefinch/lumberjack.v2"
 
 	"rex-tg/internal/daemon"
+	"rex-tg/internal/install"
 	"rex-tg/internal/keychain"
 )
 
@@ -60,17 +61,30 @@ func daemonCmd(ctx context.Context, args []string, env Env) int {
 
 	ctx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	// Restart after an update only under launchd, which starts the daemon
+	// again; it names its jobs in XPC_SERVICE_NAME. A daemon started by hand
+	// keeps running the old binary.
+	var self string
+	if env.Getenv("XPC_SERVICE_NAME") == install.DefaultPaths(env.Home, "").Label {
+		self, _ = env.Executable() // the stable path that launchd starts
+	}
 	err = env.RunDaemon(ctx, daemon.Options{
-		Config: cfg,
-		Token:  token,
-		Home:   env.Home,
-		Logger: logger,
-		Now:    env.Now,
+		Config:   cfg,
+		Token:    token,
+		Home:     env.Home,
+		Logger:   logger,
+		Now:      env.Now,
+		SelfPath: self,
 	})
 	switch {
 	case err == nil || errors.Is(err, context.Canceled):
 		logger.Info("daemon stopped")
 		return 0
+	case errors.Is(err, daemon.ErrUpdated):
+		// A non-zero status: launchd (KeepAlive, SuccessfulExit false)
+		// starts the new binary.
+		logger.Info("daemon stopped for the update; launchd starts the new binary")
+		return exitUpdated
 	case errors.Is(err, daemon.ErrAlreadyRunning):
 		fmt.Fprintln(env.Stderr, "rex-tg: another daemon is already running")
 		logger.Error("daemon not started", "err", err)
@@ -81,6 +95,10 @@ func daemonCmd(ctx context.Context, args []string, env Env) int {
 		return 1
 	}
 }
+
+// exitUpdated is the exit status after an update (EX_TEMPFAIL). It is not 0,
+// so launchd starts the daemon again, now from the new binary.
+const exitUpdated = 75
 
 // maxLaunchdLog is the size above which a launchd log is emptied. launchd
 // writes the daemon's stdout and stderr there and never rotates them; the

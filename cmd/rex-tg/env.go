@@ -37,7 +37,7 @@ type Env struct {
 	Now        func() time.Time
 	// Security is the path of the security tool.
 	Security string
-	// Executable returns the absolute, symlink-free path of this binary.
+	// Executable returns the absolute, symlink-free path of this binary. A Homebrew Cellar path becomes the stable opt path.
 	Executable      func() (string, error)
 	StdinIsTerminal func() bool
 	// TelegramBase overrides the Bot API base URL from the config.

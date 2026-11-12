@@ -179,8 +179,9 @@ func TestNewAgent(t *testing.T) {
 		return wins.Windows
 	}
 	wins := tabs()
-	if len(wins) != 2 || wins[0].Label != "my app · pi" || wins[1].Label != "my app · pi" {
-		t.Fatalf("tabs: %+v, want two named \"my app · pi\"", wins)
+	// Two tabs of one folder and agent get unique names.
+	if len(wins) != 2 || wins[0].Label != "my app · pi" || wins[1].Label != "my app · pi #2" {
+		t.Fatalf("tabs: %+v, want \"my app · pi\" and \"my app · pi #2\"", wins)
 	}
 
 	rx := rex.New(rexBin, rex.WithServer("unix://"+sock))

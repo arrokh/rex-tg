@@ -340,10 +340,10 @@ Rules:
 - **Resume while the topic is busy.** If the topic is live with another session in another pane, the resumed session does not take the topic. `/agents` lists it, and opening it moves it to a new topic. In the same pane there is no conflict: the session that ran there before has stopped, so the resumed session takes the topic back.
 - **Resume under a new session ID.** If an agent gives a resumed session a new ID, rex-tg cannot link it to the old one. The take-over rule still applies in the same pane, so the topic stays the same.
 - **Rex restart.** After one restart, the block IDs and the session ID stayed the same (spike S5). A new block ID is still possible, because only one restart was tested. A restored pane does not run its creation command again, so the agent must resume in that pane, for example through rexume. That resume was not tested (S5). The topic then follows the session. If the restored pane starts a new session instead, rex-tg has no history for that pane, so the session appears in `/agents` as a new agent.
-- **Agent exits, or its pane closes.** The topic becomes `offline`. rex-tg posts why: "🔴 pi stopped: its Rex pane was closed.", "…: it exited, and the pane is still open.", or "…: another session took its pane." A turn that was running ends within 2 seconds with a "🔴 Stopped" summary, so "typing…" stops (the agent's last lines are read by then; an answer gets 5 seconds). The topic's name gets a 🔴 in front until the agent runs again; then rex-tg posts "🟢 pi is running again." and the 🔴 goes away. Messages that you send while it is offline are refused with a reason.
+- **Agent exits, or its pane closes.** The topic becomes `offline`. rex-tg posts why: "🔴 pi stopped: its Rex pane was closed.", "…: it exited, and the pane is still open.", or "…: another session took its pane." A turn that was running ends within 2 seconds with a "🔴 Stopped" summary, so "typing…" stops (the agent's last lines are read by then; an answer gets 5 seconds). The topic's name, and the tab's name in the `/new` session, get a 🔴 in front until the agent runs again; then rex-tg posts "🟢 pi is running again." and the 🔴 goes away. Messages that you send while it is offline are refused with a reason.
 - **Deleted topic.** Telegram does not tell the bot that you deleted a topic. rex-tg finds out in two ways, and then the topic becomes `closed`: a send or a rename fails with "message thread not found", or you tap the agent in `/agents`. That button reports the tap to rex-tg instead of opening a link, and rex-tg first sets the topic's name with `editForumTopic` (Telegram answers `TOPIC_NOT_MODIFIED` when the name is the same). When the topic is gone and the pane and the session still exist, rex-tg makes a new topic for the session, with the intro card and the backfill (found live, spike S1).
 - **Unlink.** `/unlink` closes the topic in rex-tg. The topic stays in Telegram as history.
-- **Topic name.** A short name, at most 32 characters, cut at the end of a word: the name that you gave the Rex pane, else the session name, else the project folder, else the runtime. Rex's default pane name `shell` (and shell or agent program names) do not count. Every 30 seconds, rex-tg compares each live topic's name with its pane and session and renames the topic with `editForumTopic` when it changed. A take-over renames at once. When the topic of a live agent gets a new name and the agent's pane is in the Rex session for `/new` (`rex.new_session`, section 8.7), rex-tg gives the pane's tab the same name (`rex window rename`). Tabs in other sessions are yours, and keep their names.
+- **Topic name.** A short name, at most 32 characters, cut at the end of a word: the name that you gave the Rex pane, else the session name, else the project folder, else the runtime. Rex's default pane name `shell` (and shell or agent program names) do not count. Every 30 seconds, rex-tg compares each live topic's name with its pane and session and renames the topic with `editForumTopic` when it changed. A take-over renames at once. When the agent's pane is in the Rex session for `/new` (`rex.new_session`, section 8.7), rex-tg gives the pane's tab the topic's name (`rex window rename`). It does this when the topic is linked and at every name check, whenever the tab's label (from `rex window ls`) differs, so nothing is renamed when it already matches. When the topic has only the folder name, the tab keeps the `<folder> · <agent>` form. Two tabs in that session never share a label: rex-tg adds ` #2`, ` #3`. While the topic is offline, the tab gets the same 🔴 in front; it goes away when the agent runs again. Tabs in other sessions are yours, and keep their names.
 
 ## 8. Telegram display
 
@@ -415,6 +415,24 @@ Set per topic with `/mode`:
 - `/verbose full`: also post each tool's output, shortened and inside a collapsed quote. Secret removal still applies.
 - `/reasoning on`: also post thinking text, when the transcript has it. pi stores thinking text. Claude Code often stores it empty. Codex stores reasoning summaries.
 
+### 8.4a Work on the Mac (the Mac hold)
+
+The user may write in the pane on the Mac for a while, then go on from the phone. While they work on the Mac, the topic should not repeat everything.
+
+- A prompt typed on the Mac starts a hold (`[display] mac_notice`, on by default).
+- The topic gets one silent notice: `💻 In use on the Mac · working…`, the latest Mac prompt, and "Replies stay on the Mac. Write here to go on in Telegram."
+- The prompts, progress, typing, and answers of held turns are not posted.
+- The notice is edited as the turns go on: `✅ done`, `⚠️ ended with an error`, or `🔴 agent stopped`, and the next Mac prompt. It is posted once and then only edited, so it makes no sound again.
+- When an answer was held, the notice has a `📄 Last answer` button. It posts the newest held answer, like any answer, once.
+- A message from Telegram ends the hold. Its turn is shown as usual. The old notice keeps its text, but loses its button, and the held answer is dropped. The next Mac prompt starts a new hold with a new notice at the bottom of the topic.
+- A turn that Telegram already sees stays shown: a Mac prompt sent into a running Telegram turn only updates the notice, and the turn's end sets it to done.
+- A prompt that does not match the text rex-tg typed (an echo miss, section 9.5) is still taken as from Telegram when rex-tg typed into that pane within the last 30 seconds. So a turn that Telegram started is never held.
+- A turn that no person started, such as a Claude Code task notification, follows the current state: held during a hold, shown otherwise.
+- Permission prompts and alerts are not held. They need an answer, and the user may have left the Mac.
+- A post of the notice whose outcome is unknown is not repeated (at most once). The hold then goes on without a notice.
+- The tracker (`internal/turn`) decides what is held. The daemon keeps the notice's message number and the held answer in the key-value table, so a restart keeps both.
+- With `mac_notice = false`, Mac turns are shown as before, with `💻 You (on Mac)` when `show_mac_prompts` is on.
+
 ### 8.5 Receipts and status signals
 
 | Signal | Meaning |
@@ -425,7 +443,8 @@ Set per topic with `/mode`:
 | `⏳ Waiting until the agent is idle` | your message is queued (D11), with buttons `⚡ Send now` and `✖ Cancel`. The notice is deleted when the message leaves the queue: it was typed (👀, then 👍), refused or expired (👎 and a reply that says why), or typing failed. `✖ Cancel` turns it into `✖ Cancelled`. |
 | `⛔ Not sent: the pane now runs zsh, not pi.` | the safety check refused it |
 | "typing…" | the agent is working; refreshed about every 5 seconds, only in the topic you used last |
-| `💻 You (on Mac): …` | a prompt you typed in the pane on the Mac. A prompt that the agent's own program wrote, such as Claude Code's notice that a background task ended, is not shown. |
+| `💻 In use on the Mac` | you work in the pane on the Mac; the replies stay there until you write in the topic (8.4a) |
+| `💻 You (on Mac): …` | with `mac_notice = false`: a prompt you typed in the pane on the Mac. A prompt that the agent's own program wrote, such as Claude Code's notice that a background task ended, is not shown. |
 | `── pi · new session ──` | a new session took over the topic |
 
 Telegram allows only a fixed set of reaction emoji. Hermes uses 👀, 👍, and 👎. ✅ is probably not in the set, so rex-tg does not use it as a reaction. Spike S1 checks the set.
@@ -456,6 +475,14 @@ Before rex-tg sends the keys for a button:
 
 When the prompt ends, by a button or on the Mac, rex-tg removes the buttons from the alert message with `editMessageReplyMarkup`. So an old button can never type into whatever is on the screen later.
 
+**Reminders.** A prompt stops the agent until you answer, and an alert is easy to miss on a phone.
+
+- When an alert is still open after `[alerts] remind_after` (10 minutes), rex-tg posts `⏰ Still waiting for your answer · 10 min` in its topic.
+- The reminder is a reply to the alert, so a tap on it jumps there. It makes a sound, unless the topic is muted.
+- The next reminder comes `remind_after` after the one before, up to `[alerts] reminders` (3) times. So reminders never come in a burst, also not after the daemon was stopped. Each one deletes the one before, so the topic keeps one reminder.
+- The reminder is deleted when the alert closes, by a button or on the Mac. A reminder of an alert that closed while the daemon was stopped is deleted at the next start.
+- At most once: a reminder's number is stored before it is sent (kv `remind:<alert>`). A send whose outcome is unknown is not repeated, also not after a restart.
+
 ### 8.7 Main chat and commands
 
 ```
@@ -475,11 +502,18 @@ Active agents (3)
 [ ↻ Refresh ]
 ```
 
-The first line is the topic name (section 7). The second line is the runtime and the folder; when the name comes from the pane, the session name follows. `↗` marks a session that already has a topic. Every button reports the tap to rex-tg: for `↗`, rex-tg checks that the topic still exists and posts a link to it, or makes a new topic when it was deleted.
+The first line is the topic name (section 7), the state, and how long the agent has been in it, such as `working · 3m`. `💻 on the Mac` marks a session in use on the Mac (8.4a). The second line is the runtime and the folder; when the name comes from the pane, the session name follows. `↗` marks a session that already has a topic. Every button reports the tap to rex-tg: for `↗`, rex-tg checks that the topic still exists and posts a link to it, or makes a new topic when it was deleted.
+
+**The live board.** The list shows the agents that wait for you first, then the working ones, then the idle ones.
+
+- The newest `/agents` message (or the one whose `↻ Refresh` you tapped) is live. rex-tg edits it when an agent comes, goes, or changes its state, and once a minute so the times stay right.
+- Edits make no sound, come at most every 3 seconds, and happen only when the text changes. Older lists stay as they were.
+- Pin the live list to keep it at hand. Its message number is kept in the key-value table (`agents_board`), so it stays live after a restart.
+- A redraw uses the registry's state, so it runs no Rex scan. `↻ Refresh` scans first.
 
 Commands in the main chat: `/agents`, `/new` (start an agent, see below), `/topics` (topics and their states), `/status` (daemon health), `/help`.
 
-Commands in a topic: `/info`, `/screen [lines]`, `/approve`, `/deny`, `/esc`, `/interrupt`, `/key <keys>`, `/force <text>`, `/mode progress|block|final`, `/verbose on|full|off`, `/reasoning on|off`, `/resend [id]`, `/unlink`, `/help`.
+Commands in a topic: `/info`, `/screen [lines]`, `/approve`, `/deny`, `/esc`, `/interrupt`, `/key <keys>`, `/force <text>`, `/model [value]`, `/effort [level]`, `/mode progress|block|final`, `/verbose on|full|off`, `/reasoning on|off`, `/resend [id]`, `/unlink`, `/help`.
 
 How a topic routes text that starts with `/` (D15):
 
@@ -495,7 +529,7 @@ Start an agent with `/new`:
 
 1. The bot asks for the agent: pi, Claude Code, or Codex, and cux when it is installed (on the PATH, or in `~/.local/bin`, `/opt/homebrew/bin`, or `/usr/local/bin`, because launchd gives the daemon a short PATH). cux starts Claude Code with one of several Claude accounts, so its pane is a Claude Code pane (section 6).
 2. The bot asks for the folder. Its buttons offer up to 6 folders where agent sessions ran, the most recently used first. In a linked topic, the folder of the topic's agent comes first. You can also send a path: `~/work/app`, an absolute path, or a path from your home folder (`work/app`).
-3. Every agent that `/new` starts goes into one Rex session, `rex-tg` (`rex.new_session`, section 12). rex-tg finds it by name, ignoring case and the spaces around it, and adds a tab to it (`rex window new --focus=false`, so the tab that the Rex app shows stays the same). When no session has that name, it makes one (`rex new`). The tab is named after the folder and the agent, such as `rex-tg · pi`. Once the agent's topic gets its own name, such as the session name, the tab takes that name too (section 7). Rex takes at most 128 characters and no control characters in a name, and rex would read a name that starts with `-` as an option, so rex-tg leaves those out. Starts run one at a time, so two starts make one session.
+3. Every agent that `/new` starts goes into one Rex session, `rex-tg` (`rex.new_session`, section 12). rex-tg finds it by name, ignoring case and the spaces around it, and adds a tab to it (`rex window new --focus=false`, so the tab that the Rex app shows stays the same). When no session has that name, it makes one (`rex new`). The tab is named after the folder and the agent, such as `rex-tg · pi`. The tab keeps following its topic's name (section 7). Rex takes at most 128 characters and no control characters in a name, and rex would read a name that starts with `-` as an option, so rex-tg leaves those out. Starts run one at a time, so two starts make one session.
 4. The tab runs the agent's `launch` command (section 12) through your login shell with its interactive startup files (`--interactive`), as when you type the command in a terminal. So the PATH and the shell functions from `~/.zshrc` apply. Rex passes each word of the command as it is: spaces and `$` are not read by the shell.
 5. When the agent reports its session (its hook at start), rex-tg opens its topic, as the Open button of `/agents` does. If the agent exits first, rex-tg shows the exit code and the end of the pane's screen. If no report comes within 90 seconds, rex-tg shows the screen and points to `/agents`.
 6. Before its session starts, an agent may ask a question on its screen, such as "trust this folder?" of Claude Code and Codex in a folder they do not know yet. It has no topic then, so rex-tg posts the question in the chat with a button for each answer. It looks for a list of answers with a cursor (`❯` or `›`) in the bottom 30 lines, with at least two answers, on two screen reads in a row. A button moves the cursor to that answer with Down or Up, one key at a time, and reads the screen after each key; when the cursor is on the answer, it presses Enter. Claude Code 2.1.322 shows its trust answers without numbers, with "No, exit" first and the cursor on it, so a number key would be a guess; Codex 0.167.1 also takes Up, Down, and Enter. Before each key, rex-tg checks that typing is not paused and that the pane's foreground process is the agent that `/new` started. If a key shows no effect, it presses nothing more and says so. If you answer on the Mac, the buttons go. While a question is open, rex-tg keeps waiting for the agent, up to 10 minutes.
@@ -540,6 +574,19 @@ These features are built. Some are off until you set them up.
 | Rich messages | Final answers of up to 32768 characters go out with `sendRichMessage` (Bot API 10.1) as Markdown, so Telegram renders tables, code, and headings itself. On a 400 error, rex-tg sends the same text as plain text, or as a `.md` file when it is longer than 4000 characters. This is safe for "at most once", because Telegram posted nothing. | Off (`[display] rich_messages`) |
 | `/pause`, `/unpause` | In the main chat. `/pause` stops all typing into panes, for every topic, until `/unpause`. Outgoing messages continue. The flag survives a restart. | Not paused |
 | `/mute`, `/unmute` | In a topic. Muted topics send every message without sound. | Not muted |
+
+### 8.10 Agent controls
+
+A control is a setting of the agent session that you can change from Telegram. Today there are two: `/model` and `/effort` (pi calls the second one the thinking level). The design leaves room for more, such as fast mode or the permission mode.
+
+- **Where the knowledge lives.** An adapter that supports controls implements `agents.Controller` (see [implementation.md](implementation.md)). It lists its controls, builds the command text for a value, and reads the current values from transcript lines. The daemon has no code per agent. A new setting or a new agent is data or a method in an adapter. The only shared list is the command names in `internal/inbound` (a test checks that every control name is on it).
+- **Current values.** The daemon calls `Seen` for each transcript line (in `onBatch`) and keeps the latest value per session, in memory and in the key-value table (`ctl:<conversation id>`). When a command finds no value, it scans the transcript once, in a worker. `/info` shows the values.
+- **`/model` with no value** posts a card: the current value, and one button per choice. Choices come from `[agents.<name>.choices]` in the config, else from the agent's own files (Codex: the visible models in `~/.codex/models_cache.json`), else from the adapter. A control without choices (pi's model) takes a typed value only.
+- **`/model <value>`** is checked first. A fixed list (effort) allows only its values. A free value (model) allows letters, digits, and `. _ : / [ ] -` only, up to 80 characters, not starting with `-`. The text goes into a terminal, so no space, quote, or newline gets through. The adapter checks it again in `Command`.
+- **Applying a value is typing a message.** The command text (for example `/model opus`) is queued like any other text and goes through the same input path (section 9.5). It waits until the agent is idle. All checks apply: the agent in front, no open prompt, not paused. The row id comes from the update id, so one update types it at most once. A tap on a button queues its row the same way, without a reaction, because the message that holds the button is the bot's own. A tap checks the choice again (callback data `cf:<control>:<index>:<hash>`, where the hash is of the choice) and fails with "out of date" if the list changed. The same command text that already waits is not queued twice. Each card takes one tap: the core claims it in the key-value table (`cf_card:<chat>:<message>`) before anything is queued, so a quick second tap, or one after a restart, types nothing. A new value is kept at once, so a second change right after does not undo the first (Codex records its settings only at its next turn).
+- **No echo.** An agent's slash command writes no prompt in the transcript, so the row stays `delivered` and gets no 👍. Nothing waits for it. The pane is busy for `busy_after_typing` (15 s) after the Enter, and then the earlier idle signal counts again.
+- **Codex** sets the model and the effort in one command (`/model <slug> --reasoning=<level>`). So a change of one needs the other value from the transcript. Before the first turn there is none, and the answer is "send a message first, so rex-tg sees the model".
+- **`//model`** is still sent to the agent as `/model`, unchanged.
 
 ## 9. Delivery rules
 
@@ -682,6 +729,16 @@ Echo:
 - Both checks compare the texts without paths to image files (`.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`) and without `[Image #N]` markers. For a photo from Telegram, rex-tg types the caption and the file's path. Claude Code attaches the image and stores `[Image #N]` and the caption instead of the path (seen live, 2026-11-12). An agent that does not attach images keeps the path.
 - An echo is not posted to the topic again. It only turns 👀 into 👍.
 - A message sent during a run has no `user` line in Claude Code. Its echo is the `queued_command` attachment (spike S2). Codex writes a `user` line and a `UserMessage` item for it. pi writes a `user` line after the tool result.
+
+### 9.6 Updates
+
+`brew upgrade rex-tg` and `make install` replace the binary. The running daemon keeps the old one, so it must restart, and nothing of the topics may be lost.
+
+- The hooks, the pi extension, and the launchd job name a stable path: `~/.local/bin/rex-tg`, or Homebrew's `<prefix>/opt/rex-tg/bin/rex-tg`, never the versioned Cellar folder (`install.StablePath`).
+- The daemon watches that path every 20 seconds, but only when launchd runs it: launchd puts the job's label in `XPC_SERVICE_NAME`. A daemon started by hand keeps running the old binary, because nothing would start it again. When the binary changed, and stayed the same for one more check (the copy is complete), the daemon waits until no message is being typed. Then it stops cleanly with exit status 75.
+- launchd (`KeepAlive`, `SuccessfulExit` false) starts it again from the same path, now the new binary.
+- The links of topics and sessions, the transcript cursors, the turn snapshots, the queue, the outbox, the Mac hold, and the live board are in the database. The token is in the Keychain, and the proxy is in the config. So the new daemon goes on where the old one stopped, as after any restart. Telegram keeps the updates of the pause; the stored poll offset reads them.
+- `rex-tg install` runs again only when a release changes the hooks. `rex-tg doctor` reports hooks that point at another binary.
 
 ## 10. SQLite schema
 
@@ -903,6 +960,7 @@ launch = ["pi"]              # what /new runs; also [agents.claude] and [agents.
 mode = "progress"            # progress | block | final
 backfill = 3                 # final answers to post when a topic opens
 show_mac_prompts = true
+mac_notice = true            # hold Mac turns behind one notice (8.4a)
 progress_delay = "2s"
 progress_edit_interval = "2s"
 

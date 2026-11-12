@@ -37,6 +37,8 @@ var botCommands = []telegram.BotCommand{
 	{Command: "interrupt", Description: "Topic: stop the current turn"},
 	{Command: "key", Description: "Topic: press keys"},
 	{Command: "force", Description: "Topic: type text now"},
+	{Command: "model", Description: "Topic: show or change the agent's model"},
+	{Command: "effort", Description: "Topic: show or change the thinking effort"},
 	{Command: "mode", Description: "Topic: progress, block, or final"},
 	{Command: "verbose", Description: "Topic: off, on, or full"},
 	{Command: "reasoning", Description: "Topic: on or off"},

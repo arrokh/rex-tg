@@ -1,12 +1,16 @@
 package daemon
 
 import (
+	"fmt"
 	"path/filepath"
+	"regexp"
+	"slices"
 	"strings"
 	"unicode"
 
 	"rex-tg/internal/agents"
 	"rex-tg/internal/format"
+	"rex-tg/internal/rex"
 )
 
 // maxTopicName is the longest topic name that rex-tg gives. Telegram allows
@@ -96,4 +100,63 @@ func noAutoLink(s string) string {
 		}
 	}
 	return b.String()
+}
+
+// tabName is the name that a Rex tab should have for an agent, given the tab's
+// current name. It is the topic's name. When the topic has only the folder
+// fallback (no pane name and no session name), the tab keeps the form
+// "<folder> · <agent>", so the agent stays visible: a tab that already has
+// that form for the folder is kept as it is.
+func tabName(paneLabel string, rt agents.Runtime, cwd, title, current string) string {
+	if paneName(paneLabel) != "" || strings.TrimSpace(format.Redact(title)) != "" {
+		return cleanLabel(topicName(paneLabel, rt, cwd, title))
+	}
+	// A " #2" from a twin that has gone is dropped; uniqueTabName adds one
+	// back when it is still needed.
+	current = tabSuffix.ReplaceAllString(current, "")
+	if f := cleanLabel(folderBase(cwd)); f != "" && strings.HasPrefix(current, f+" · ") && strings.TrimSpace(strings.TrimPrefix(current, f+" · ")) != "" {
+		return current
+	}
+	return tabLabel(cwd, string(rt))
+}
+
+// tabOwner is the pane that names a tab: the first pane of the tab, in Rex's
+// order, that runs an agent. Without such a pane it is self (a stopped agent
+// marks its own tab). One owner per tab keeps two agents in one tab from
+// renaming it in turns at every check.
+func tabOwner(blocks []rex.Block, window, self string, hasAgent func(block string) bool) string {
+	for _, b := range blocks {
+		if b.WindowID == window && hasAgent(b.ID) {
+			return b.ID
+		}
+	}
+	return self
+}
+
+// tabSuffix is the " #N" that uniqueTabName adds.
+var tabSuffix = regexp.MustCompile(` #\d+$`)
+
+// offlineTabName is the name of the tab of a stopped agent: its current name
+// with the red mark in front.
+func offlineTabName(current string) string {
+	return cleanLabel(offlineMark + strings.TrimPrefix(current, offlineMark))
+}
+
+// uniqueTabName makes a tab name differ from the names of the other tabs of
+// the session: it adds " #2", " #3", and so on. A name that no other tab has
+// stays as it is.
+func uniqueTabName(name string, others []string) string {
+	if name == "" || !slices.Contains(others, name) {
+		return name
+	}
+	for n := 2; ; n++ {
+		suffix := fmt.Sprintf(" #%d", n)
+		base := []rune(name)
+		if max := maxLabel - len([]rune(suffix)); len(base) > max {
+			base = base[:max]
+		}
+		if cand := strings.TrimSpace(string(base)) + suffix; !slices.Contains(others, cand) {
+			return cand
+		}
+	}
 }

@@ -50,6 +50,30 @@ Each package exports `func New() agents.Adapter`. Formats are in [agent-transcri
 - Codex reads replies only from `response_item` (`message`, `role=assistant`) and emits `TurnEnd` for `event_msg` `task_complete`; it ignores `item_completed` `AgentMessage`.
 - `Input()` values (confirmed by spike S2 for all three): `{PasteEnterDelay: 300ms, SubmitKey: "enter", InterruptKeys: ["escape"], WhileWorking: "steer"}`.
 
+### Controller (optional, in `internal/agents`)
+
+An adapter may also implement `agents.Controller`. The daemon finds it with a type assertion, so adapters that do not support controls need no change.
+
+```go
+type Control struct{ Name, Title string; Choices []string; Free bool } // Name is the Telegram command: "model", "effort"
+type Controller interface {
+    Controls() []Control
+    Command(control, value string, cur map[string]string) (string, error) // the text to type
+    Seen(line []byte) map[string]string                                   // values shown by one transcript line
+}
+type ChoiceSource interface{ Choices(home, control string) []string }     // optional: choices from the agent's files
+func FindControl(cs []Control, name string) (Control, bool)
+func (c Control) CheckValue(value string) (string, error) // trims; a choice matches ignoring case; a free value must match [A-Za-z0-9][A-Za-z0-9._:/\[\]-]{0,79}
+func CheckControl(cs []Control, control, value string) (string, error) // adapters call it first in Command
+func ValidValue(v string) bool
+func MergeSeen(cur, add map[string]string) bool
+```
+
+- `Seen` is separate from `ParseLine`, so events do not change. It returns values by control name and must not panic. It does a cheap byte check first, because it runs for every line.
+- `cur` holds the latest values seen. It may lack a key. Codex needs both keys: `Command("effort", …)` without `cur["model"]` returns "send a message first, so rex-tg sees the model".
+- Claude: `/model <v>`, `/effort <v>`. Seen: assistant lines, `message.model` and the top-level `effort` string. Codex: `/model <model> --reasoning=<level>`. Seen: `turn_context` `payload.model` and `payload.effort`. `Choices` reads the `visibility: "list"` models of `~/.codex/models_cache.json`. pi: `/model <v>`, `/thinking <level>` (the control is still called `effort`). Seen: `model_change` (`provider/modelId`), `thinking_level_change`, and assistant messages (`provider`, `model`, `thinkingLevel`).
+- The daemon side is `daemon/controls.go`. `config.RuntimeInput.Choices` (`[agents.<name>.choices]`) replaces the choices of a control.
+
 ## internal/format
 
 ```go
@@ -210,6 +234,7 @@ SetAlertMessage(id, tgMessageID int64) error
 SetAlertState(id int64, state string) error
 Alert(id int64) (Alert, error)
 OpenAlerts(threadID int64) ([]Alert, error)
+AllOpenAlerts() ([]Alert, error)                       // all topics, for reminders
 
 // Incoming updates
 InsertInbound(in Inbound) (bool, error)               // false when update_id exists
@@ -257,7 +282,7 @@ Pure. One `Tracker` per topic. Times come from the caller.
 
 ```go
 type State string // "idle", "working", "done", "blocked", "error"
-type Settings struct{ Mode, Verbose string; Reasoning, ShowMacPrompts bool } // Mode: progress|block|final; Verbose: off|on|full
+type Settings struct{ Mode, Verbose string; Reasoning, ShowMacPrompts, MacNotice bool } // Mode: progress|block|final; Verbose: off|on|full
 type Config struct {
 	ProgressDelay, EditInterval, AnswerGrace, TypingInterval time.Duration // 2s, 2s, 5s, 5s
 	MaxRows, MaxSummaryRows, MaxRowRunes                     int           // 8, 30, 120
@@ -273,7 +298,9 @@ func (t *Tracker) Snapshot() Snapshot
 func Restore(cfg Config, s Settings, snap Snapshot) *Tracker
 ```
 
-Actions: `Post{Key, Kind, Markdown, HTML string; Silent bool}` (Kind: answer, block, tool, output, prompt, reasoning; HTML overrides Markdown when set), `ShowProgress{HTML}`, `EditProgress{HTML}`, `RepostProgress{HTML}`, `FinishProgress{HTML}`, `Typing{}`.
+Actions: `Post{Key, Kind, Markdown, HTML string; Silent bool}` (Kind: answer, block, tool, output, prompt, reasoning; HTML overrides Markdown when set), `ShowProgress{HTML}`, `EditProgress{HTML}`, `RepostProgress{HTML}`, `FinishProgress{HTML}`, `Typing{}`, and for the Mac hold (design 8.4a) `MacNotice{HTML}` (post the notice once, silently, then edit it), `MacBack{}` (stop editing it), and `HeldAnswer{Key, Markdown}` (keep it for `📄 Last answer`; do not post it).
+
+With `MacNotice` on, a prompt typed on the Mac (not an echo, not `Auto`) starts a hold. A turn that starts during a hold posts nothing and shows no typing or progress; its end updates the notice. An echo ends the hold, and the rest of its turn is shown. A turn that already shows progress, or that has an echo, is never held. The hold is part of the `Snapshot`.
 
 Behavior is design sections 4.4 and 8.1–8.5: the progress message appears after `ProgressDelay` without an answer, is edited at most every `EditInterval`, moves to the bottom when a `Post` lands below it, and ends as the summary line (D13). A final answer is posted at once. On `idle` or `done` without an answer, the tracker waits `AnswerGrace`; then it posts the last unposted commentary as the answer, if there is one, and finishes the progress message. All dynamic text in HTML is escaped and passed through `Redact`.
 
@@ -327,7 +354,8 @@ type Config struct {
 		PiArgv0, ClaudeArgv0, ClaudeExecGlob, CodexNames []string
 		Pi, Claude, Codex                                RuntimeInput
 	}
-	Display struct{ Mode string; Backfill int; ShowMacPrompts bool; ProgressDelay, ProgressEditInterval Duration }
+	Display struct{ Mode string; Backfill int; ShowMacPrompts, MacNotice bool; ProgressDelay, ProgressEditInterval Duration }
+	Alerts  struct{ RemindAfter Duration; Reminders int } // 10m, 3; 0 turns reminders off
 	Input   struct{ QueueExpiry, JoinWindow, JoinWindowLong, BusyAfterTyping Duration; MaxUploadMB int }
 	Voice   struct{ WhisperCLI, Model, Language string } // optional; empty WhisperCLI turns voice notes off
 	State   struct{ Dir string }                        // default ~/.local/state/rex-tg
@@ -410,7 +438,7 @@ type Delivered struct{ UpdateID int64; BodyHash, Body string; DeliveredAt time.T
 func MatchEcho(prompt string, at time.Time, delivered []Delivered) (int64, bool) // hash within 10 min, else 40-character prefix within 30 s
 ```
 
-Topic commands: `info`, `screen`, `approve`, `deny`, `esc`, `interrupt`, `key`, `force`, `mode`, `verbose`, `reasoning`, `resend`, `unlink`, `mute`, `unmute`, `help`. Main-chat commands: `start`, `agents`, `topics`, `status`, `pause`, `unpause`, `help`. `/cmd@<botUsername>` is the same command; a command addressed to another bot is ignored.
+Topic commands: `info`, `screen`, `approve`, `deny`, `esc`, `interrupt`, `key`, `force`, `model`, `effort`, `mode`, `verbose`, `reasoning`, `resend`, `unlink`, `mute`, `unmute`, `help`. Main-chat commands: `start`, `agents`, `topics`, `status`, `pause`, `unpause`, `help`. `/cmd@<botUsername>` is the same command; a command addressed to another bot is ignored.
 
 ### internal/sender
 
@@ -458,13 +486,17 @@ type Options struct {
 	ProcStart func(pid int) (time.Time, error) // nil: the registry default
 	Timing    Timing                          // zero values: the production waits
 	HasProgram func(name string) bool         // nil: the PATH, ~/.local/bin, /opt/homebrew/bin, /usr/local/bin (cux for /new); tests set it
+	SelfPath  string                          // the binary launchd starts (install.StablePath); replaced: Run returns ErrUpdated; empty: off
 }
 var ErrAlreadyRunning error
+var ErrUpdated error // the binary was replaced; `rex-tg daemon` exits 75, so launchd starts the new one (design 9.6)
 func Run(ctx context.Context, opt Options) error                                   // until ctx ends
 func NewPairingCode(ctx context.Context, st *store.Store, now time.Time) (string, error) // used by `rex-tg login`
 ```
 
-KV keys: `owner_user_id`, `owner_chat_id`, `bot_username`, `tg_offset`, `paused`, `pairing_code_hash`, `pairing_expires_at`, `pairing_attempts`, `turn:<thread id>` (the turn tracker snapshot as JSON; the sender owns the `progress` rows).
+KV keys: `owner_user_id`, `owner_chat_id`, `bot_username`, `tg_offset`, `paused`, `pairing_code_hash`, `pairing_expires_at`, `pairing_attempts`, `turn:<thread id>` (the turn tracker snapshot as JSON; the sender owns the `progress` rows), `mac_notice:<thread>` and `mac_answer:<thread>` (the Mac hold, design 8.4a), `agents_board` (`<chat>:<message>` of the live `/agents` list, 8.7), `remind:<alert>` (`<count>:<chat>:<message>` of an alert's newest reminder, 8.6).
+
+Periodic work in the tick, each in its own file: `tickBoard` (`board.go`: redraw the live list when an agent changed, at most every `Timing.BoardEdit`, and every `Timing.BoardRefresh`), `tickReminders` (`reminders.go`: every `Timing.RemindCheck`), and `checkUpdate` (`selfupdate.go`: every `Timing.UpdateCheck`; stops only while `delivering` and `busy` are empty).
 
 `Run` does, in order: take the instance lock (`syscall.Flock` on `Config.LockPath()`, fail with `ErrAlreadyRunning`); open the store; `sender.Recover`; `store.RecoverTyping` with one notice per row ("Your message may be in the input box without Enter. Check with /screen."); `getMe` (save `bot_username`; log a warning when `has_topics_enabled` is false); `setMyCommands`; restore tailers and turn trackers for live topics; start the sender, the Rex event stream (restart with backoff), the spool watcher (fsnotify plus a 1 s poll on `Config.SpoolDir()`), the scan ticker, the `getUpdates` loop, and a 250 ms tick; then run one core loop that handles everything below. Only the core loop changes state, so no locks are needed beyond the store's.
 
@@ -472,7 +504,7 @@ Flows (design sections in brackets):
 
 1. **Registry changes** [6, 7]: `SessionStarted`/`TakeOver`/`Resume` start or restart the tailer of that session at its `TailStart`, post the divider (`── <Divider> ──`, kind `divider`, key `divider:<thread>:<conv>:<n>`), and post the backfill (the last `Display.Backfill` final answers from `tail.Scan` through the adapter, kind `backfill`, with their own event keys so nothing repeats). `TopicOffline` posts "🔴 agent stopped" and stops the tailer; `TopicLive` posts "🟢 agent is running again". `StateChanged` goes to the topic's turn tracker; `blocked` with kind `permission` or `question` opens an alert; leaving `blocked` closes the topic's open alerts (buttons removed, state `gone` or `answered`). `PaneGone` makes the topic offline.
 2. **Transcript lines** [4.2, 6, 9]: each batch is parsed with the session's adapter (`LineContext{SessionID, Offset, CWD}`); after a `Reset` batch, events whose `At` is at or before `cursor.LastEventAt` are dropped; a `UserPrompt` is checked with `inbound.MatchEcho` against `store.DeliveredSince` (an echo acks the inbound row, reacts 👍, and goes to the tracker with `echo=true`); events go to `turn.Tracker.Event`; prompts and answers also go to `registry.TranscriptSignal`; tracker `Post`s become outbox items (Markdown through `format.Redact` and `format.Parts(…, 4000)`; more than 4 parts become one `.md` document; `HTML` posts are one part; with `Display.RichMessages`, final answers up to 32768 characters become one `rich` part); all items of a batch plus the new cursor go through one `store.CommitBatch`; progress actions go to `sender.Progress`; `Typing` goes to `sender.Typing` only for the topic used last. The tracker snapshot is saved to KV after each batch and tick that changed it.
-3. **Telegram updates** [8.7, 8.8, 9.5, 11]: each update is stored with `store.InsertInbound` before `tg_offset` moves past it. Before pairing, only `/start <code>` is handled (hash compare, 10-minute expiry, 5 attempts; success saves the owner and answers "Paired"). After pairing, updates from anyone else are dropped. The main chat handles `start`, `agents` (registry `Agents` with buttons: `o:<pane id>` to open, or a URL button to `https://t.me/<bot>/<message_thread_id>` when the session has a topic), `topics`, `status`, `pause`, `unpause`, `help`. A topic message is looked up with `store.ThreadByTopic`; unknown or closed topics answer "This topic is not linked. Use /agents in the main chat."; text goes through `inbound.RouteText`; agent text goes to the `inbound.Joiner`; commands run as in design 8.7 (`info`, `screen` with redacted capture in `<pre>`, `approve`, `deny`, `esc`, `interrupt`, `key`, `force`, `mode`, `verbose`, `reasoning`, `resend` → `store.ResendUnknown`, `unlink`, `mute`, `unmute`, `help`). Edited messages answer "Edits are not sent to the agent." Every callback query is answered.
+3. **Telegram updates** [8.7, 8.8, 9.5, 11]: each update is stored with `store.InsertInbound` before `tg_offset` moves past it. Before pairing, only `/start <code>` is handled (hash compare, 10-minute expiry, 5 attempts; success saves the owner and answers "Paired"). After pairing, updates from anyone else are dropped. The main chat handles `start`, `agents` (registry `Agents` with buttons: `o:<pane id>` to open, or a URL button to `https://t.me/<bot>/<message_thread_id>` when the session has a topic), `topics`, `status`, `pause`, `unpause`, `help`. A topic message is looked up with `store.ThreadByTopic`; unknown or closed topics answer "This topic is not linked. Use /agents in the main chat."; text goes through `inbound.RouteText`; agent text goes to the `inbound.Joiner`; commands run as in design 8.7 (`info`, `screen` with redacted capture in `<pre>`, `approve`, `deny`, `esc`, `interrupt`, `key`, `force`, `model`, `effort` (daemon/controls.go), `mode`, `verbose`, `reasoning`, `resend` → `store.ResendUnknown`, `unlink`, `mute`, `unmute`, `help`). Edited messages answer "Edits are not sent to the agent." Every callback query is answered.
 4. **Typing** [4.3, 9.5]: joined text becomes a queued inbound message (the first update carries the text; the others are marked done); if the pane is not ready, answer "⏳ Waiting until the agent is idle." with `⚡ Send now` (`s:<update id>`) and `✖ Cancel` (`c:<update id>`). The notice's chat and message number are kept in kv (`wait_notice:<update id>`); when the message reaches a final state (`forget`), the notice is deleted, or loses its buttons when Telegram refuses the delete. `✖ Cancel` edits it to "✖ Cancelled" instead. On each tick, for each topic with queued messages, the oldest one is delivered when `registry.Ready` says yes and `inbound.Check` passes: state `typing`, `rex.Paste`, wait `InputProfile.PasteEnterDelay`, `rex.SendKeys(submit)`, state `delivered`, react 👀, `registry.MarkTyped`. A refused message gets 👎 and a reply with the reason. A message older than `InputSettings.QueueExpiry` expires with a reply. The facts for `inbound.Check` come from the store, the registry, `rex.Process` with `registry.AgentInFront`, and the open alerts.
 5. **Alerts** [8.6]: capture the pane, take the last 25 lines (redacted), parse numbered options (`^\s*(?:[❯>›]\s*)?(\d)[.)]\s+(.+)$`) into buttons with the digit as the key, else use `Config.Input(rt).Answers`; always add `Esc`. Store the alert with the SHA-256 of the prompt lines, post it through `sender.Call(PriorityAlert, …)` with buttons `a:<alert id>:<index>`. A button press checks the owner, captures again and compares the hash, sends the keys, marks the alert answered, and removes the buttons. `/approve` and `/deny` press the first and the last non-Esc option.
 6. **Opening a topic** [4.1]: the `o:<pane id>` button resolves the pane's session (an unresolved pane answers "Waiting for the session file…"); `createForumTopic` through `sender.Call`; `store.LinkTopic`; the intro card (design 8.7); the backfill; the tailer starts at the end of the file; a turn tracker is created with the topic's settings.

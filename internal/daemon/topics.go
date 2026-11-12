@@ -66,6 +66,9 @@ func (d *daemon) threadOf(conv int64) (store.Thread, bool) {
 
 // onChanges applies the registry's changes (flow 1).
 func (d *daemon) onChanges(chs []registry.Change) {
+	if len(chs) > 0 {
+		d.boardDirty() // an agent came, went, or changed its state
+	}
 	for _, c := range chs {
 		switch c.Kind {
 		case registry.SessionStopped:
@@ -182,6 +185,7 @@ func (d *daemon) rename(th store.Thread, conv store.Conversation) {
 			name = d.desiredName(conv)
 		}
 		if name == th.Name {
+			d.syncTab(th, conv) // the tab may differ although the topic does not
 			return
 		}
 		err := d.snd.Call(sender.PriorityEdit, func(ctx context.Context, tg *telegram.Client) error {
@@ -192,9 +196,7 @@ func (d *daemon) rename(th store.Thread, conv store.Conversation) {
 			if err := d.st.SetThreadName(d.ctx, th.ID, name); err != nil {
 				d.log.Warn("rename topic", "err", err)
 			}
-			if th.Status != store.ThreadOffline {
-				d.syncTab(conv, name)
-			}
+			d.syncTab(th, conv)
 		case telegram.ClassThreadNotFound:
 			d.emit(evSender{sender.Event{Kind: sender.ThreadGone, ThreadID: th.ID}}) // the user deleted it
 		default:
@@ -205,22 +207,53 @@ func (d *daemon) rename(th store.Thread, conv store.Conversation) {
 	})
 }
 
-// syncTab gives the Rex tab of an agent the name of its topic (worker), so
-// a tab and its topic keep one name. Only tabs of the session for /new
+// tabSessionTTL is how long syncTab reuses the list of Rex sessions: one
+// name check runs syncTab for every topic, and they need one list only.
+const tabSessionTTL = 20 * time.Second
+
+// tabSessionList returns the Rex sessions, at most tabSessionTTL old. The
+// caller holds tabMu.
+func (d *daemon) tabSessionList() ([]rex.Session, error) {
+	if now := d.now(); d.tabSessions != nil && now.Sub(d.tabSessionsAt) < tabSessionTTL {
+		return d.tabSessions, nil
+	}
+	ss, err := d.rx.Sessions(d.ctx)
+	if err != nil {
+		return nil, err
+	}
+	d.tabSessions, d.tabSessionsAt = ss, d.now()
+	return ss, nil
+}
+
+// syncTab gives the Rex tab of an agent the name that goes with its topic
+// (worker): the topic's name, or the folder and agent form when the topic has
+// only the folder fallback, with a 🔴 in front while the topic is offline. th
+// is the stored state. Nothing happens when the tab already has the name, so
+// the 30-second name check costs no rename. Only tabs of the session for /new
 // (rex.new_session) are renamed: rex-tg made them, and the other tabs are
-// the user's. A failure is only logged: the next rename of the topic tries
-// again.
-func (d *daemon) syncTab(conv store.Conversation, name string) {
-	label := cleanLabel(name)
+// the user's. A failure is only logged: the next name check tries again.
+func (d *daemon) syncTab(th store.Thread, conv store.Conversation) {
 	want := strings.TrimSpace(d.cfg.Rex.NewSession)
-	if label == "" || want == "" {
+	if want == "" {
 		return
 	}
 	p, ok, err := d.st.PaneByConversation(d.ctx, conv.ID)
+	if err == nil && !ok && th.Status == store.ThreadOffline {
+		// The agent left, but its pane is open and empty: that is its tab.
+		// (A pane that another session took is not.)
+		var panes []store.Pane
+		if panes, err = d.st.Panes(d.ctx); err == nil {
+			if i := slices.IndexFunc(panes, func(q store.Pane) bool { return q.ConversationID == 0 && q.LastConversationID == conv.ID }); i >= 0 {
+				p, ok = panes[i], true
+			}
+		}
+	}
 	if err != nil || !ok || p.Session == "" || p.Block == "" || !p.GoneAt.IsZero() {
 		return
 	}
-	sessions, err := d.rx.Sessions(d.ctx)
+	d.tabMu.Lock() // two syncs must not pick the same unique name
+	defer d.tabMu.Unlock()
+	sessions, err := d.tabSessionList()
 	if err != nil {
 		d.log.Warn("rename tab: list sessions", "err", err)
 		return
@@ -238,8 +271,41 @@ func (d *daemon) syncTab(conv store.Conversation, name string) {
 	if j < 0 || blocks[j].WindowID == "" {
 		return
 	}
-	if err := d.rx.RenameWindow(d.ctx, p.Session, blocks[j].WindowID, label); err != nil {
-		d.log.Warn("rename tab", "window", blocks[j].WindowID, "err", err)
+	window := blocks[j].WindowID
+	hasAgent := func(block string) bool {
+		q, ok, err := d.st.PaneByBlock(d.ctx, p.Host, block)
+		return err == nil && ok && q.ConversationID != 0
+	}
+	if tabOwner(blocks, window, p.Block, hasAgent) != p.Block {
+		return // another agent in this tab names it
+	}
+	windows, err := d.rx.Windows(d.ctx, p.Session)
+	if err != nil {
+		d.log.Warn("rename tab: list tabs", "err", err)
+		return
+	}
+	k := slices.IndexFunc(windows, func(w rex.Window) bool { return w.ID == window })
+	if k < 0 {
+		return
+	}
+	current := windows[k].Label
+	var label string
+	if th.Status == store.ThreadOffline {
+		label = offlineTabName(current)
+	} else {
+		var others []string
+		for _, w := range windows {
+			if w.ID != window {
+				others = append(others, w.Label)
+			}
+		}
+		label = uniqueTabName(tabName(p.Label, conv.Runtime, conv.CWD, d.convTitle(conv), current), others)
+	}
+	if label == "" || label == current {
+		return
+	}
+	if err := d.rx.RenameWindow(d.ctx, p.Session, window, label); err != nil {
+		d.log.Warn("rename tab", "window", window, "err", err)
 	}
 }
 
@@ -461,6 +527,7 @@ func (d *daemon) onTopicCreated(e evTopicCreated) {
 	if err := d.startTailer(conv, th.ID, registry.TailStart{AtEnd: true, Backfill: true}); err != nil {
 		d.log.Warn("start tailer", "thread", th.ID, "err", err)
 	}
+	d.rename(th, conv) // the tab takes the topic's name
 }
 
 // introCard is the first message of a topic (design section 8.7).

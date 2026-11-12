@@ -4,6 +4,32 @@ This file has the details that the [README](../README.md) leaves out.
 
 ## Setup details
 
+### Install with Homebrew
+
+```sh
+brew tap arrokh/rex-tg https://github.com/arrokh/rex-tg
+brew install rex-tg           # needs a release tag
+brew install --HEAD rex-tg    # builds `main`; use this while there is no release
+```
+
+Homebrew builds from source, so it needs Go (it installs it as a build tool).
+
+The repository is private. Homebrew gets it with `git clone`, so the tap and the install work for a GitHub account that has access, through your git login. If `brew tap` asks for a password, run `gh auth setup-git` once.
+
+`rex-tg install` writes the stable path `<prefix>/opt/rex-tg/bin/rex-tg`, not the versioned Cellar path. That path stays valid after an upgrade.
+
+Upgrade with `brew upgrade rex-tg` (add `--fetch-HEAD` for a HEAD install). The daemon restarts itself within about a minute, and the topics stay linked. Run `rex-tg install` again only when the release notes say the hooks changed. `rex-tg doctor` checks it.
+
+If you installed with `make install` before, remove `~/.local/bin/rex-tg`, or run `rex-tg install` again from the brew binary. Then the hooks and launchd point at one binary.
+
+To remove: run `rex-tg uninstall` first, then `brew uninstall rex-tg`.
+
+**Release steps.** The maintainer does these by hand:
+
+1. Tag and push: `git tag v0.1.0 && git push origin v0.1.0`.
+2. Run `make formula-release TAG=v0.1.0`. It prints the `url` lines: the git URL, the tag, and its commit.
+3. Put them into `Formula/rex-tg.rb` in place of the old ones, above `head`, then commit and push `main`. Users get the release with `brew update && brew upgrade rex-tg`.
+
 ### Token and pairing code (`rex-tg login`)
 
 1. macOS `security` asks for the token. Paste it. It is not shown.
@@ -54,20 +80,22 @@ Doctor checks:
 
 ### Agents and topics
 
-- `/agents`: if the session already has a topic, you get a link to it. If you deleted that topic, a new one is made for the same session.
+- `/agents` lists the agents: the ones that wait for you first, then working, then idle, each with how long it has been in that state, such as `waiting for you · 12m`. `💻 on the Mac` marks a session in use on the Mac.
+- The newest `/agents` list updates by itself when an agent's state changes. Pin it to see all agents at a glance. Older lists do not change.
+- Tap an agent in the list: if the session already has a topic, you get a link to it. If you deleted that topic, a new one is made for the same session.
 - An agent marked `(guess)` has no hook report yet. rex-tg took the newest transcript in the agent's folder that changed after the agent started.
 - An agent marked `(waiting for session)` has no known session file yet. rex-tg learns it at the agent's next prompt or turn end.
 - A topic is named after its Rex pane when you named the pane, else after the agent's session name. The name follows changes of both.
 - A new session in the same pane, such as after the agent's `/clear`, takes over the topic. The bot posts a divider, such as `── claude · new session (clear) ──`.
 - After a Rex restart, the topic follows the session when the agent resumes in its pane.
-- When an agent exits or its pane closes, the topic shows `🔴 agent stopped`, a running turn ends, and the topic's name gets a 🔴. Messages you send there are refused, with a reason.
+- When an agent exits or its pane closes, the topic shows `🔴 agent stopped`, a running turn ends, and the topic's name gets a 🔴. A tab in the `/new` session gets the 🔴 too, until the agent runs again. Messages you send there are refused, with a reason.
 - When you open a topic, the bot posts an intro card (session, pane, folder, mode) and the last 3 final answers (`backfill`).
 
 ### `/new`
 
 - Tap the agent, then tap a recent folder or send a path such as `~/work/app`. cux is one of the agents when it is installed.
 - Every tab goes into one Rex session, `rex-tg` (`[rex] new_session`). rex-tg makes the session when it is missing.
-- A tab is named after its folder and agent, such as `app · pi`. When the topic gets its own name, the tab takes it too.
+- A tab is named after its folder and agent, such as `app · pi`. The tab always follows its topic name: at link time, and at the 30-second name check when its label differs. When the topic has only the folder name, the tab keeps the `<folder> · <agent>` form. Two tabs with one name get ` #2`, ` #3`. Tabs in other Rex sessions are never renamed.
 - The agent starts as if you typed its name in a terminal, so your `~/.zshrc` applies.
 - If the agent asks something before it starts, such as "trust this folder?", the question comes to the chat with a button per answer. A button moves the cursor there and presses Enter. rex-tg checks the screen after each key.
 - In a topic, `/new` also starts another agent. `//new` sends `/new` to the agent.
@@ -80,18 +108,37 @@ Doctor checks:
 - Telegram splits long messages into parts. rex-tg joins parts that arrive close together into one prompt. The window is 300 ms, or 1500 ms for long messages.
 - A reply to a bot message sends only your new text.
 
+### `/model` and `/effort`
+
+- `/model` and `/effort` with no value show the current value and buttons. `/model opus` or `/effort high` set a value at once. Use `/model <name>` for a model that has no button.
+- rex-tg types the agent's own command, such as `/model opus`, like a message. It waits until the agent is idle, and every safety check applies. A button press gets no 👀 on your message, but the bot says "⚙️ Sending …". The agent writes no prompt for a slash command, so no 👍 comes.
+- The commands by agent:
+
+| Agent | `/model <v>` types | `/effort <v>` types | Values of `/effort` |
+| --- | --- | --- | --- |
+| Claude Code | `/model <v>` | `/effort <v>` | `low`, `medium`, `high`, `xhigh`, `max` |
+| Codex | `/model <v> --reasoning=<effort>` | `/model <model> --reasoning=<v>` | `low`, `medium`, `high`, `xhigh`, `max` |
+| pi | `/model <v>` | `/thinking <v>` | `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max` |
+
+- A model name may use letters, digits, and `. _ : / [ ] -` only, up to 80 characters. Anything else is refused, because the text goes into a terminal.
+- rex-tg learns the current values from the transcript, so they show after the agent's first reply. Codex needs both values to change one. Before its first turn, rex-tg answers "send a message first".
+- Buttons for the model: Claude Code has `opus`, `sonnet`, `haiku`, and `fable`. Codex has the models in `~/.codex/models_cache.json`. pi has none, because it knows hundreds of models. Set your own with `[agents.<name>.choices]` (see Configuration).
+- `//model` still sends `/model` to the agent unchanged.
+
 ### Progress and answers
 
 - `typing…` shows while the agent works, in the topic you used last.
 - The progress message appears after 2 seconds without an answer. It shows the latest commentary and the recent tool calls. It never shows tool output, unless `/verbose full` is on.
 - At the end of the turn, the tool rows stay in a collapsed quote under the summary line.
 - Images named in a final answer: up to 10 per answer. Set `send_images = false` to turn this off.
-- `💻 You (on Mac)` shows prompts typed in the pane on the Mac. Prompts that no person typed, such as Claude Code's task notifications, are not shown. Set `show_mac_prompts = false` to hide all of them.
+- Work on the Mac: when you type in the pane on the Mac, the topic gets one silent notice, `💻 In use on the Mac`, instead of the prompts and replies. The notice shows the latest prompt and whether the agent is working or done. `📄 Last answer` posts the newest answer. Write in the topic to go on in Telegram: from then on, replies come as usual. Permission prompts still come.
+- Set `mac_notice = false` to show Mac turns instead. `💻 You (on Mac)` then shows the prompts typed on the Mac. Prompts that no person typed, such as Claude Code's task notifications, are not shown. Set `show_mac_prompts = false` to hide all of them.
 
 ### Permission prompts
 
 - Tap a button to send its key to the pane. The buttons go away when the prompt ends. A button of an old prompt is refused.
 - `/approve` and `/deny` answer the open prompt too.
+- Reminders: when a prompt waits for 10 minutes, the topic gets `⏰ Still waiting for your answer`, as a reply to the prompt. More reminders come 10 minutes after the one before, at most 3, and each one replaces the one before. They go away when the prompt ends. Set `[alerts] remind_after` and `reminders` to change this, and `remind_after = "0s"` to turn them off.
 - Questions that allow free text get a `✍ Other…` button. Your next message becomes the answer. This is not tested yet (spike S2).
 
 ### Files and photos
@@ -137,6 +184,9 @@ interrupt_keys = ["escape"]             # Keys that stop the current turn (/inte
 while_working = "steer"                 # What Enter does while the agent works: steer, queue, or unknown.
 answers = []                            # Fallback permission answers. pi has none.
 
+[agents.pi.choices]                     # Optional. Buttons of /model and /effort, by command name. Replaces the agent's own list.
+model = ["anthropic/claude-sonnet-5-5", "openai/gpt-6-sol"]   # Same for [agents.claude.choices] and [agents.codex.choices].
+
 [agents.claude]
 launch = ["claude"]
 paste_enter_delay = "300ms"
@@ -180,11 +230,16 @@ keys = ["escape"]
 [display]
 mode = "progress"                       # progress, block, or final.
 backfill = 3                            # Final answers to post when a topic opens.
-show_mac_prompts = true                 # Post prompts that you type in the pane on the Mac.
+show_mac_prompts = true                 # Post prompts that you type in the pane on the Mac (when mac_notice is off).
+mac_notice = true                       # Hold turns typed on the Mac behind one notice, until you write in Telegram.
 progress_delay = "2s"                   # Wait before the progress message appears.
 progress_edit_interval = "2s"           # Least time between two edits of the progress message.
 rich_messages = false                   # Send final answers as Telegram rich messages.
 send_images = true                      # Send the image files that a final answer names.
+
+[alerts]
+remind_after = "10m"                    # Remind of an unanswered prompt after this, and again each time it passes. "0s" turns reminders off.
+reminders = 3                           # The most reminders for one prompt.
 
 [input]
 queue_expiry = "30m"                    # A waiting message expires after this time.

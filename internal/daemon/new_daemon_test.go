@@ -95,6 +95,7 @@ func TestNewStartsAnAgentAndOpensItsTopic(t *testing.T) {
 	// The agent starts in the new pane and reports its session.
 	e.fake.On([]string{"ls"}, `{"sessions":[{"session_id":"S1","label":"main"},{"session_id":"S2","label":"rex-tg"}]}`, 0)
 	e.fake.On([]string{"block", "ls", "-s", "S2"}, `{"blocks":[{"block_id":"B2","label":"shell","window_id":"W2"}]}`, 0)
+	e.fake.On([]string{"window", "ls", "-s", "S2"}, `{"windows":[{"window_id":"W2","label":"app · pi"}]}`, 0)
 	e.fake.On([]string{"block", "call", "-s", "S2", "-b", "B2", "process"},
 		fmt.Sprintf(`{"foreground":{"pid":5151,"name":"node","argv0":"pi","cwd":%q},"ancestors":[]}`, dir), 0)
 	e.fake.On([]string{"block", "call", "-s", "S2", "-b", "B2", "program_status"}, `{"records":[]}`, 0)

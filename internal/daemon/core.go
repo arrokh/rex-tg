@@ -118,6 +118,7 @@ type rexClient interface {
 	NewSession(ctx context.Context, label string, tab rex.Tab) (rex.Started, error)
 	NewWindow(ctx context.Context, session string, tab rex.Tab) (rex.Started, error)
 	Blocks(ctx context.Context, session string) ([]rex.Block, error)
+	Windows(ctx context.Context, session string) ([]rex.Window, error)
 	RenameWindow(ctx context.Context, session, window, label string) error
 }
 
@@ -126,18 +127,21 @@ var _ rexClient = (*rex.Client)(nil)
 // daemon is the wiring. Fields marked "core" are touched only by the core
 // goroutine; the others are safe for concurrent use.
 type daemon struct {
-	cfg      config.Config
-	timing   Timing // fixed waits, with defaults filled in
-	home     string
-	log      *slog.Logger
-	now      func() time.Time
-	st       *store.Store
-	tg       *telegram.Client
-	rx       rexClient
-	reg      *registry.Registry
-	snd      *sender.Sender
-	adapters map[agents.Runtime]agents.Adapter
-	rules    registry.Rules // how a process is told to be an agent
+	tabMu         sync.Mutex    // serializes the choice of tab names (syncTab), and guards the two below
+	tabSessions   []rex.Session // the Rex sessions, cached for syncTab
+	tabSessionsAt time.Time
+	cfg           config.Config
+	timing        Timing // fixed waits, with defaults filled in
+	home          string
+	log           *slog.Logger
+	now           func() time.Time
+	st            *store.Store
+	tg            *telegram.Client
+	rx            rexClient
+	reg           *registry.Registry
+	snd           *sender.Sender
+	adapters      map[agents.Runtime]agents.Adapter
+	rules         registry.Rules // how a process is told to be an agent
 	// hasProgram reports whether a program that /new can start (cux) is
 	// installed; see installed.
 	hasProgram func(name string) bool
@@ -154,6 +158,7 @@ type daemon struct {
 	newMu     sync.Mutex // held while /new finds or makes a session, see startTab
 	botUser   string     // set before the workers start
 	scanQueue atomic.Bool
+	ctl       controlStore // latest setting values per session, see controls.go
 
 	// core
 	ownerUser, ownerChat int64
@@ -170,7 +175,14 @@ type daemon struct {
 	nextPrep             map[int64]time.Time
 	delivering           map[int64]*delivery
 	waitNoticed          map[int64]bool
-	vimNoticed           map[int64]bool // inbound rows told that pi-vim did not react
+	macNotes             map[int64]*macNote  // the Mac hold's notice, by thread
+	self                 *selfWatch          // the daemon's own binary, for the restart after an update
+	board                *board              // the live /agents message
+	boardLoaded          bool                // board was read from the store
+	reminders            map[int64]*reminder // reminders of open alerts, by alert
+	lastRemind           time.Time           // the last look for due reminders
+	remindSwept          bool                // stale reminders of closed alerts were dropped
+	vimNoticed           map[int64]bool      // inbound rows told that pi-vim did not react
 	alertBusy            map[int64]bool
 	opening              map[int64]bool      // panes whose topic is being created
 	newFlows             map[string]*newFlow // /new requests, by the token that their buttons carry
@@ -205,6 +217,8 @@ func newDaemon(cfg config.Config, home string, log *slog.Logger, now func() time
 		nextPrep:    map[int64]time.Time{},
 		delivering:  map[int64]*delivery{},
 		waitNoticed: map[int64]bool{},
+		macNotes:    map[int64]*macNote{},
+		reminders:   map[int64]*reminder{},
 		vimNoticed:  map[int64]bool{},
 		alertBusy:   map[int64]bool{},
 		opening:     map[int64]bool{},
@@ -317,6 +331,12 @@ func (d *daemon) handle(ev any) {
 		d.onTyped(e)
 	case evWaitNotice:
 		d.onWaitNotice(e)
+	case evMacSent:
+		d.onMacSent(e)
+	case evBoard:
+		d.onBoard(e)
+	case evReminder:
+		d.onReminder(e)
 	case evTopicCreated:
 		d.onTopicCreated(e)
 	case evQueueText:
@@ -402,6 +422,9 @@ func (d *daemon) tick() {
 		d.lastNames = now
 		d.syncNames()
 	}
+	d.tickBoard(now)
+	d.tickReminders(now)
+	d.checkUpdate(now)
 }
 
 func (d *daemon) onSenderEvent(e sender.Event) {
@@ -439,6 +462,7 @@ func (d *daemon) closeThread(threadID int64) {
 	if err != nil {
 		return
 	}
+	d.forgetMac(threadID)
 	if th.Status != store.ThreadClosed {
 		if err := d.st.SetThreadStatus(d.ctx, threadID, store.ThreadClosed); err != nil {
 			d.log.Warn("close topic", "thread", threadID, "err", err)

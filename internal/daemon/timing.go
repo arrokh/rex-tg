@@ -20,6 +20,10 @@ type Timing struct {
 	NewAgentWait time.Duration // how long /new waits for the new agent to report its session (90 s)
 	NewAgentPoll time.Duration // how often /new looks for that report (1 s)
 	CheckDelay   time.Duration // the wait before a reply whose send got no answer is checked (60 s)
+	UpdateCheck  time.Duration // how often the daemon checks whether its binary was replaced (20 s)
+	BoardEdit    time.Duration // least time between two edits of the live /agents board (3 s)
+	BoardRefresh time.Duration // the board is redrawn this often, so its times stay right (60 s)
+	RemindCheck  time.Duration // how often open alerts are checked for a reminder (5 s)
 }
 
 // withDefaults fills the zero fields with the production values.
@@ -43,5 +47,9 @@ func (t Timing) withDefaults() Timing {
 	def(&t.NewAgentWait, 90*time.Second)
 	def(&t.NewAgentPoll, time.Second)
 	def(&t.CheckDelay, 60*time.Second)
+	def(&t.UpdateCheck, 20*time.Second)
+	def(&t.BoardEdit, 3*time.Second)
+	def(&t.BoardRefresh, 60*time.Second)
+	def(&t.RemindCheck, 5*time.Second)
 	return t
 }

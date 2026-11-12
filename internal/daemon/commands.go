@@ -1,10 +1,12 @@
 package daemon
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -35,6 +37,7 @@ const (
 		"/esc, /interrupt - press Escape, or stop the turn\n" +
 		"/key &lt;keys&gt; - press keys\n" +
 		"/force &lt;text&gt; - type text now, even at a prompt\n" +
+		"/model [name], /effort [level] - show or change the agent's model and thinking effort\n" +
 		"/mode progress|block|final\n" +
 		"/verbose on|full|off\n" +
 		"/reasoning on|off\n" +
@@ -51,7 +54,8 @@ func (d *daemon) mainCommand(r inbound.Route, chat, thread int64, inTopic bool) 
 	case "start":
 		d.say(chat, thread, "Already paired. /help lists the commands.", nil)
 	case "agents":
-		d.spawn(func() { d.sendAgents(chat, thread) })
+		mac := d.macThreads()
+		d.spawn(func() { d.sendAgents(chat, thread, mac) })
 	case "new":
 		d.newCommand(chat, thread, inTopic, r.Args)
 	case "topics":
@@ -90,6 +94,20 @@ func (d *daemon) setPaused(v bool) {
 
 // --- /agents ---
 
+// stateRank orders the agents of /agents: the ones that wait for you first,
+// then working, idle, and the rest.
+func stateRank(state string) int {
+	switch state {
+	case "blocked":
+		return 0
+	case "working":
+		return 1
+	case "idle", "done":
+		return 2
+	}
+	return 3
+}
+
 func stateEmoji(state string) (string, string) {
 	switch state {
 	case "working":
@@ -104,11 +122,17 @@ func stateEmoji(state string) (string, string) {
 	return "⚪", "state unknown"
 }
 
-// renderAgents builds the /agents text and buttons (design section 8.7). Each
+// renderAgents builds the /agents text and buttons (design section 8.7): the
+// agents that wait for you first, each with its state and how long it has
+// been in it. mac holds the topics whose session is in use on the Mac. Each
 // button reports the tap to the daemon, also for an agent that has a topic:
 // Telegram does not report a topic that the user deleted, so openTopic checks
 // it first and makes a new one when it is gone.
-func (d *daemon) renderAgents(views []registry.AgentView) (string, *telegram.InlineKeyboardMarkup) {
+func (d *daemon) renderAgents(views []registry.AgentView, mac map[int64]bool, now time.Time) (string, *telegram.InlineKeyboardMarkup) {
+	views = slices.Clone(views)
+	slices.SortStableFunc(views, func(a, b registry.AgentView) int {
+		return cmp.Compare(stateRank(a.Pane.State), stateRank(b.Pane.State))
+	})
 	var b strings.Builder
 	if len(views) == 0 {
 		b.WriteString("No agents are running in Rex panes.")
@@ -118,6 +142,12 @@ func (d *daemon) renderAgents(views []registry.AgentView) (string, *telegram.Inl
 	var rows [][]telegram.InlineKeyboardButton
 	for _, v := range views {
 		emoji, state := stateEmoji(v.Pane.State)
+		if since := agoText(now, v.Pane.StateAt); since != "" && v.Conversation != nil {
+			state += " · " + since
+		}
+		if v.Thread != nil && mac[v.Thread.ID] {
+			state += " · 💻 on the Mac"
+		}
 		var cwd, title string
 		if v.Conversation != nil {
 			cwd, title = v.Conversation.CWD, v.Conversation.Title
@@ -139,11 +169,32 @@ func (d *daemon) renderAgents(views []registry.AgentView) (string, *telegram.Inl
 		}
 		rows = append(rows, []telegram.InlineKeyboardButton{{Text: text, CallbackData: fmt.Sprintf("o:%d", v.Pane.ID)}})
 	}
+	if len(views) > 0 {
+		b.WriteString("\n\n<i>This list updates by itself.</i>")
+	}
 	rows = append(rows, []telegram.InlineKeyboardButton{{Text: "↻ Refresh", CallbackData: "ag:r"}})
 	return b.String(), &telegram.InlineKeyboardMarkup{InlineKeyboard: rows}
 }
 
-func (d *daemon) agentsView() (string, *telegram.InlineKeyboardMarkup, error) {
+// agoText is a short, coarse age, such as "3m" or "2h". It changes seldom,
+// so the live board needs few edits.
+func agoText(now, at time.Time) string {
+	if at.IsZero() || at.After(now) {
+		return ""
+	}
+	switch d := now.Sub(at); {
+	case d < time.Minute:
+		return "now"
+	case d < time.Hour:
+		return fmt.Sprintf("%dm", int(d/time.Minute))
+	case d < 48*time.Hour:
+		return fmt.Sprintf("%dh", int(d/time.Hour))
+	default:
+		return fmt.Sprintf("%dd", int(d/(24*time.Hour)))
+	}
+}
+
+func (d *daemon) agentsView(mac map[int64]bool) (string, *telegram.InlineKeyboardMarkup, error) {
 	ctx, cancel := context.WithTimeout(d.ctx, 15*time.Second)
 	defer cancel()
 	if err := d.scanAndWait(ctx); err != nil && d.ctx.Err() == nil {
@@ -153,22 +204,27 @@ func (d *daemon) agentsView() (string, *telegram.InlineKeyboardMarkup, error) {
 	if err != nil {
 		return "", nil, err
 	}
-	text, markup := d.renderAgents(views)
+	text, markup := d.renderAgents(views, mac, d.now())
 	return text, markup, nil
 }
 
-func (d *daemon) sendAgents(chat, thread int64) {
-	text, markup, err := d.agentsView()
+// sendAgents posts the /agents list (worker). It becomes the live board.
+func (d *daemon) sendAgents(chat, thread int64, mac map[int64]bool) {
+	text, markup, err := d.agentsView(mac)
 	if err != nil {
 		d.log.Warn("agents", "err", err)
 		d.sendNow(chat, thread, "Could not list the agents.", nil)
 		return
 	}
-	_, _ = d.sendNow(chat, thread, text, markup)
+	if m, err := d.sendNow(chat, thread, text, markup); err == nil && m.MessageID != 0 {
+		d.emit(evBoard{chat: chat, msg: m.MessageID, html: text})
+	}
 }
 
-func (d *daemon) refreshAgents(chat, msg int64) {
-	text, markup, err := d.agentsView()
+// refreshAgents is "↻ Refresh" (worker). The refreshed list becomes the live
+// board.
+func (d *daemon) refreshAgents(chat, msg int64, mac map[int64]bool) {
+	text, markup, err := d.agentsView(mac)
 	if err != nil {
 		return
 	}
@@ -181,9 +237,13 @@ func (d *daemon) refreshAgents(chat, msg int64) {
 		}
 		return err
 	})
-	if err != nil && d.ctx.Err() == nil {
-		d.log.Debug("refresh agents", "err", err)
+	if err != nil {
+		if d.ctx.Err() == nil {
+			d.log.Debug("refresh agents", "err", err)
+		}
+		return
 	}
+	d.emit(evBoard{chat: chat, msg: msg, html: text})
 }
 
 // --- /topics and /status ---
@@ -201,14 +261,16 @@ func (d *daemon) topicsText() string {
 		}
 		n++
 		emoji := "🟢"
+		name := th.Name
 		if th.Status == store.ThreadOffline {
 			emoji = "🔴"
+			name = strings.TrimPrefix(name, offlineMark) // show the dot once
 		}
 		mute := ""
 		if th.Muted {
 			mute = " 🔕"
 		}
-		fmt.Fprintf(&b, "\n%s %s · %s%s", emoji, esc(noAutoLink(th.Name)), th.Status, mute)
+		fmt.Fprintf(&b, "\n%s %s · %s%s", emoji, esc(noAutoLink(name)), th.Status, mute)
 	}
 	if n == 0 {
 		return "No topics yet. Use /agents to open one."
@@ -290,6 +352,8 @@ func (d *daemon) topicCommand(u telegram.Update, m *telegram.Message, th store.T
 			return
 		}
 		d.queueText(th.ID, upd, m.MessageID, r.Args, "text", inbound.ActForce)
+	case "model", "effort":
+		d.controlCommand(th, upd, m.MessageID, r.Command, r.Args)
 	case "mode":
 		d.setting(th, upd, "mode", r.Args, []string{store.ModeProgress, store.ModeBlock, store.ModeFinal})
 	case "verbose":
@@ -326,6 +390,9 @@ func (d *daemon) infoText(th store.Thread) string {
 		fmt.Fprintf(&b, "\nSession: %s (%s)", format.Escape(noAutoLink(format.Truncate(format.Redact(title), 100))), conv.Runtime)
 		if conv.CWD != "" {
 			fmt.Fprintf(&b, "\nFolder: <code>%s</code>", esc(d.tildePath(conv.CWD)))
+		}
+		if line := d.controlsLine(conv); line != "" {
+			b.WriteString("\n" + line)
 		}
 	}
 	if p, ok, err := d.st.PaneByConversation(ctx, th.CurrentConversationID); err == nil && ok {

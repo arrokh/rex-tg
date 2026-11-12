@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -104,6 +105,12 @@ func doctorCmd(ctx context.Context, args []string, env Env) int {
 	} else if rep, err := install.Inspect(p); err != nil {
 		d.bad("inspect install: %v", err)
 	} else {
+		d.ok("this binary: %s", p.Binary)
+		// A second copy (an old `make install` next to Homebrew) makes a bare
+		// `rex-tg install` point the hooks at whichever comes first on PATH.
+		if old := filepath.Join(env.Home, ".local", "bin", "rex-tg"); old != p.Binary && install.FileExists(old) {
+			d.warn("another copy is at %s; remove it, so the hooks, launchd, and your shell use one binary", old)
+		}
 		hookLine(d, "Claude hooks", rep.Claude)
 		hookLine(d, "Codex hooks", rep.Codex)
 		fileLine(d, "pi extension", rep.Pi)
@@ -152,7 +159,7 @@ func hookLine(d *doctorOut, name string, h install.HookReport) {
 	case h.Installed():
 		d.ok("%s installed (%s)", name, h.Path)
 	default:
-		d.warn("%s not fully installed (%s); run `rex-tg install`", name, h.Path)
+		d.warn("%s not fully installed, or they name another rex-tg binary (%s); run `rex-tg install` with this binary", name, h.Path)
 	}
 }
 
@@ -163,7 +170,7 @@ func fileLine(d *doctorOut, name string, f install.FileReport) {
 	case f.State == install.StateCurrent:
 		d.ok("%s is current (%s)", name, f.Path)
 	default:
-		d.warn("%s is %s (%s); run `rex-tg install`", name, f.State, f.Path)
+		d.warn("%s is %s: missing, or it names another rex-tg binary (%s); run `rex-tg install` with this binary", name, f.State, f.Path)
 	}
 }
 

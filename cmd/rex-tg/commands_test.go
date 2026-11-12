@@ -431,6 +431,7 @@ func TestDaemonExitCodes(t *testing.T) {
 		{"wrapped already running", errors.Join(errors.New("x"), daemon.ErrAlreadyRunning), 3},
 		{"failure", errors.New("boom"), 1},
 		{"clean", nil, 0},
+		{"updated", daemon.ErrUpdated, 75}, // launchd starts the new binary
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -470,5 +471,33 @@ func TestDaemonWithoutToken(t *testing.T) {
 	}
 	if !strings.Contains(te.stderr.String(), "rex-tg login") {
 		t.Errorf("stderr: %q", te.stderr)
+	}
+}
+
+// The restart after an update is on only under launchd, which starts the
+// daemon again.
+func TestDaemonWatchesItsBinaryOnlyUnderLaunchd(t *testing.T) {
+	for _, tc := range []struct {
+		service string
+		watch   bool
+	}{{"local.rex-tg", true}, {"", false}, {"com.example.terminal", false}} {
+		te := newTestEnv(t)
+		if err := te.Env.keychain().Set(context.Background(), "rex-tg", "bot-token", "123:tok"); err != nil {
+			t.Fatal(err)
+		}
+		te.Env.Getenv = func(k string) string {
+			if k == "XPC_SERVICE_NAME" {
+				return tc.service
+			}
+			return ""
+		}
+		var got daemon.Options
+		te.RunDaemon = func(_ context.Context, opt daemon.Options) error { got = opt; return nil }
+		if code := te.run("daemon", "--log-stderr"); code != 0 {
+			t.Fatalf("exit %d", code)
+		}
+		if (got.SelfPath != "") != tc.watch {
+			t.Errorf("XPC_SERVICE_NAME=%q: SelfPath = %q, want watching %v", tc.service, got.SelfPath, tc.watch)
+		}
 	}
 }

@@ -5,6 +5,8 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+
+	"rex-tg/internal/install"
 )
 
 // version is set at build time with -ldflags "-X main.version=...".
@@ -31,7 +33,11 @@ func realEnv() Env {
 			if r, err := filepath.EvalSymlinks(exe); err == nil {
 				exe = r
 			}
-			return filepath.Abs(exe)
+			exe, err = filepath.Abs(exe)
+			if err != nil {
+				return "", err
+			}
+			return install.StablePath(exe, install.FileExists), nil
 		},
 		StdinIsTerminal: func() bool {
 			st, err := os.Stdin.Stat()

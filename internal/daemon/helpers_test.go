@@ -76,6 +76,10 @@ func newEnvSerial(t *testing.T) *env {
 	cfg.InputSettings.BusyAfterTyping = config.Duration{Duration: 400 * time.Millisecond}
 	cfg.Telegram.RatePerSecond = 200
 	cfg.Telegram.RateBurst = 200
+	// Most tests drive turns with prompts written to the transcript, which
+	// count as typed on the Mac. They test how turns are shown, so the hold
+	// of Mac turns is off; macHoldTopic turns it on.
+	cfg.Display.MacNotice = false
 	for _, in := range []*config.RuntimeInput{&cfg.Agents.Pi, &cfg.Agents.Claude, &cfg.Agents.Codex} {
 		in.PasteEnterDelay = config.Duration{Duration: 20 * time.Millisecond}
 	}
@@ -145,6 +149,10 @@ var testTiming = daemon.Timing{
 	NewAgentWait: 3 * time.Second,
 	NewAgentPoll: 50 * time.Millisecond,
 	CheckDelay:   100 * time.Millisecond,
+	UpdateCheck:  50 * time.Millisecond,
+	BoardEdit:    50 * time.Millisecond,
+	BoardRefresh: time.Hour, // tests trigger the board by state changes
+	RemindCheck:  50 * time.Millisecond,
 }
 
 // start runs the daemon in a goroutine.

@@ -44,6 +44,7 @@ type Message struct {
 	Filename  string // documents only
 	File      []byte // documents only
 	Photo     bool   // sent with sendPhoto
+	ReplyTo   int64  // the message that a sendMessage replied to (reply_parameters)
 }
 
 // Topic is a forum topic.
@@ -624,8 +625,12 @@ func (s *Server) handle(method string, p map[string]any, docName string, docData
 		if e != nil {
 			return nil, e
 		}
+		var replyTo int64
+		if rp, ok := p["reply_parameters"].(map[string]any); ok {
+			replyTo = num(rp, "message_id")
+		}
 		m := s.addMsg(&Message{ChatID: chat, ThreadID: thread, FromBot: true, Text: text,
-			ParseMode: str(p, "parse_mode"), Markup: mk, Silent: flag(p, "disable_notification")})
+			ParseMode: str(p, "parse_mode"), Markup: mk, Silent: flag(p, "disable_notification"), ReplyTo: replyTo})
 		out := s.wire(m)
 		out.Text = text
 		return out, nil

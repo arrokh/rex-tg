@@ -353,6 +353,25 @@ func notFound(err error, what string) error {
 	return fmt.Errorf("%s: %w", what, err)
 }
 
+// KeysWithPrefix lists the keys that start with prefix (no LIKE wildcards
+// in prefix).
+func (s *Store) KeysWithPrefix(ctx context.Context, prefix string) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT key FROM kv WHERE substr(key, 1, ?) = ? ORDER BY key`, len(prefix), prefix)
+	if err != nil {
+		return nil, fmt.Errorf("store: keys %q: %w", prefix, err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var k string
+		if err := rows.Scan(&k); err != nil {
+			return nil, fmt.Errorf("store: keys %q: %w", prefix, err)
+		}
+		out = append(out, k)
+	}
+	return out, rows.Err()
+}
+
 // Get returns the value of a small key, if set.
 func (s *Store) Get(ctx context.Context, key string) (string, bool, error) {
 	var v string

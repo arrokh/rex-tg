@@ -146,6 +146,24 @@ func (s *Store) Alert(ctx context.Context, id int64) (Alert, error) {
 	return a, nil
 }
 
+// AllOpenAlerts lists the open alerts of all topics, oldest first.
+func (s *Store) AllOpenAlerts(ctx context.Context) ([]Alert, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT `+alertCols+` FROM alert WHERE state='open' ORDER BY id`)
+	if err != nil {
+		return nil, fmt.Errorf("store: all open alerts: %w", err)
+	}
+	defer rows.Close()
+	var out []Alert
+	for rows.Next() {
+		a, err := scanAlert(rows)
+		if err != nil {
+			return nil, fmt.Errorf("store: all open alerts: %w", err)
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
 // OpenAlerts lists a topic's open alerts, oldest first.
 func (s *Store) OpenAlerts(ctx context.Context, threadID int64) ([]Alert, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT `+alertCols+` FROM alert WHERE thread_id=? AND state='open' ORDER BY id`, threadID)

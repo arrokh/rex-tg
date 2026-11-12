@@ -186,3 +186,32 @@ func (t *Tracker) summaryHTML() string {
 	}
 	return first + "\n<blockquote expandable>" + strings.Join(rows, "\n") + "</blockquote>"
 }
+
+// The notice of the Mac hold (Settings.MacNotice).
+const (
+	macWorking   = "working…"
+	maxMacPrompt = 300 // runes of the Mac prompt that the notice shows
+)
+
+// macEnd is the notice state at the end of a held turn.
+func macEnd(endKind string) string {
+	switch endKind {
+	case "error":
+		return "⚠️ ended with an error"
+	case string(StateStopped):
+		return "🔴 agent stopped"
+	}
+	return "✅ done"
+}
+
+// macNoticeHTML says that the session is in use on the Mac: the state, the
+// latest prompt typed there, and how to go on in Telegram.
+func macNoticeHTML(prompt, state string) string {
+	var b strings.Builder
+	b.WriteString("💻 <b>In use on the Mac</b> · " + escape(state))
+	if prompt != "" {
+		b.WriteString("\n<blockquote>" + escape(prompt) + "</blockquote>")
+	}
+	b.WriteString("\nReplies stay on the Mac. Write here to go on in Telegram.")
+	return b.String()
+}

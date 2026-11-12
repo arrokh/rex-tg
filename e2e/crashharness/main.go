@@ -42,6 +42,10 @@ func main() {
 	cfg.InputSettings.JoinWindow = d(50 * time.Millisecond)
 	cfg.InputSettings.JoinWindowLong = d(100 * time.Millisecond)
 	cfg.InputSettings.BusyAfterTyping = d(400 * time.Millisecond)
+	// The crash tests drive turns with prompts written to the transcript,
+	// which count as typed on the Mac; they test the progress message, so
+	// the hold of Mac turns is off.
+	cfg.Display.MacNotice = false
 	cfg.Telegram.RatePerSecond = 200
 	cfg.Telegram.RateBurst = 200
 	for _, in := range []*config.RuntimeInput{&cfg.Agents.Pi, &cfg.Agents.Claude, &cfg.Agents.Codex} {
