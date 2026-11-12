@@ -1,12 +1,14 @@
 class RexTg < Formula
   desc "Bridge coding agents in Rex terminal panes to Telegram"
   homepage "https://github.com/arrokh/rex-tg"
+  # A new release: push a tag, run `make formula-release TAG=<tag>`, and
+  # put its url lines here. The repo is private, so the formula clones the
+  # tag with git (the user's own GitHub login) instead of downloading an
+  # archive.
+  url "https://github.com/arrokh/rex-tg.git",
+      tag:      "v0.1.0",
+      revision: "a34aa5c3ea7eec45eccf6a96e4177cef1edf3692"
   head "https://github.com/arrokh/rex-tg.git", branch: "main"
-
-  # Stable release: after pushing a tag, run `make formula-release TAG=v0.1.0`
-  # and put its url lines here, above `head`. The repo is private, so the
-  # formula clones the tag with git (the user's own GitHub login) instead of
-  # downloading an archive.
 
   depends_on "go" => :build
   depends_on :macos

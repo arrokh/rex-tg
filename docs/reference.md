@@ -8,8 +8,8 @@ This file has the details that the [README](../README.md) leaves out.
 
 ```sh
 brew tap arrokh/rex-tg https://github.com/arrokh/rex-tg
-brew install rex-tg           # needs a release tag
-brew install --HEAD rex-tg    # builds `main`; use this while there is no release
+brew install rex-tg           # the newest release
+brew install --HEAD rex-tg    # or: build `main`
 ```
 
 Homebrew builds from source, so it needs Go (it installs it as a build tool).
