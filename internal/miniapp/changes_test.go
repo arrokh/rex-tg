@@ -315,3 +315,58 @@ func TestAllChanges(t *testing.T) {
 		t.Errorf("not committed %d, branch %d", all[0].Total, all[1].Total)
 	}
 }
+
+// A deleted file shows its old lines; a binary file says so; a changed
+// picture shows as it is now; a file deleted from the index but still there
+// is listed twice, and new=1 shows the file that is there.
+func TestChangeOfDeletedBinaryAndImageFiles(t *testing.T) {
+	root := changesRepo(t)
+	ctx := context.Background()
+	png := "\x89PNG\r\n\x1a\n\x00\x00\x00\x0dIHDR"
+	write(t, filepath.Join(root, "pic.png"), png+"1")
+	write(t, filepath.Join(root, "data.bin"), "a\x00b")
+	gitT(t, root, "add", "-A")
+	gitT(t, root, "commit", "-q", "-m", "binaries")
+	write(t, filepath.Join(root, "pic.png"), png+"2")
+	write(t, filepath.Join(root, "data.bin"), "a\x00c")
+	os.Remove(filepath.Join(root, "old.txt"))
+	gitT(t, root, "rm", "-q", "--cached", "main.go") // deleted from the index, still there
+
+	l, err := ListChanges(ctx, root, BaseHead, TurnRange{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var mainGo []string
+	for _, c := range l.Files {
+		if c.Path == "main.go" {
+			mainGo = append(mainGo, c.Status)
+		}
+	}
+	if strings.Join(mainGo, ",") != "deleted,untracked" {
+		t.Errorf("main.go is listed as %v", mainGo)
+	}
+	if c := byPath(l)["data.bin"]; !c.Binary {
+		t.Errorf("data.bin %+v", c)
+	}
+
+	fc, err := ChangeOf(ctx, root, "old.txt", BaseHead, false, TurnRange{}, nil)
+	if err != nil || !strings.Contains(fc.HTML, `<div class="dl del"><span class="g"><i>1</i><i></i></span><span class="s">-</span><span class="t">old</span>`) {
+		t.Errorf("old.txt: %+v %v", fc, err)
+	}
+	fc, err = ChangeOf(ctx, root, "data.bin", BaseHead, false, TurnRange{}, nil)
+	if err != nil || fc.Note != "Binary file." || fc.HTML != "" {
+		t.Errorf("data.bin: %+v %v", fc, err)
+	}
+	fc, err = ChangeOf(ctx, root, "pic.png", BaseHead, false, TurnRange{}, nil)
+	if err != nil || !strings.Contains(fc.HTML, `src="data:image/png;base64,`) {
+		t.Errorf("pic.png: %+v %v", fc, err)
+	}
+	fc, err = ChangeOf(ctx, root, "main.go", BaseHead, false, TurnRange{}, nil)
+	if err != nil || !strings.Contains(fc.HTML, `class="dl del"`) || strings.Contains(fc.HTML, `class="dl add"`) {
+		t.Errorf("main.go as deleted: %+v %v", fc, err)
+	}
+	fc, err = ChangeOf(ctx, root, "main.go", BaseHead, true, TurnRange{}, nil)
+	if err != nil || !strings.Contains(fc.HTML, `class="dl add"`) || strings.Contains(fc.HTML, `class="dl del"`) {
+		t.Errorf("main.go as new: %+v %v", fc, err)
+	}
+}
