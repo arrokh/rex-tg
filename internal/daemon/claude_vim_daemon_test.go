@@ -72,3 +72,23 @@ func TestClaudeVisualModeIsLeftBeforeThePaste(t *testing.T) {
 		t.Errorf("order: escape %d, paste %d, enter %d", escAt, pasteAt, enterAt)
 	}
 }
+
+// A message typed while Claude Code works is queued; Claude Code writes it
+// when the turn takes it in. One with an image is written as content blocks
+// (seen live). It is the message's echo: 👀 turns into 👍.
+func TestQueuedMessageWithAnImageIsAnEcho(t *testing.T) {
+	e, thread := claudeTopic(t)
+	id := e.say(thread, "also fix this")
+	e.waitFor("the eyes reaction", func() bool { m, _ := e.message(id); return m.Reaction == "👀" || m.Reaction == "👍" })
+	path := filepath.Join(e.home, ".claude", "projects", "-work-proj", "sess-vim.jsonl")
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fmt.Fprintf(f, `{"type":"attachment","uuid":"q-1","sessionId":"sess-vim","cwd":%q,"timestamp":%q,"attachment":{"type":"queued_command","prompt":[{"type":"text","text":"[Image #1]also fix this"},{"type":"image","source":{"type":"base64","media_type":"image/png","data":"AAAA"}}],"commandMode":"prompt","origin":{"kind":"human"}}}`+"\n", paneCWD, now())
+	f.Close()
+	e.waitFor("the thumbs up", func() bool { m, _ := e.message(id); return m.Reaction == "👍" })
+	if e.hasText(thread, "In use on the Mac") {
+		t.Errorf("the message counts as typed on the Mac\n%s", e.dump())
+	}
+}

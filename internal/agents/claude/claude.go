@@ -178,15 +178,30 @@ func (adapter) ParseLine(raw []byte, ctx agents.LineContext) ([]agents.Event, er
 	switch l.Type {
 	case "attachment":
 		var a struct {
-			Type        string  `json:"type"`
-			Prompt      string  `json:"prompt"`
-			CommandMode string  `json:"commandMode"`
-			Origin      *origin `json:"origin"`
+			Type string `json:"type"`
+			// Prompt is text, or content blocks when the message has an
+			// image: the text block holds "[Image #N]" and the caption
+			// (seen live, Claude Code 2.1.322).
+			Prompt      json.RawMessage `json:"prompt"`
+			CommandMode string          `json:"commandMode"`
+			Origin      *origin         `json:"origin"`
 		}
 		if len(l.Attachment) == 0 || json.Unmarshal(l.Attachment, &a) != nil || a.Type != "queued_command" {
 			return nil, nil
 		}
-		if text := strings.TrimSpace(unwrapPastes(a.Prompt)); isPrompt(text) {
+		blocks, err := parseBlocks(a.Prompt)
+		if err != nil {
+			return nil, nil
+		}
+		var texts []string
+		for _, b := range blocks {
+			if b.Type == "text" {
+				if t := strings.TrimSpace(unwrapPastes(b.Text)); t != "" {
+					texts = append(texts, t)
+				}
+			}
+		}
+		if text := strings.Join(texts, "\n\n"); isPrompt(text) {
 			return []agents.Event{{Kind: agents.UserPrompt, Key: k.next(), At: at, Text: text,
 				Auto: automatic(a.Origin, a.CommandMode, text)}}, nil
 		}

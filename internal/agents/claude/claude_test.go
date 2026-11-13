@@ -381,6 +381,15 @@ func TestPastedTextIsUnwrapped(t *testing.T) {
 			}
 		})
 	}
+	// A message with an image, typed while Claude Code works, is queued as
+	// content blocks (seen live): its text block is the prompt.
+	t.Run("a queued prompt with an image", func(t *testing.T) {
+		line := `{"type":"attachment","uuid":"q2","sessionId":"S","timestamp":"2026-11-11T10:00:00.000Z","attachment":{"type":"queued_command","prompt":[{"type":"text","text":"[Image #35]Also fix this"},{"type":"image","source":{"type":"base64","media_type":"image/jpeg","data":"AAAA"}}],"commandMode":"prompt","origin":{"kind":"human"},"humanTurn":true}}`
+		evs, err := claude.New().ParseLine([]byte(line), agents.LineContext{SessionID: "S"})
+		if err != nil || len(evs) != 1 || evs[0].Kind != agents.UserPrompt || evs[0].Text != "[Image #35]Also fix this" || evs[0].Auto {
+			t.Fatalf("events = %+v, err = %v; want one typed prompt", evs, err)
+		}
+	})
 	t.Run("a queued prompt", func(t *testing.T) {
 		line := `{"type":"attachment","uuid":"q1","sessionId":"S","timestamp":"2026-11-11T10:00:00.000Z","attachment":{"type":"queued_command","prompt":"<pasted_content id=\"d4\">\nqueued\n</pasted_content id=\"d4\">","humanTurn":true}}`
 		evs, err := claude.New().ParseLine([]byte(line), agents.LineContext{SessionID: "S"})
