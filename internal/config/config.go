@@ -70,8 +70,12 @@ type RuntimeInput struct {
 // Config is the whole configuration.
 type Config struct {
 	Telegram struct {
-		APIBase       string  `toml:"api_base"`
-		Proxy         string  `toml:"proxy"`
+		APIBase string `toml:"api_base"`
+		Proxy   string `toml:"proxy"`
+		// Fallback lets rex-tg switch between the proxy and the direct
+		// route to Telegram when one of them stops working. It is used
+		// only when Proxy is set.
+		Fallback      bool    `toml:"fallback"`
 		RatePerSecond float64 `toml:"rate_per_second"`
 		RateBurst     int     `toml:"rate_burst"`
 	} `toml:"telegram"`
@@ -175,6 +179,7 @@ func secs(s float64) Duration { return Duration{time.Duration(s * float64(time.S
 func Default(home string) Config {
 	var c Config
 	c.Telegram.APIBase = "https://api.telegram.org"
+	c.Telegram.Fallback = true
 	c.Telegram.RatePerSecond = 1
 	c.Telegram.RateBurst = 5
 

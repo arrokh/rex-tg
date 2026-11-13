@@ -197,6 +197,7 @@ Every key, with its default:
 [telegram]
 api_base = "https://api.telegram.org"  # Telegram Bot API address. Keep the default.
 proxy = ""                              # Proxy for Telegram: http, https, socks5, or socks5h URL. Empty uses HTTPS_PROXY or ALL_PROXY.
+fallback = true                         # With a proxy: switch to the direct route when the proxy fails, and back. Ignored without a proxy.
 rate_per_second = 1                     # Messages per second for the whole chat.
 rate_burst = 5                          # Messages that may be sent at once above that rate.
 
@@ -378,6 +379,7 @@ Some networks drop the route to Telegram for a minute or two, again and again. R
 - rex-tg notices a dead connection in about 15 seconds. It retries every 0.5 to 2 seconds, and sends queued replies within seconds after the route returns.
 - The log has one warning when a break starts, and one "Telegram reachable again" line when it ends.
 - If the breaks keep coming, send Telegram through a proxy or VPN: set `[telegram] proxy`, such as `"socks5h://127.0.0.1:40000"`. It takes an `http`, `https`, `socks5`, or `socks5h` URL. The log shows only the scheme and host, never a password.
+- With a proxy, rex-tg also uses the direct route when the proxy stops working. This is `[telegram] fallback`, on by default. Three requests in a row that never left the machine (a dial error, a TLS handshake timeout, a refused connection) make rex-tg use the other route for the next requests. It switches back the same way. Such a request is also tried once at once on the other route, because nothing was posted. A request with an unknown outcome is never sent again on the other route. The log has one line `Telegram route: direct` or `Telegram route: proxy` for each switch. Set `fallback = false` to keep the proxy only.
 - When `proxy` is empty, rex-tg uses `HTTPS_PROXY` or `ALL_PROXY` from the daemon's environment.
 
 ## Privacy
