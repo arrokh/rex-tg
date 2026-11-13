@@ -30,6 +30,14 @@ type Message struct {
 	Quote *TextQuote `json:"quote,omitempty"`
 	// ForumTopicCreated marks the service message that starts a topic.
 	ForumTopicCreated *ForumTopicCreated `json:"forum_topic_created,omitempty"`
+	// ForumTopicEdited marks the service message of a renamed topic.
+	ForumTopicEdited *ForumTopicEdited `json:"forum_topic_edited,omitempty"`
+}
+
+// ForumTopicEdited is the service content of a topic edit: the new name,
+// when the name changed.
+type ForumTopicEdited struct {
+	Name string `json:"name,omitempty"`
 }
 
 // TextQuote is the quoted part of a replied message.

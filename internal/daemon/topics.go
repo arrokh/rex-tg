@@ -222,12 +222,13 @@ func (d *daemon) rename(th store.Thread, conv store.Conversation) {
 		err := d.snd.Call(sender.PriorityEdit, func(ctx context.Context, tg *telegram.Client) error {
 			return tg.EditForumTopic(ctx, th.ChatID, th.MessageThreadID, name)
 		})
-		switch telegram.Classify(err) {
+		switch c := telegram.Classify(err); c {
 		case telegram.ClassNone, telegram.ClassNotModified:
 			if err := d.st.SetThreadName(d.ctx, th.ID, name); err != nil {
 				d.log.Warn("rename topic", "err", err)
 			}
-			d.log.Info("topic renamed", "thread", th.ID)
+			// "not_modified": Telegram says the topic has the name already.
+			d.log.Info("topic renamed", "thread", th.ID, "telegram", c.String())
 			d.syncTab(th, conv)
 		case telegram.ClassThreadNotFound:
 			d.emit(evSender{sender.Event{Kind: sender.ThreadGone, ThreadID: th.ID}}) // the user deleted it
