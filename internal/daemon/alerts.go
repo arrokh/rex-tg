@@ -4,10 +4,13 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
+	"sync"
 
+	"rex-tg/internal/agents"
 	"rex-tg/internal/format"
 	"rex-tg/internal/inbound"
 	"rex-tg/internal/sender"
@@ -16,9 +19,10 @@ import (
 )
 
 const (
-	alertLines   = 25
-	alertMaxText = 3400
-	alertMaxBtn  = 28
+	alertLines    = 40 // screen lines read for a prompt; a question with descriptions is tall
+	alertRawLines = 25 // lines shown when the prompt is not understood
+	alertMaxText  = 3400
+	alertMaxBtn   = 28
 )
 
 var optionRe = regexp.MustCompile(`^\s*(?:[❯>›]\s*)?(\d)[.)]\s+(.+)$`)
@@ -147,6 +151,7 @@ func (d *daemon) reopenAlert(threadID int64) {
 // openAlert starts a worker that posts the alert of a blocked pane (flow 5).
 func (d *daemon) openAlert(th store.Thread, kind string) {
 	if d.alertBusy[th.ID] {
+		d.alertWanted[th.ID] = kind // asked again when the worker ends (alertDone)
 		return
 	}
 	if als, err := d.st.OpenAlerts(d.ctx, th.ID); err == nil && len(als) > 0 {
@@ -155,7 +160,7 @@ func (d *daemon) openAlert(th store.Thread, kind string) {
 	d.alertBusy[th.ID] = true
 	d.spawn(func() {
 		defer d.emit(evAlertDone{th.ID})
-		d.createAlert(th, kind)
+		d.createAlert(th, kind, "")
 	})
 }
 
@@ -163,6 +168,8 @@ func (d *daemon) openAlert(th store.Thread, kind string) {
 // state meanwhile, the new alert is closed at once.
 func (d *daemon) alertDone(threadID int64) {
 	delete(d.alertBusy, threadID)
+	wanted, asked := d.alertWanted[threadID]
+	delete(d.alertWanted, threadID)
 	th, err := d.st.Thread(d.ctx, threadID)
 	if err != nil {
 		return
@@ -170,10 +177,18 @@ func (d *daemon) alertDone(threadID int64) {
 	pane, ok, err := d.st.PaneByConversation(d.ctx, th.CurrentConversationID)
 	if err != nil || !ok || pane.State != "blocked" {
 		d.promptEnded(th)
+		return
+	}
+	if asked && th.Status == store.ThreadLive {
+		d.openAlert(th, wanted) // a prompt came while the worker ran
 	}
 }
 
-func (d *daemon) createAlert(th store.Thread, kind string) {
+// createAlert posts the alert of a blocked pane (a worker). follow is the
+// hash of the prompt that was just answered: a follow-up (the next question
+// of several, or their review page) is posted only when the screen shows
+// another prompt with answers.
+func (d *daemon) createAlert(th store.Thread, kind, follow string) {
 	ctx := d.ctx
 	conv, err := d.st.Conversation(ctx, th.CurrentConversationID)
 	if err != nil {
@@ -188,52 +203,49 @@ func (d *daemon) createAlert(th store.Thread, kind string) {
 		d.log.Warn("alert: capture", "err", err)
 	}
 	lines := lastLines(screen, alertLines)
-	opts := parseOptions(lines, kind == store.AlertPermission)
-	if len(opts) == 0 {
-		for _, a := range d.cfg.Input(conv.Runtime).Answers {
-			opts = append(opts, store.AlertOption{Label: a.Label, Keys: a.Keys})
+	if follow != "" {
+		if v := parsePromptView(lines, true); !v.ok || alertHash(lines) == follow {
+			return
 		}
 	}
-	opts = withEsc(opts)
+	c := d.alertContent(lines, kind, conv.Runtime)
 	id, err := d.st.CreateAlert(ctx, store.Alert{
-		ThreadID: th.ID, Kind: kind, ScreenHash: screenHash(lines), Options: opts,
+		ThreadID: th.ID, Kind: c.kind, ScreenHash: alertHash(lines), Options: c.opts,
 		State: store.AlertOpen, CreatedAt: d.now(),
 	})
 	if err != nil {
 		d.log.Warn("alert: create", "err", err)
 		return
 	}
-	head := "🔐 <b>Permission needed</b>"
-	if kind == store.AlertQuestion {
-		head = "❓ <b>The agent asks a question</b>"
+	if c.dl != nil {
+		d.emit(evAlertDeadline{alert: id, d: *c.dl})
 	}
-	text := head
-	if left, rough, ok := parseDeadline(lines); ok {
-		// The prompt counts down on the screen: the time left is from now.
-		dl := newDeadline(d.now(), left, rough, runtimeName(conv.Runtime))
-		text += "\n" + deadlineLine(dl)
-		d.emit(evAlertDeadline{alert: id, d: dl})
-	}
-	if kind == store.AlertPermission {
-		text += "\n<i>Reply with text to answer No and send it as a note.</i>"
-	}
-	if len(lines) > 0 {
-		text += "\n" + preBlock(lastLines(format.Redact(screen), alertLines), alertMaxText)
+	if err := d.st.Set(ctx, alertHeadKey(id), c.head); err != nil {
+		d.log.Warn("alert: keep its head", "err", err)
 	}
 	var msg telegram.Message
-	err = d.snd.Call(sender.PriorityAlert, func(ctx context.Context, tg *telegram.Client) error {
-		m, err := tg.SendMessage(ctx, telegram.SendMessageParams{
-			ChatID: th.ChatID, MessageThreadID: th.MessageThreadID, Text: text, ParseMode: "HTML",
-			ReplyMarkup: alertMarkup(id, opts),
+	send := func(text string) error {
+		return d.snd.Call(sender.PriorityAlert, func(ctx context.Context, tg *telegram.Client) error {
+			m, err := tg.SendMessage(ctx, telegram.SendMessageParams{
+				ChatID: th.ChatID, MessageThreadID: th.MessageThreadID, Text: text, ParseMode: "HTML",
+				ReplyMarkup: alertMarkup(id, c.opts),
+			})
+			msg = m
+			return err
 		})
-		msg = m
-		return err
-	})
+	}
+	err = send(c.text)
+	if cl := telegram.Classify(err); cl == telegram.ClassBadRequest || cl == telegram.ClassParseEntities {
+		// Refused, so nothing was posted: the screen's bottom lines instead.
+		d.log.Warn("alert: refused; sending the screen instead", "err", err)
+		err = send("🔐 <b>Permission needed</b>\n" + preBlock(lastLines(strings.Join(lines, "\n"), alertRawLines), alertMaxText))
+	}
 	if err != nil {
 		if d.ctx.Err() == nil {
 			d.log.Warn("alert: send", "err", err)
 		}
 		_ = d.st.SetAlertState(ctx, id, store.AlertGone)
+		_ = d.st.Delete(ctx, alertHeadKey(id))
 		return
 	}
 	d.log.Info("alert sent", "thread", th.ID, "alert", id,
@@ -243,19 +255,118 @@ func (d *daemon) createAlert(th store.Thread, kind string) {
 	}
 }
 
+// alertContent is what an alert shows and offers.
+type alertContent struct {
+	text, head, kind string
+	opts             []store.AlertOption
+	dl               *alertDeadline
+}
+
+// alertContent reads a prompt from the screen's lines: the readable view
+// when the prompt is understood (alertview.go), else the screen's bottom
+// lines with the numbered answers or the agent's configured ones.
+func (d *daemon) alertContent(lines []string, kind string, rt agents.Runtime) alertContent {
+	agent := runtimeName(rt)
+	c := alertContent{kind: kind}
+	if left, rough, ok := parseDeadline(lines); ok {
+		// The prompt counts down on the screen: the time left is from now.
+		dl := newDeadline(d.now(), left, rough, agent)
+		c.dl = &dl
+	}
+	if v := parsePromptView(lines, kind == store.AlertPermission); v.ok {
+		if v.isQuestion() {
+			c.kind = store.AlertQuestion // Claude Code reports a question as a permission
+		}
+		c.text, c.head, c.opts = alertHTML(v, agent, c.kind, c.dl), alertHead(v, agent, c.kind), v.alertOptions()
+		if format.VisibleLen(c.text) <= alertMaxText {
+			return c
+		}
+		// Too long for one message: the screen's bottom lines instead.
+		c.kind = kind
+	}
+	c.opts = parseOptions(lines, kind == store.AlertPermission)
+	if len(c.opts) == 0 {
+		for _, a := range d.cfg.Input(rt).Answers {
+			c.opts = append(c.opts, store.AlertOption{Label: a.Label, Keys: a.Keys})
+		}
+	}
+	c.opts = withEsc(c.opts)
+	c.head = "🔐 <b>Permission needed</b> · " + format.Escape(agent)
+	if kind == store.AlertQuestion {
+		c.head = "❓ <b>Question</b> · " + format.Escape(agent)
+	}
+	c.text = c.head
+	if c.dl != nil {
+		c.text += "\n" + deadlineLine(*c.dl)
+	}
+	if kind == store.AlertPermission {
+		c.text += "\n<i>Reply with text to answer No and send it as a note.</i>"
+	}
+	if raw := lastLines(strings.Join(lines, "\n"), alertRawLines); len(raw) > 0 {
+		c.text += "\n" + preBlock(raw, alertMaxText)
+	}
+	return c
+}
+
+func alertHeadKey(id int64) string { return fmt.Sprintf("alert_head:%d", id) }
+
+// finishAlert shrinks an alert that is done to its head and the outcome,
+// without buttons, so old prompts do not fill the topic. An alert whose head
+// is not known (posted before this version) only loses its buttons.
+func (d *daemon) finishAlert(chatID, messageID, alertID int64, outcome string) {
+	head, ok, err := d.st.Get(d.ctx, alertHeadKey(alertID))
+	if err == nil && ok {
+		_ = d.st.Delete(d.ctx, alertHeadKey(alertID))
+	}
+	if messageID == 0 {
+		return
+	}
+	if !ok || head == "" || outcome == "" {
+		d.alertEdits.Delete(alertID)
+		d.removeButtons(chatID, messageID)
+		return
+	}
+	text := head + "\n" + outcome
+	d.spawn(func() {
+		mu := d.alertLock(alertID)
+		mu.Lock()
+		defer mu.Unlock()
+		defer d.alertEdits.Delete(alertID) // done: a late refresh finds the alert closed
+		err := d.snd.Call(sender.PriorityAlert, func(ctx context.Context, tg *telegram.Client) error {
+			_, err := tg.EditMessageText(ctx, telegram.EditMessageTextParams{ChatID: chatID, MessageID: messageID, Text: text, ParseMode: "HTML"})
+			if telegram.Classify(err) == telegram.ClassNotModified {
+				return nil
+			}
+			return err
+		})
+		if err != nil && d.ctx.Err() == nil {
+			d.log.Debug("finish alert", "err", err)
+			d.removeButtons(chatID, messageID) // at least the buttons go
+		}
+	})
+}
+
 // closeAlerts closes the open alerts of a topic and removes their buttons, so
-// an old button can never type into whatever the screen shows later.
+// an old button can never type into whatever the screen shows later. The
+// alert shrinks to its head and outcome(alert); "" keeps its text.
 func (d *daemon) closeAlerts(th store.Thread, state string) {
+	d.closeAlertsWith(th, state, func(store.Alert) string { return "✖ Closed" })
+}
+
+func (d *daemon) closeAlertsWith(th store.Thread, state string, outcome func(store.Alert) string) {
 	als, err := d.st.OpenAlerts(d.ctx, th.ID)
 	if err != nil {
 		return
 	}
 	for _, a := range als {
+		if _, busy := d.answering.Load(a.ID); busy {
+			continue // an answer from Telegram is being sent: it finishes the alert
+		}
 		if err := d.st.SetAlertState(d.ctx, a.ID, state); err != nil {
 			d.log.Warn("close alert", "err", err)
 			continue
 		}
-		d.removeButtons(th.ChatID, a.TGMessageID)
+		d.finishAlert(th.ChatID, a.TGMessageID, a.ID, outcome(a))
 	}
 }
 
@@ -280,6 +391,12 @@ func (d *daemon) removeButtons(chatID, messageID int64) {
 // id is saved, and the buttons must go all the same. respond tells the user
 // the result; isErr marks a refusal.
 func (d *daemon) answerAlert(alertID int64, idx int, tapped int64, respond func(text string, isErr bool)) bool {
+	return d.answerAlertAs(alertID, idx, tapped, "", respond)
+}
+
+// answerAlertAs is answerAlert with the outcome that the shrunk alert shows
+// ("" says the answer's label).
+func (d *daemon) answerAlertAs(alertID int64, idx int, tapped int64, outcome string, respond func(text string, isErr bool)) bool {
 	ctx := d.ctx
 	// Claim the alert first: a second tap (or /approve) while the keys are
 	// being sent must not press them again.
@@ -302,45 +419,238 @@ func (d *daemon) answerAlert(alertID int64, idx int, tapped int64, respond func(
 		respond("Unknown answer.", true)
 		return false
 	}
-	f, pane, err := d.facts(ctx, th)
-	if err != nil {
-		respond("Could not read the pane: Rex is not reachable.", true)
-		return false
+	if al.TGMessageID == 0 {
+		al.TGMessageID = tapped
 	}
-	f.PromptOpen = true
-	if f.PaneExists {
-		screen, err := d.rx.Capture(ctx, pane.Session, pane.Block)
-		if err != nil {
-			respond("Could not read the screen.", true)
-			return false
-		}
-		f.AlertMatches = screenHash(lastLines(screen, alertLines)) == al.ScreenHash
-	}
-	msg := al.TGMessageID
-	if msg == 0 {
-		msg = tapped
-	}
-	if ok, reason := inbound.Check(inbound.ActPromptAnswer, f); !ok {
-		if reason == inbound.ReasonAlertStale {
-			_ = d.st.SetAlertState(ctx, al.ID, store.AlertGone)
-			d.removeButtons(th.ChatID, msg)
-			respond("This prompt is gone.", true)
-			d.emit(evAlertStale{th.ID}) // a newer prompt may show now
-			return false
-		}
-		respond("⛔ Not sent: "+reason+".", true)
+	pane, lines, ok := d.alertReady(ctx, th, al, respond)
+	if !ok {
 		return false
 	}
 	opt := al.Options[idx]
-	if err := d.rx.SendKeys(ctx, pane.Session, pane.Block, opt.Keys...); err != nil {
-		d.log.Warn("alert: send keys", "err", err)
-		respond("Could not press the keys.", true)
-		return false
+	switch {
+	case len(opt.Keys) == 1 && opt.Keys[0] == nextKey:
+		if err := d.pressNext(ctx, th, pane, al); err != nil {
+			respond("Not sent: "+err.Error()+".", true)
+			return false
+		}
+		if outcome == "" {
+			outcome = "➡ " + tickedText(lines)
+		}
+	case toggleOption(opt):
+		// A box: the question stays, and so does the alert, with the box
+		// as the screen shows it now.
+		if err := d.rx.SendKeys(ctx, pane.Session, pane.Block, opt.Keys...); err != nil {
+			d.log.Warn("alert: send keys", "err", err)
+			respond("Could not press the keys.", true)
+			return false
+		}
+		switch {
+		case !d.refreshAlert(ctx, th, pane, al):
+			respond("Pressed; the screen has not changed yet.", false)
+		case strings.HasPrefix(opt.Label, "☐"):
+			respond("☑ Ticked", false)
+		default:
+			respond("☐ Unticked", false)
+		}
+		return true
+	default:
+		if err := d.rx.SendKeys(ctx, pane.Session, pane.Block, opt.Keys...); err != nil {
+			d.log.Warn("alert: send keys", "err", err)
+			respond("Could not press the keys.", true)
+			return false
+		}
 	}
 	if err := d.st.SetAlertState(ctx, al.ID, store.AlertAnswered); err != nil {
 		d.log.Warn("alert: save state", "err", err)
 	}
-	d.removeButtons(th.ChatID, msg)
+	if outcome == "" {
+		outcome = "✅ " + format.Escape(opt.Label)
+		if len(opt.Keys) == 1 && opt.Keys[0] == "escape" {
+			outcome = "✖ " + format.Escape(opt.Label)
+		}
+	}
+	d.finishAlert(th.ChatID, al.TGMessageID, al.ID, outcome)
+	d.emit(evAlertFollow{thread: th.ID, hash: al.ScreenHash}) // a next question may show
 	respond("Sent: "+opt.Label, false)
 	return true
+}
+
+// alertReady checks, before a key, that the alert's prompt is still on the
+// screen and that every safety check passes (a worker). A stale alert is
+// closed, and a newer prompt gets its own.
+func (d *daemon) alertReady(ctx context.Context, th store.Thread, al store.Alert, respond func(string, bool)) (store.Pane, []string, bool) {
+	// Under the claim, read the alert again: an answer that just finished
+	// (a second reply, a second tap) must find it answered.
+	if now, err := d.st.Alert(ctx, al.ID); err != nil || now.State != store.AlertOpen {
+		respond("This prompt is gone.", true)
+		return store.Pane{}, nil, false
+	}
+	f, pane, err := d.facts(ctx, th)
+	if err != nil {
+		respond("Could not read the pane: Rex is not reachable.", true)
+		return pane, nil, false
+	}
+	// The alert is open, and the pane must still report its prompt: a
+	// screen that only looks like one (a numbered list in the agent's
+	// output while it works) takes no key.
+	f.PromptOpen = pane.State == "blocked"
+	var lines []string
+	if f.PaneExists {
+		screen, err := d.rx.Capture(ctx, pane.Session, pane.Block)
+		if err != nil {
+			respond("Could not read the screen.", true)
+			return pane, nil, false
+		}
+		lines = lastLines(screen, alertLines)
+		f.AlertMatches = alertHash(lines) == al.ScreenHash
+	}
+	if ok, reason := inbound.Check(inbound.ActPromptAnswer, f); !ok {
+		if reason == inbound.ReasonAlertStale {
+			_ = d.st.SetAlertState(ctx, al.ID, store.AlertGone)
+			d.finishAlert(th.ChatID, al.TGMessageID, al.ID, "↻ The prompt changed")
+			respond("This prompt is gone.", true)
+			d.emit(evAlertStale{th.ID}) // a newer prompt may show now
+			return pane, nil, false
+		}
+		respond("⛔ Not sent: "+reason+".", true)
+		return pane, nil, false
+	}
+	return pane, lines, true
+}
+
+// refreshAlert shows a question again after a box was ticked (a worker): it
+// waits until the screen shows the change, then keeps the new prompt in the
+// store and edits the alert with the boxes as they are now.
+func (d *daemon) refreshAlert(ctx context.Context, th store.Thread, pane store.Pane, al store.Alert) bool {
+	agent := "The agent"
+	if conv, err := d.st.Conversation(ctx, th.CurrentConversationID); err == nil {
+		agent = runtimeName(conv.Runtime)
+	}
+	for range vimPolls {
+		if !sleepCtx(ctx, d.timing.VimPoll) {
+			return false
+		}
+		screen, err := d.rx.Capture(ctx, pane.Session, pane.Block)
+		if err != nil {
+			continue
+		}
+		lines := lastLines(screen, alertLines)
+		h := alertHash(lines)
+		v := parsePromptView(lines, false)
+		if h == al.ScreenHash || !v.ok {
+			continue
+		}
+		opts := v.alertOptions()
+		if err := d.st.UpdateAlertScreen(ctx, al.ID, h, opts); err != nil {
+			return false // closed meanwhile
+		}
+		text, markup, chat, msg := alertHTML(v, agent, store.AlertQuestion, nil), alertMarkup(al.ID, opts), th.ChatID, al.TGMessageID
+		if msg == 0 {
+			return true
+		}
+		// The same lock as finishAlert: a refresh never puts the buttons
+		// back on an alert that closed meanwhile.
+		mu := d.alertLock(al.ID)
+		mu.Lock()
+		defer mu.Unlock()
+		if now, err := d.st.Alert(ctx, al.ID); err != nil || now.State != store.AlertOpen {
+			return false
+		}
+		err = d.snd.Call(sender.PriorityAlert, func(ctx context.Context, tg *telegram.Client) error {
+			_, err := tg.EditMessageText(ctx, telegram.EditMessageTextParams{ChatID: chat, MessageID: msg, Text: text, ParseMode: "HTML", ReplyMarkup: markup})
+			if telegram.Classify(err) == telegram.ClassNotModified {
+				return nil
+			}
+			return err
+		})
+		if err != nil && d.ctx.Err() == nil {
+			d.log.Debug("refresh alert", "err", err)
+		}
+		return true
+	}
+	return false
+}
+
+// pressNext moves the cursor of a question to its "Next" row, one key at a
+// time with the screen read after each, and presses Enter there (a worker).
+// Every key passes the safety checks first.
+func (d *daemon) pressNext(ctx context.Context, th store.Thread, pane store.Pane, al store.Alert) error {
+	for range 2 * maxQuestionLines {
+		screen, err := d.rx.Capture(ctx, pane.Session, pane.Block)
+		if err != nil {
+			return errors.New("could not read the screen")
+		}
+		lines := lastLines(screen, alertLines)
+		if alertHash(lines) != al.ScreenHash {
+			return errors.New("the question changed")
+		}
+		rows, cur := promptRows(lines)
+		target := -1
+		for i, r := range rows {
+			if r == "next" {
+				target = i
+			}
+		}
+		if target < 0 || cur < 0 {
+			return errors.New("no Next on the screen")
+		}
+		f, p, err := d.facts(ctx, th)
+		if err != nil {
+			return errors.New("rex is not reachable")
+		}
+		f.PromptOpen, f.AlertMatches = p.State == "blocked", true
+		if ok, reason := inbound.Check(inbound.ActPromptAnswer, f); !ok {
+			return errors.New(reason)
+		}
+		if cur == target {
+			return d.rx.SendKeys(ctx, pane.Session, pane.Block, "enter")
+		}
+		key := "down"
+		if target < cur {
+			key = "up"
+		}
+		if err := d.rx.SendKeys(ctx, pane.Session, pane.Block, key); err != nil {
+			return errors.New("could not press a key")
+		}
+		moved := false
+		for range vimPolls {
+			if !sleepCtx(ctx, d.timing.VimPoll) {
+				return ctx.Err()
+			}
+			s, err := d.rx.Capture(ctx, pane.Session, pane.Block)
+			if err != nil {
+				continue
+			}
+			if _, c := promptRows(lastLines(s, alertLines)); c != cur {
+				moved = true
+				break
+			}
+		}
+		if !moved {
+			return errors.New("the cursor did not move")
+		}
+	}
+	return errors.New("the Next row was not reached")
+}
+
+// tickedText lists the ticked answers of a question, for the shrunk alert.
+func tickedText(lines []string) string {
+	v := parsePromptView(lines, false)
+	var on []string
+	for _, o := range v.options {
+		if o.box == 2 {
+			on = append(on, o.label)
+		}
+	}
+	if len(on) == 0 {
+		return "Next"
+	}
+	return format.Escape(format.Truncate(strings.Join(on, ", "), 200))
+}
+
+// alertLock is the lock of one alert's message: a refresh and the final edit
+// do not cross.
+func (d *daemon) alertLock(id int64) *sync.Mutex {
+	mu, _ := d.alertEdits.LoadOrStore(id, &sync.Mutex{})
+	return mu.(*sync.Mutex)
 }

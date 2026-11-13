@@ -157,6 +157,7 @@ var testTiming = daemon.Timing{
 	DraftKeep:    time.Hour, // a test of the refresh sets its own
 	LiveCheck:    30 * time.Millisecond,
 	DeadlineWarn: 400 * time.Millisecond,
+	AlertFollow:  100 * time.Millisecond,
 }
 
 // start runs the daemon in a goroutine.

@@ -630,11 +630,16 @@ func (d *daemon) startTab(a newAgent, dir string) (st rex.Started, in string, er
 	}
 	label := strings.TrimSpace(d.cfg.Rex.NewSession)
 	tab := rex.Tab{Label: tabLabel(dir, a.key), CWD: dir, Command: a.command}
-	if s, ok := findSession(sessions, label); ok {
+	if s, ok := d.ownSession(sessions); ok {
+		// Found by its ID when an agent renamed it; the name check names it
+		// back (keepSessionName).
 		st, err = d.rx.NewWindow(d.ctx, s.ID, tab)
-		return st, "a new tab <b>" + esc(tab.Label) + "</b> of the Rex session <b>" + esc(s.Label) + "</b>", err
+		return st, "a new tab <b>" + esc(tab.Label) + "</b> of the Rex session <b>" + esc(label) + "</b>", err
 	}
 	st, err = d.rx.NewSession(d.ctx, label, tab)
+	if err == nil {
+		d.keepSessionID(st.SessionID)
+	}
 	return st, "the tab <b>" + esc(tab.Label) + "</b> of the new Rex session <b>" + esc(label) + "</b>", err
 }
 

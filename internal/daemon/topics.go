@@ -258,9 +258,17 @@ func (d *daemon) syncTab(th store.Thread, conv store.Conversation) {
 		d.log.Warn("rename tab: list sessions", "err", err)
 		return
 	}
-	i := slices.IndexFunc(sessions, func(s rex.Session) bool { return s.ID == p.Session })
-	if i < 0 || !strings.EqualFold(strings.TrimSpace(sessions[i].Label), want) {
-		return
+	own, ok := d.ownSession(sessions)
+	if !ok && d.now().Sub(d.tabSessionsAt) > time.Second {
+		// The cached list may predate the session that /new just made.
+		d.tabSessions = nil
+		if sessions, err = d.tabSessionList(); err != nil {
+			return
+		}
+		own, ok = d.ownSession(sessions)
+	}
+	if !ok || own.ID != p.Session {
+		return // a tab of the user's own sessions
 	}
 	blocks, err := d.rx.Blocks(d.ctx, p.Session)
 	if err != nil {

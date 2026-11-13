@@ -101,7 +101,7 @@ Doctor checks:
 
 - Tap the agent, then tap a folder or send a path such as `~/work/app`. cux is one of the agents when it is installed.
 - The folder buttons, at most 6: the folders in `[rex] new_folders` first, in their order, then the folder of this topic's agent, then the folders where agents ran recently, newest first. A folder that no longer exists is left out.
-- Every tab goes into one Rex session, `rex-tg` (`[rex] new_session`). rex-tg makes the session when it is missing.
+- Every tab goes into one Rex session, `rex-tg` (`[rex] new_session`). rex-tg makes the session when it is missing. If an agent in it renames the session, rex-tg names it back within 30 seconds.
 - A tab is named after its folder and agent, such as `app · pi`. The tab always follows its topic name: at link time, and at the 30-second name check when its label differs. When the topic has only the folder name, the tab keeps the `<folder> · <agent>` form. Two tabs with one name get ` #2`, ` #3`. Tabs in other Rex sessions are never renamed.
 - The agent starts as if you typed its name in a terminal, so your `~/.zshrc` applies.
 - If the agent asks something before it starts, such as "trust this folder?", the question comes to the chat with a button per answer. A button moves the cursor there and presses Enter. rex-tg checks the screen after each key.
@@ -119,7 +119,7 @@ Doctor checks:
 ### `/model` and `/effort`
 
 - `/model` and `/effort` with no value show the current value and buttons. `/model opus` or `/effort high` set a value at once. Use `/model <name>` for a model that has no button.
-- rex-tg types the agent's own command, such as `/model opus`, like a message. It waits until the agent is idle, and every safety check applies. A button press gets no 👀 on your message, but the bot says "⚙️ Sending …". The agent writes no prompt for a slash command, so no 👍 comes.
+- rex-tg types the agent's own command, such as `/model opus`, like a message. It waits until the agent is idle, and every safety check applies. A button press gets no 👀 on your message, but the bot says "⚙️ Sending …". The agent writes no prompt for a slash command, so the 👍 comes as soon as it is typed.
 - The commands by agent:
 
 | Agent | `/model <v>` types | `/effort <v>` types | Values of `/effort` |
@@ -152,14 +152,15 @@ Doctor checks:
 - Reminders: when a prompt waits for 10 minutes, the topic gets `⏰ Still waiting for your answer`, as a reply to the prompt. More reminders come 10 minutes after the one before, at most 3, and each one replaces the one before. They go away when the prompt ends. Set `[alerts] remind_after` and `reminders` to change this, and `remind_after = "0s"` to turn them off.
 - Questions that allow free text get a `✍ Other…` button. Your next message becomes the answer. This is not tested yet (spike S2).
 - Time limits: a Claude Code safety check blocks the request by itself after a while (`automatically block this request in 2:00`). The alert then says `⏳ Answer within 2:00 (by 07:00:57)`, one reminder comes 30 seconds before, and if the time runs out the topic says `⌛ Blocked`.
-- Reply to a prompt with text to answer No with a note: rex-tg refuses it with Esc, then types your text as your next message, when the agent waits for it. A reply that starts with yes, ok, ya, iya, lanjut, or gas presses nothing: tap Yes for that. It works like Claude Code's "Tab to amend" for No, and Codex's "No, and tell Codex what to do differently". For Yes with a note, tap Yes and send the note as a message.
+- Reply to a permission prompt with text to answer No with a note: rex-tg refuses it with Esc, then types your text as your next message, when the agent waits for it. A reply that starts with yes, ok, ya, iya, lanjut, or gas presses nothing: tap Yes for that. It works like Claude Code's "Tab to amend" for No, and Codex's "No, and tell Codex what to do differently". For Yes with a note, tap Yes and send the note as a message.
 - Codex prints the key of each answer, such as `(y)` or `(esc)`; its buttons press that key.
-- A Claude Code question with several answers to tick, or several questions at once, needs the Mac: a button only ticks an answer there.
+- Alerts read like the prompt: who asks, what it wants to do (the command in monospace), warnings, and the question in bold; the answers are the buttons. Once answered, an alert shrinks to one line with the question and your answer, so old prompts do not fill the topic.
+- Claude Code questions: tap an answer, or reply with text to give your own answer ("Type something"). For answers to tick, the `☐` buttons tick them and `Next ➡` goes on. With several questions, each next one, and the "Submit answers" page, comes as its own alert.
 
 | Agent | Buttons | Reply with text |
 | --- | --- | --- |
 | Claude Code | `1 Yes`, `2 Yes, and don't ask again …`, `3 No`, `Esc` | No (Esc) + your note |
-| Claude Code question | one per answer, `Esc` | Esc + your text |
+| Claude Code question | one per answer (☐ to tick, `Next ➡`), `Esc` | your own answer ("Type something") |
 | Codex | `Yes, proceed` (y), `don't ask again` (p), `No …` (Esc) | No (Esc) + your note |
 | pi | pi asks nothing before it acts | — |
 

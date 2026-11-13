@@ -28,6 +28,7 @@ type Timing struct {
 	DraftKeep    time.Duration // a draft that did not change is sent again after this, before it fades (20 s)
 	LiveCheck    time.Duration // how often the live folder of pi's extension is read (400 ms)
 	DeadlineWarn time.Duration // a prompt with a time limit is reminded of this long before it blocks (30 s)
+	AlertFollow  time.Duration // after an answer, when the screen is read for the next question; again at 3x (1 s)
 }
 
 // withDefaults fills the zero fields with the production values.
@@ -58,5 +59,6 @@ func (t Timing) withDefaults() Timing {
 	def(&t.DraftKeep, 20*time.Second)
 	def(&t.LiveCheck, 400*time.Millisecond)
 	def(&t.DeadlineWarn, 30*time.Second)
+	def(&t.AlertFollow, time.Second)
 	return t
 }

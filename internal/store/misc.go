@@ -128,6 +128,20 @@ func (s *Store) SetAlertMessage(ctx context.Context, id, tgMessageID int64) erro
 	return affected(res, fmt.Sprintf("store: alert %d", id))
 }
 
+// UpdateAlertScreen keeps the prompt that an open alert shows now, after a
+// box was ticked: its hash and its answers.
+func (s *Store) UpdateAlertScreen(ctx context.Context, id int64, hash string, opts []AlertOption) error {
+	b, err := json.Marshal(opts)
+	if err != nil {
+		return fmt.Errorf("store: encode alert options: %w", err)
+	}
+	res, err := s.db.ExecContext(ctx, `UPDATE alert SET screen_hash=?, options=? WHERE id=? AND state=?`, hash, string(b), id, AlertOpen)
+	if err != nil {
+		return fmt.Errorf("store: update alert: %w", err)
+	}
+	return affected(res, fmt.Sprintf("store: open alert %d", id))
+}
+
 // SetAlertState changes an alert's state.
 func (s *Store) SetAlertState(ctx context.Context, id int64, state string) error {
 	res, err := s.db.ExecContext(ctx, `UPDATE alert SET state=? WHERE id=?`, state, id)

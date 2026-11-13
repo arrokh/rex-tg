@@ -112,6 +112,7 @@ func (d *daemon) startup(ctx context.Context) error {
 			for _, a := range als {
 				if a.TGMessageID == 0 {
 					_ = d.st.SetAlertState(ctx, a.ID, store.AlertGone)
+					_ = d.st.Delete(ctx, alertHeadKey(a.ID))
 				}
 			}
 		}

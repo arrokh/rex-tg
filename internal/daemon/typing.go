@@ -516,8 +516,16 @@ func (d *daemon) onTyped(e evTyped) {
 	if err := d.st.SetInboundState(d.ctx, e.in.UpdateID, store.InboundDelivered, "", now); err != nil {
 		d.log.Warn("typing: state", "err", err)
 	}
-	d.controlTyped(e.in.UpdateID, true)
+	control := d.controlTyped(e.in.UpdateID, true)
 	d.react(e.in, "👀")
+	if control {
+		// An agent's slash command (/model) usually writes no prompt, so no
+		// echo would give it 👍: typed is done. The row stays delivered,
+		// so an agent that does echo it is still known to come from
+		// Telegram, not the Mac.
+		d.react(e.in, "👍")
+		return
+	}
 	if dl != nil && dl.echoKey != "" {
 		// The agent recorded the prompt before the typing call returned.
 		// The reactions still go out in order: 👀, then 👍.

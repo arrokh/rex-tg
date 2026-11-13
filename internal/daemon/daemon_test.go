@@ -404,10 +404,12 @@ func TestEchoSuppression(t *testing.T) {
 
 const permScreen = "Bash command\n  rm -rf build\n\nDo you want to proceed?\n❯ 1. Yes\n  2. Yes, and don't ask again\n  3. No\n"
 
+// alertMessages returns the alerts of a topic, open or shrunk after their
+// answer: messages that start with 🔐 or ❓.
 func alertMessages(e *env, thread int64) []string {
 	var out []string
 	for _, m := range e.botMessages(thread) {
-		if strings.Contains(m.Text, "Permission needed") {
+		if strings.HasPrefix(m.Text, "🔐") || strings.HasPrefix(m.Text, "❓") {
 			out = append(out, m.Text)
 		}
 	}

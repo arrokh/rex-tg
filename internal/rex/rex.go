@@ -407,6 +407,19 @@ func (c *Client) RenameWindow(ctx context.Context, session, window, label string
 	return err
 }
 
+// RenameSession gives a session a new name. It runs `rex session rename
+// SESSION LABEL`.
+func (c *Client) RenameSession(ctx context.Context, session, label string) error {
+	switch {
+	case badName(session):
+		return &Error{Command: "session rename", Err: fmt.Errorf("invalid session %q", session)}
+	case badName(label):
+		return &Error{Command: "session rename", Err: fmt.Errorf("invalid session name %q", label)}
+	}
+	_, err := c.run(ctx, "session rename", nil, "session", "rename", session, label)
+	return err
+}
+
 // badName reports a name that the rex command line would read wrongly: one
 // that starts with "-" is read as an option.
 func badName(s string) bool { return s == "" || strings.HasPrefix(s, "-") }

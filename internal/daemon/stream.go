@@ -204,6 +204,10 @@ func (d *daemon) onDraftSent(e evDraftSent) {
 	case e.err == nil:
 		dr.shown = e.html
 		d.draftRefused = 0
+		if !d.draftWorked {
+			d.draftWorked = true
+			d.log.Info("drafts: Telegram took the first draft", "thread", e.thread)
+		}
 	case errors.Is(e.err, errDraftClosed), d.ctx.Err() != nil:
 	case telegram.Classify(e.err) == telegram.ClassBadRequest:
 		// Telegram may not take drafts here (an older Bot API, or a chat that

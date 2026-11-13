@@ -129,21 +129,77 @@ func deadlineLine(dl alertDeadline) string {
 		clockText(dl.limit), dl.at.Format("15:04:05"), format.Escape(dl.agent))
 }
 
-// blockedNotice tells the topic that an alert's time ran out (core): the
-// prompt went away unanswered at about its deadline. Only promptEnded calls
-// it: a topic that closes is no sign of a block.
-func (d *daemon) blockedNotice(th store.Thread, al store.Alert) {
+// endedOutcome is what an alert whose prompt went away without an answer
+// from Telegram says (core): blocked, when its time limit ran out, else
+// answered on the Mac. Only promptEnded asks: a topic that closes is no sign
+// of either.
+func (d *daemon) endedOutcome(al store.Alert) string {
 	dl, ok := d.deadlines[al.ID]
-	if !ok {
-		return
-	}
 	delete(d.deadlines, al.ID)
-	if d.now().Before(dl.at.Add(-min(deadlineSlack, dl.limit/10) - dl.early)) {
-		return // it went before its time: answered on the Mac
+	if ok && !d.now().Before(dl.at.Add(-min(deadlineSlack, dl.limit/10)-dl.early)) {
+		return fmt.Sprintf("⌛ <b>Blocked</b>: no answer within %s, so %s denied the request.", clockText(dl.limit), format.Escape(dl.agent))
 	}
-	d.replyTopic(th, fmt.Sprintf("blocked:%d", al.ID), fmt.Sprintf(
-		"⌛ <b>Blocked</b>: no answer within %s, so %s denied the request.",
-		clockText(dl.limit), format.Escape(dl.agent)))
+	return "✔ Answered on the Mac"
+}
+
+// evAlertFollow asks for a look at the screen after an answer: a question
+// of several shows the next one, or its review page, with the pane still
+// blocked and no state change to post it.
+type evAlertFollow struct {
+	thread int64
+	hash   string // the prompt that was answered
+}
+
+// alertFollow is a look at the screen that is due (core).
+type alertFollow struct {
+	hash  string
+	due   time.Time
+	tries int
+}
+
+func (d *daemon) onAlertFollow(e evAlertFollow) {
+	d.follows[e.thread] = alertFollow{hash: e.hash, due: d.now().Add(d.timing.AlertFollow), tries: 2}
+}
+
+// tickFollows posts the alert of a prompt that came after an answered one
+// (core): when the pane is still blocked, no alert is open, and the screen
+// shows another prompt with answers. It looks twice: after AlertFollow and
+// after three times that, since an agent may take a moment to redraw.
+func (d *daemon) tickFollows(now time.Time) {
+	for tid, f := range d.follows {
+		if now.Before(f.due) {
+			continue
+		}
+		if f.tries--; f.tries > 0 {
+			f.due = now.Add(2 * d.timing.AlertFollow)
+			d.follows[tid] = f
+		} else {
+			delete(d.follows, tid)
+		}
+		if d.alertBusy[tid] {
+			continue
+		}
+		th, err := d.st.Thread(d.ctx, tid)
+		if err != nil || th.Status != store.ThreadLive {
+			continue
+		}
+		p, ok, err := d.st.PaneByConversation(d.ctx, th.CurrentConversationID)
+		if err != nil || !ok || p.State != "blocked" {
+			continue
+		}
+		if als, err := d.st.OpenAlerts(d.ctx, tid); err != nil || len(als) > 0 {
+			continue
+		}
+		kind, hash := p.StateKind, f.hash
+		if kind != store.AlertQuestion {
+			kind = store.AlertPermission
+		}
+		d.alertBusy[tid] = true
+		d.spawn(func() {
+			defer d.emit(evAlertDone{tid})
+			d.createAlert(th, kind, hash)
+		})
+	}
 }
 
 // noteAnswer picks the answer that a note goes with: the one that refuses
@@ -218,6 +274,13 @@ func (d *daemon) alertNote(u telegram.Update, m *telegram.Message, th store.Thre
 		return true
 	}
 	tag := fmt.Sprintf("%d:note", u.UpdateID)
+	if al.Kind == store.AlertQuestion {
+		// A question: the reply is the user's own answer, typed into the
+		// question's text field ("Type something"), not a refusal.
+		text := r.Text
+		d.spawn(func() { d.answerWithText(th, al, text, tag) })
+		return true
+	}
 	if approves(r.Text) {
 		// A reply is a note that answers No; "yes, go ahead" must not deny.
 		d.replyTopic(th, tag, "Nothing pressed: a reply answers <b>No</b> and sends your text as a note. To allow it, tap Yes or send /approve.")
@@ -275,13 +338,111 @@ func approves(text string) bool {
 	return false
 }
 
-// promptEnded closes the alerts of a pane that left its prompt (core), and
-// tells the topic when a prompt went away at its time limit.
+// promptEnded closes the alerts of a pane that left its prompt (core). Each
+// one shrinks to its head and says what became of it: blocked at its time
+// limit, or answered on the Mac.
 func (d *daemon) promptEnded(th store.Thread) {
-	if als, err := d.st.OpenAlerts(d.ctx, th.ID); err == nil {
-		for _, a := range als {
-			d.blockedNotice(th, a)
+	d.closeAlertsWith(th, store.AlertGone, d.endedOutcome)
+}
+
+// answerWithText answers a question with the user's own words (a worker): it
+// presses the digit of the question's text field ("Type something"), checks
+// that the cursor is there, pastes the text as one line, and presses Enter.
+// A question whose answers are ticked takes no text from Telegram: the
+// buttons tick them.
+func (d *daemon) answerWithText(th store.Thread, al store.Alert, text, tag string) {
+	ctx := d.ctx
+	say := func(html string) { d.replyTopic(th, tag, html) }
+	if _, busy := d.answering.LoadOrStore(al.ID, struct{}{}); busy {
+		say("Already sending an answer.")
+		return
+	}
+	defer d.answering.Delete(al.ID)
+	pane, lines, ok := d.alertReady(ctx, th, al, func(s string, _ bool) { say(format.Escape(s)) })
+	if !ok {
+		return
+	}
+	v := parsePromptView(lines, false)
+	if v.multi() {
+		say("This question takes ticks: tap the boxes, then <b>Next ➡</b>. Your own words go only on the Mac.")
+		return
+	}
+	field := ""
+	for _, o := range v.options {
+		if o.input {
+			field = o.num
 		}
 	}
-	d.closeAlerts(th, store.AlertGone)
+	if field == "" {
+		say("This question takes only its answers: tap one.")
+		return
+	}
+	if err := d.rx.SendKeys(ctx, pane.Session, pane.Block, field); err != nil {
+		say("Could not press the keys.")
+		return
+	}
+	focused := false
+	for range vimPolls {
+		if !sleepCtx(ctx, d.timing.VimPoll) {
+			return
+		}
+		s, err := d.rx.Capture(ctx, pane.Session, pane.Block)
+		if err != nil {
+			continue
+		}
+		rows, cur := promptRows(lastLines(s, alertLines))
+		if cur >= 0 && cur < len(rows) && rows[cur] == field {
+			focused = true
+			break
+		}
+	}
+	if !focused {
+		say("Not sent: the answer field did not open. Answer on the Mac.")
+		return
+	}
+	// Before the paste and before Enter: the same question, its field under
+	// the cursor, and the agent in front, as for every key.
+	onField := func(sameQuestion bool) bool {
+		f, _, err := d.facts(ctx, th)
+		if err != nil {
+			return false
+		}
+		s, err := d.rx.Capture(ctx, pane.Session, pane.Block)
+		if err != nil {
+			return false
+		}
+		lines := lastLines(s, alertLines)
+		f.PromptOpen = true
+		f.AlertMatches = !sameQuestion || alertHash(lines) == al.ScreenHash
+		if ok, _ := inbound.Check(inbound.ActPromptAnswer, f); !ok {
+			return false
+		}
+		rows, cur := promptRows(lines)
+		return cur >= 0 && cur < len(rows) && rows[cur] == field
+	}
+	if !onField(true) {
+		say("Not sent: the question changed. Answer on the Mac.")
+		return
+	}
+	line := strings.Join(strings.Fields(text), " ") // a newline would answer early
+	if err := d.rx.Paste(ctx, pane.Session, pane.Block, line); err != nil {
+		say("Could not type the answer.")
+		return
+	}
+	if !sleepCtx(ctx, d.timing.VimPoll) {
+		return
+	}
+	if !onField(false) { // the field now holds the text, so the screen differs
+		say("Not sent: the question changed after your text was typed. Check it on the Mac.")
+		return
+	}
+	if err := d.rx.SendKeys(ctx, pane.Session, pane.Block, "enter"); err != nil {
+		say("Could not press Enter.")
+		return
+	}
+	if err := d.st.SetAlertState(ctx, al.ID, store.AlertAnswered); err != nil {
+		d.log.Warn("alert: save state", "err", err)
+	}
+	d.finishAlert(th.ChatID, al.TGMessageID, al.ID, "✍ "+format.Escape(format.Truncate(line, 200)))
+	d.emit(evAlertFollow{thread: th.ID, hash: al.ScreenHash})
 }

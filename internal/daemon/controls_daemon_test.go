@@ -83,11 +83,13 @@ func TestModelCardTapTypesTheCommandOnce(t *testing.T) {
 
 func TestEffortCommandIsTypedAndChecked(t *testing.T) {
 	e, p, thread := controlsTopic(t, "pi-effort")
-	e.say(thread, "/effort high")
+	cmd := e.say(thread, "/effort high")
 	e.waitFor("the thinking command", func() bool { return len(e.pastes()) == 1 })
 	if got := e.pastes()[0]; got != "/thinking high" {
 		t.Errorf("pasted %q", got)
 	}
+	// A slash command writes no prompt: its 👍 comes once it is typed.
+	e.waitFor("the 👍 of the typed command", func() bool { m, _ := e.message(cmd); return m.Reaction == "👍" })
 
 	// Values are checked before anything is typed.
 	e.say(thread, "/effort bogus")

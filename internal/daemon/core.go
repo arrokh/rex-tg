@@ -122,6 +122,7 @@ type rexClient interface {
 	Blocks(ctx context.Context, session string) ([]rex.Block, error)
 	Windows(ctx context.Context, session string) ([]rex.Window, error)
 	RenameWindow(ctx context.Context, session, window, label string) error
+	RenameSession(ctx context.Context, session, label string) error
 }
 
 var _ rexClient = (*rex.Client)(nil)
@@ -154,13 +155,15 @@ type daemon struct {
 	events chan any
 	regq   *jobQueue
 
-	paused    atomic.Bool
-	answering sync.Map   // alert ids whose answer is being sent
-	vimStuck  sync.Map   // pane id -> vimStuckMark: the vim label that showed no reaction to a key
-	newMu     sync.Mutex // held while /new finds or makes a session, see startTab
-	botUser   string     // set before the workers start
-	scanQueue atomic.Bool
-	ctl       controlStore // latest setting values per session, see controls.go
+	paused      atomic.Bool
+	answering   sync.Map   // alert ids whose answer is being sent
+	alertEdits  sync.Map   // alert id -> *sync.Mutex, see alertLock
+	renamedBack time.Time  // the last rename back of the session for /new (under tabMu)
+	vimStuck    sync.Map   // pane id -> vimStuckMark: the vim label that showed no reaction to a key
+	newMu       sync.Mutex // held while /new finds or makes a session, see startTab
+	botUser     string     // set before the workers start
+	scanQueue   atomic.Bool
+	ctl         controlStore // latest setting values per session, see controls.go
 
 	// core
 	ownerUser, ownerChat int64
@@ -180,9 +183,12 @@ type daemon struct {
 	macNotes             map[int64]*macNote      // the Mac hold's notice, by thread
 	drafts               map[int64]*draft        // the draft of a running turn, by thread
 	deadlines            map[int64]alertDeadline // the time limit of an open alert, by alert
+	follows              map[int64]alertFollow   // a look for the next question, by thread
+	alertWanted          map[int64]string        // an alert asked for while one was being made, by thread
 	liveText             map[int64]liveText      // what pi's extension last wrote, by thread
 	draftsOff            bool                    // Telegram refused drafts: none until the next start
 	draftRefused         int                     // drafts refused in a row
+	draftWorked          bool                    // a draft went through since the start (logged once)
 	self                 *selfWatch              // the daemon's own binary, for the restart after an update
 	board                *board                  // the live /agents message
 	boardLoaded          bool                    // board was read from the store
@@ -229,6 +235,8 @@ func newDaemon(cfg config.Config, home string, log *slog.Logger, now func() time
 		macNotes:    map[int64]*macNote{},
 		drafts:      map[int64]*draft{},
 		deadlines:   map[int64]alertDeadline{},
+		follows:     map[int64]alertFollow{},
+		alertWanted: map[int64]string{},
 		liveText:    map[int64]liveText{},
 		reminders:   map[int64]*reminder{},
 		ctlPending:  map[int64]ctlSet{},
@@ -353,6 +361,8 @@ func (d *daemon) handle(ev any) {
 		d.onDraftSent(e)
 	case evAlertDeadline:
 		d.deadlines[e.alert] = e.d
+	case evAlertFollow:
+		d.onAlertFollow(e)
 	case evLive:
 		d.onLive(e)
 	case evBoard:
@@ -442,6 +452,7 @@ func (d *daemon) tick() {
 		d.lastScan = now
 		d.requestScan()
 	}
+	d.tickFollows(now)
 	d.expireNewFlows(now)
 	d.maybeFlushUnknown(now)
 	if now.Sub(d.lastHouse) >= 24*time.Hour {
@@ -451,6 +462,7 @@ func (d *daemon) tick() {
 	if now.Sub(d.lastNames) >= nameSyncInterval {
 		d.lastNames = now
 		d.syncNames()
+		d.spawn(d.keepSessionName)
 	}
 	d.tickBoard(now)
 	d.tickReminders(now)
@@ -529,6 +541,8 @@ func (d *daemon) closeThread(threadID int64) {
 	delete(d.busy, threadID)
 	delete(d.nextPrep, threadID)
 	delete(d.alertBusy, threadID)
+	delete(d.alertWanted, threadID)
+	delete(d.follows, threadID)
 	delete(d.delivering, threadID)
 }
 

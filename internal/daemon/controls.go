@@ -246,15 +246,17 @@ type ctlSet struct {
 }
 
 // controlTyped keeps the value of a control command that was typed (core).
-func (d *daemon) controlTyped(row int64, typed bool) {
+// It reports whether the row was a control command.
+func (d *daemon) controlTyped(row int64, typed bool) bool {
 	p, ok := d.ctlPending[row]
 	if !ok {
-		return
+		return false
 	}
 	delete(d.ctlPending, row)
 	if typed {
 		d.ctlMerge(p.conv, map[string]string{p.name: p.value}, false)
 	}
+	return true
 }
 
 // maxControlButtons caps the buttons of a card.
