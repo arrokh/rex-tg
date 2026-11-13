@@ -114,6 +114,7 @@ type rexClient interface {
 	Events(ctx context.Context) (<-chan rex.Event, <-chan error)
 	Process(ctx context.Context, session, block string) (rex.Process, error)
 	Capture(ctx context.Context, session, block string) (string, error)
+	CaptureVT(ctx context.Context, session, block string) (string, error)
 	Paste(ctx context.Context, session, block, text string) error
 	SendKeys(ctx context.Context, session, block string, keys ...string) error
 	Sessions(ctx context.Context) ([]rex.Session, error)

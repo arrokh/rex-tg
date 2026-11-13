@@ -102,12 +102,110 @@ func (d *daemon) readScreen(thread int64) miniapp.Screen {
 	if err != nil || !f.PaneExists {
 		return miniapp.Screen{Error: "There is no pane for this topic now."}
 	}
-	screen, err := d.rx.Capture(ctx, pane.Session, pane.Block)
+	raw, err := d.rx.CaptureVT(ctx, pane.Session, pane.Block)
 	if err != nil {
 		return miniapp.Screen{Error: "Could not read the screen: Rex is not reachable."}
 	}
-	lines := lastLines(format.Redact(screen), maxLiveLines) // redacted whole, like /screen
-	return miniapp.Screen{Text: strings.Join(lines, "\n"), At: d.now().Format("15:04:05")}
+	text, vt := screenOf(raw, maxLiveLines)
+	return miniapp.Screen{Text: text, VT: vt, At: d.now().Format("15:04:05")}
+}
+
+// screenOf turns a capture with control sequences into the bottom n lines
+// of the screen: as plain text, and with its colors (only SGR sequences,
+// each line ending in a reset). Secrets are redacted on the whole plain
+// text first, like /screen. A line that lost a secret keeps no colors (its
+// redacted plain text stands in). When redaction joined lines, there are
+// no colors at all.
+func screenOf(raw string, n int) (text, vt string) {
+	rows := strings.Split(raw, "\n")
+	vts := make([]string, 0, len(rows))
+	plains := make([]string, 0, len(rows))
+	for _, r := range rows {
+		v, p := sgrOnly(r)
+		vts, plains = append(vts, v), append(plains, p)
+	}
+	for len(plains) > 0 && strings.TrimSpace(plains[len(plains)-1]) == "" {
+		vts, plains = vts[:len(vts)-1], plains[:len(plains)-1]
+	}
+	if len(plains) == 0 {
+		return "", ""
+	}
+	red := strings.Split(format.Redact(strings.Join(plains, "\n")), "\n")
+	if len(red) != len(plains) {
+		return strings.Join(lastLines(strings.Join(red, "\n"), n), "\n"), ""
+	}
+	for i := range plains {
+		if red[i] != plains[i] {
+			vts[i] = red[i]
+		}
+	}
+	start := max(0, len(red)-n)
+	for i := start; i < len(vts); i++ {
+		vts[i] += "\x1b[0m"
+	}
+	return strings.Join(red[start:], "\n"), strings.Join(vts[start:], "\n")
+}
+
+// sgrOnly reads one captured line: it keeps the text and the SGR sequences
+// (colors and styles, ESC [ … m) in vt, the text alone in plain, and drops
+// every other control sequence (links, titles, cursor moves) and control
+// character.
+func sgrOnly(line string) (vt, plain string) {
+	var v, p strings.Builder
+	for i := 0; i < len(line); {
+		c := line[i]
+		switch {
+		case c == 0x1b && i+1 < len(line) && line[i+1] == '[':
+			j := i + 2
+			for j < len(line) && line[j] >= 0x30 && line[j] <= 0x3f { // parameters
+				j++
+			}
+			params := line[i+2 : j]
+			for j < len(line) && line[j] >= 0x20 && line[j] <= 0x2f { // intermediates
+				j++
+			}
+			if j >= len(line) {
+				return v.String(), p.String() // cut short: drop it
+			}
+			if line[j] == 'm' && strings.Trim(params, "0123456789;:") == "" {
+				v.WriteString(line[i : j+1])
+			}
+			i = j + 1
+		case c == 0x1b && i+1 < len(line) && strings.IndexByte("]P_^X", line[i+1]) >= 0:
+			// A string: up to BEL or ESC \.
+			j := i + 2
+			for j < len(line) && line[j] != 0x07 && !(line[j] == 0x1b && j+1 < len(line) && line[j+1] == '\\') {
+				j++
+			}
+			switch {
+			case j >= len(line):
+				i = j
+			case line[j] == 0x07:
+				i = j + 1
+			default:
+				i = j + 2
+			}
+		case c == 0x1b:
+			// ESC, any intermediates (such as "(" of a charset switch), and
+			// a final character.
+			j := i + 1
+			for j < len(line) && line[j] >= 0x20 && line[j] <= 0x2f {
+				j++
+			}
+			i = j + 1
+		case c == '\t':
+			v.WriteByte(c)
+			p.WriteByte(c)
+			i++
+		case c < 0x20 || c == 0x7f:
+			i++
+		default:
+			v.WriteByte(c)
+			p.WriteByte(c)
+			i++
+		}
+	}
+	return v.String(), p.String()
 }
 
 // liveScreenButton is the button that opens a topic's live screen, or nil
