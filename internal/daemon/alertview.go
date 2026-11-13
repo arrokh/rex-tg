@@ -184,32 +184,55 @@ func parsePromptView(lines []string, shortcuts bool) promptView {
 		start = i
 	}
 	var block []string
+	var para []int // the paragraph of each block line: blank lines split them
+	n := 0
 	for _, l := range clean[start:first] {
 		t := strings.TrimSpace(l)
 		switch {
 		case t == "" || footerLine(t):
+			n++
 		case strings.Contains(t, "←") && strings.Contains(t, "→") && strings.ContainsAny(t, "☐☒✔"):
 			f := strings.Fields(strings.Trim(t, "←→ "))
 			v.tabs = strings.Join(f, " ")
+			n++
 		default:
 			block = append(block, l)
+			para = append(para, n)
 		}
 	}
+	plain := func(l string) string { return strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(l), "│")) }
 	question := -1
 	for i := len(block) - 1; i >= 0; i-- {
-		t := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(block[i]), "│"))
-		if strings.HasSuffix(t, "?") && !deadlineRe.MatchString(t) {
+		if t := plain(block[i]); strings.HasSuffix(t, "?") && !deadlineRe.MatchString(t) {
 			question = i
 			break
 		}
 	}
+	// A question of the agent's own (Claude Code's AskUserQuestion) may not
+	// end with "?", and a long one wraps over lines: take its last
+	// paragraph, all of it. A permission prompt keeps its one line.
+	qFrom := question
+	if v.isQuestion() && len(block) > 0 {
+		if question < 0 {
+			question = len(block) - 1
+			for question > 0 && deadlineRe.MatchString(plain(block[question])) {
+				question--
+			}
+		}
+		qFrom = question
+		for qFrom > 0 && para[qFrom-1] == para[question] && !deadlineRe.MatchString(plain(block[qFrom-1])) {
+			qFrom--
+		}
+	}
+	var qParts []string
 	for i, l := range block {
 		t := strings.TrimSpace(l)
 		bar := strings.HasPrefix(t, "│")
 		t = strings.TrimSpace(strings.TrimPrefix(t, "│"))
 		switch {
-		case i == question:
-			v.question = t
+		case i >= qFrom && i <= question && question >= 0:
+			qParts = append(qParts, t)
+			v.question = strings.Join(qParts, " ")
 		case deadlineRe.MatchString(t):
 			// The alert says it in its own words (deadlineLine).
 		case strings.HasPrefix(t, "⚠") || (bar && v.tabs == ""):

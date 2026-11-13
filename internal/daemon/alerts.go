@@ -248,6 +248,7 @@ func (d *daemon) createAlert(th store.Thread, kind, follow string) {
 		_ = d.st.Delete(ctx, alertHeadKey(id))
 		return
 	}
+	d.markBelow(th.ID)
 	d.log.Info("alert sent", "thread", th.ID, "alert", id,
 		"latency_ms", d.now().Sub(pane.StateAt).Milliseconds()) // blocked signal to Telegram's reply
 	if err := d.st.SetAlertMessage(ctx, id, msg.MessageID); err != nil {

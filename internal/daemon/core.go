@@ -155,14 +155,19 @@ type daemon struct {
 	events chan any
 	regq   *jobQueue
 
-	paused      atomic.Bool
-	answering   sync.Map      // alert ids whose answer is being sent
-	alertEdits  sync.Map      // alert id -> *sync.Mutex, see alertLock
-	polled      *atomic.Int64 // when a getUpdates call last finished, unix ns
-	renamedBack time.Time     // the last rename back of the session for /new (under tabMu)
-	vimStuck    sync.Map      // pane id -> vimStuckMark: the vim label that showed no reaction to a key
-	newMu       sync.Mutex    // held while /new finds or makes a session, see startTab
-	botUser     string        // set before the workers start
+	paused     atomic.Bool
+	answering  sync.Map      // alert ids whose answer is being sent
+	alertEdits sync.Map      // alert id -> *sync.Mutex, see alertLock
+	polled     *atomic.Int64 // when a getUpdates call last finished, unix ns
+	// below holds the topics where a message came below the progress
+	// message from outside the turn (any goroutine); tick hands them to
+	// the trackers (core).
+	belowMu     sync.Mutex
+	below       map[int64]bool
+	renamedBack time.Time  // the last rename back of the session for /new (under tabMu)
+	vimStuck    sync.Map   // pane id -> vimStuckMark: the vim label that showed no reaction to a key
+	newMu       sync.Mutex // held while /new finds or makes a session, see startTab
+	botUser     string     // set before the workers start
 	scanQueue   atomic.Bool
 	ctl         controlStore // latest setting values per session, see controls.go
 
@@ -220,6 +225,7 @@ func newDaemon(cfg config.Config, home string, log *slog.Logger, now func() time
 	d := &daemon{
 		cfg: cfg, timing: timing, home: home, log: log, now: now, st: st, tg: tg, rx: rx, snd: snd, adapters: adapters,
 		polled:      &atomic.Int64{}, // Run shares its own with the sender
+		below:       map[int64]bool{},
 		events:      make(chan any, 256),
 		regq:        newJobQueue(),
 		tailers:     map[int64]*tailer{},
@@ -434,6 +440,14 @@ func (d *daemon) handle(ev any) {
 // messages, the scan, tailers waiting to stop, and housekeeping.
 func (d *daemon) tick() {
 	now := d.now()
+	d.belowMu.Lock()
+	for tid := range d.below {
+		if tr := d.trackers[tid]; tr != nil {
+			tr.MessageBelow()
+		}
+		delete(d.below, tid)
+	}
+	d.belowMu.Unlock()
 	for tid, tr := range d.trackers {
 		th, err := d.st.Thread(d.ctx, tid)
 		if err != nil || th.Status == store.ThreadClosed {
@@ -578,9 +592,23 @@ func (d *daemon) nextN(key string) int64 {
 }
 
 // enqueue puts an item in the outbox and wakes the sender.
+// markBelow notes that a message goes into a topic below its progress
+// message, so the progress message moves down (any goroutine).
+func (d *daemon) markBelow(threadID int64) {
+	if threadID == 0 {
+		return
+	}
+	d.belowMu.Lock()
+	d.below[threadID] = true
+	d.belowMu.Unlock()
+}
+
 func (d *daemon) enqueue(it store.OutboxItem) {
 	if len(it.Parts) == 0 && !it.Skip {
 		return
+	}
+	if !it.Skip {
+		d.markBelow(it.ThreadID)
 	}
 	if _, _, err := d.st.Enqueue(d.ctx, it); err != nil {
 		d.log.Warn("enqueue", "thread", it.ThreadID, "kind", it.Kind, "err", err)

@@ -83,6 +83,9 @@ func (d *daemon) recorded(u telegram.Update, m *telegram.Message, kind, body str
 		d.storeErr = err
 		return false
 	}
+	if ok {
+		d.markBelow(threadID) // the user's own message is below the progress message now
+	}
 	return ok
 }
 

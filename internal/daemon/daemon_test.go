@@ -899,6 +899,47 @@ func TestMessageSteersAWorkingAgent(t *testing.T) {
 	e.never("an agent command typed into the run", 500*time.Millisecond, func() bool { return len(e.pastes()) > 3 })
 }
 
+// The progress message stays the last message of a running turn: an alert
+// keeps the bottom while it waits, and once it is answered the progress
+// message moves below it. The user's own message moves it down too.
+func TestProgressMovesBelowAlertsAndMessages(t *testing.T) {
+	e, p, thread := piTopicCfg(t, "pi-below", func(e *env) { e.cfg.InputSettings.WhileBusy = "steer" })
+	p.User("busy work")
+	p.ToolCall("c1", "sleep 5")
+	first := e.waitText(thread, "⏱")
+	lastProgress := func() (tgtest.Message, bool) {
+		var out tgtest.Message
+		found := false
+		for _, m := range e.botMessages(thread) {
+			if !m.Deleted && strings.Contains(m.Text, "⏱") {
+				out, found = m, true
+			}
+		}
+		return out, found
+	}
+
+	e.setScreen(permScreen)
+	e.setStatus("blocked", "permission")
+	alert := e.waitText(thread, "Permission needed")
+	e.never("the progress moved while the alert waits", 400*time.Millisecond, func() bool {
+		m, _ := e.message(first.ID)
+		return m.Deleted
+	})
+	e.setScreen("")
+	e.setStatus("working", "")
+	e.waitFor("the progress below the answered alert", func() bool {
+		m, ok := lastProgress()
+		return ok && m.ID > alert.ID
+	})
+	e.waitFor("the old progress message deleted", func() bool { m, _ := e.message(first.ID); return m.Deleted })
+
+	id := e.say(thread, "one more thing")
+	e.waitFor("the progress below the user's message", func() bool {
+		m, ok := lastProgress()
+		return ok && m.ID > id
+	})
+}
+
 func TestSendNowAndCancelButtons(t *testing.T) {
 	e, _, thread := piTopic(t, "pi-buttons")
 	working(e, e.pi, thread)

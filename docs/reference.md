@@ -140,6 +140,7 @@ Doctor checks:
 
 - `typing…` shows while the agent works, in the topic you used last.
 - The progress message appears after 2 seconds without an answer. It shows the latest commentary and the recent tool calls. It never shows tool output, unless `/verbose full` is on.
+- The progress message stays the last message of a running turn. When an alert, a notice, or your own message comes below it, it moves down. While a prompt waits for your answer, the alert stays last.
 - Its timer moves on while the agent thinks or a long tool runs: every 10 seconds at first, then less often, at most once a minute later in a long turn. It stops while rex-tg waits for your answer.
 - At the end of the turn, the tool rows stay in a collapsed quote under the summary line.
 - A long answer comes as several messages of about 1500 characters, split at paragraphs and headings like a chat, never inside a code block, and without `(1/2)` numbers. Only the first one makes a sound. `message_length` sets the size (300 to 4000; 4000 splits only when Telegram's limit needs it). An answer that would take more than 6 messages comes in fuller ones, up to 4000 characters each. An answer longer than 16000 characters comes as a `.md` file.
