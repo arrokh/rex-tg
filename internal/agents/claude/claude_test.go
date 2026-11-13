@@ -457,7 +457,7 @@ func TestRemindersAreNotPartOfThePrompt(t *testing.T) {
 // Lines that hold no conversation are skipped, not counted as unknown:
 // Claude Code 2.1.323 writes file-history-delta lines for its file backups.
 func TestBookkeepingLinesAreSkipped(t *testing.T) {
-	for _, typ := range []string{"file-history-snapshot", "file-history-delta"} {
+	for _, typ := range []string{"file-history-snapshot", "file-history-delta", "pr-link"} {
 		evs, err := claude.New().ParseLine([]byte(`{"type":"`+typ+`","messageId":"m1"}`), agents.LineContext{SessionID: "s", Offset: 1})
 		if err != nil || len(evs) != 0 {
 			t.Errorf("%s: events %+v, err %v; want none", typ, evs, err)
