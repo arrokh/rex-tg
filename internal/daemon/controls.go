@@ -487,8 +487,8 @@ func (d *daemon) pruneControlRecords(now time.Time) {
 			}
 		}
 	}
-	// The tab names of topics that are closed or gone.
-	for _, prefix := range []string{"tab_set:", "tab_user:"} {
+	// The tab names and last turns of topics that are closed or gone.
+	for _, prefix := range []string{"tab_set:", "tab_user:", "last_turn:"} {
 		keys, err := d.st.KeysWithPrefix(d.ctx, prefix)
 		if err != nil {
 			continue

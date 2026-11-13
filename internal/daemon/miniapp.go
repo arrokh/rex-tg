@@ -384,6 +384,9 @@ func lastTurnKey(thread int64) string { return fmt.Sprintf("last_turn:%d", threa
 // onTurnRange keeps what the topic's newest turn changed (core). A turn that
 // ended before the kept one does not replace it.
 func (d *daemon) onTurnRange(e evTurnRange) {
+	if th, err := d.st.Thread(d.ctx, e.thread); err != nil || th.Status == store.ThreadClosed {
+		return // closed while the snapshot ran: closeThread already dropped its key
+	}
 	if old, ok := readLastTurn(d.st, e.thread); ok && old.At.After(e.r.At) {
 		return
 	}

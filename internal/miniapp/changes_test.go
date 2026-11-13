@@ -158,6 +158,25 @@ func TestListChangesOfATurn(t *testing.T) {
 	if l, _ := ListChanges(context.Background(), root, BaseHead, other); l.TurnAt != "" {
 		t.Error("a turn of another repository is offered")
 	}
+
+	// git pruned a snapshot's tree: the turn is gone, the rest still shows.
+	pruned := turn
+	pruned.To = strings.Repeat("0", len(to)-1) + "1"
+	if _, err := ListChanges(context.Background(), root, BaseTurn, pruned); !errors.Is(err, ErrNoBase) {
+		t.Errorf("a pruned turn: %v", err)
+	}
+	if _, err := ChangeOf(context.Background(), root, "turn.txt", BaseTurn, false, pruned, nil); !errors.Is(err, ErrNoBase) {
+		t.Errorf("a file of a pruned turn: %v", err)
+	}
+	all, err := AllChanges(context.Background(), root, pruned)
+	if err != nil || len(all) == 0 || all[0].Base != BaseHead {
+		t.Fatalf("all with a pruned turn: %+v %v", all, err)
+	}
+	for _, l := range all {
+		if l.Base == BaseTurn || l.TurnAt != "" {
+			t.Errorf("a pruned turn is offered: %+v", l)
+		}
+	}
 }
 
 func TestChangeOfAFile(t *testing.T) {
