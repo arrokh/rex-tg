@@ -635,6 +635,7 @@ These features are built. Some are off until you set them up.
 | Rich messages | Final answers of up to 32768 characters go out with `sendRichMessage` (Bot API 10.1) as Markdown, so Telegram renders tables, code, and headings itself. On a 400 error, rex-tg sends the same answer in its own format (Telegram HTML, which falls back to plain text when Telegram cannot parse it), or as a `.md` file when it does not fit one message. This is safe for "at most once", because Telegram posted nothing. | On (`[display] rich_messages`) |
 | `/pause`, `/unpause` | In the main chat. `/pause` stops all typing into panes, for every topic, until `/unpause`. Outgoing messages continue. The flag survives a restart. | Not paused |
 | `/mute`, `/unmute` | In a topic. Muted topics send every message without sound. | Not muted |
+| `/at <time or delay> <text>`, `/at`, `/at cancel <n>` | In a topic. Sends the text to the agent later, at an `HH:MM` time on this Mac or after a delay (`30m`, `2h`). `/at` lists the topic's schedules, `/at cancel <n>` removes one. A due text is queued like a typed message, so every normal check applies (flow 4). Kept in kv `sched:<id>`; at most 20 per topic. | None |
 | `/rename <name>` | In a topic. Names the topic, and its Rex tab in the session for `/new`, until `/rename auto`. | The session's name |
 
 ### 8.10 Agent controls
