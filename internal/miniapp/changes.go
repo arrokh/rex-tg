@@ -162,6 +162,20 @@ func (r repo) turnOf(t TurnRange) (TurnRange, bool) {
 	return t, t.From != "" && t.To != "" && t.Top == r.top
 }
 
+// liveTurn is t when it is of this repository and git still has both of
+// its trees, else the zero range. No ref points to a snapshot's tree, so
+// git may prune it (gc, after two weeks by default).
+func (r repo) liveTurn(ctx context.Context, t TurnRange) TurnRange {
+	if _, ok := r.turnOf(t); !ok {
+		return TurnRange{}
+	}
+	out, err := gitLit(ctx, r.top, changesTimeout, t.From+"\n"+t.To+"\n", "cat-file", "--batch-check=%(objecttype)")
+	if err != nil || string(out) != "tree\ntree\n" {
+		return TurnRange{}
+	}
+	return t
+}
+
 // spec is what a base compares: from, and to, which is "" for the working
 // files (with the new files that git does not track).
 func (r repo) spec(ctx context.Context, base string, turn TurnRange) (from, to string, err error) {
@@ -206,16 +220,16 @@ func AllChanges(ctx context.Context, root string, turn TurnRange) ([]ChangeList,
 	if err != nil {
 		return nil, err
 	}
+	turn = r.liveTurn(ctx, turn)
 	head, err := r.list(ctx, BaseHead, turn)
 	if err != nil {
 		return nil, err
 	}
 	out := []ChangeList{head}
 	for _, b := range []string{BaseBranch, BaseTurn} {
+		// A base that fails is left out, so the others still show.
 		if l, err := r.list(ctx, b, turn); err == nil {
 			out = append(out, l)
-		} else if !errors.Is(err, ErrNoBase) {
-			return nil, err
 		}
 	}
 	return out, nil
@@ -230,6 +244,7 @@ func ListChanges(ctx context.Context, root, base string, turn TurnRange) (Change
 	if err != nil {
 		return ChangeList{}, err
 	}
+	turn = r.liveTurn(ctx, turn)
 	if base != "" {
 		return r.list(ctx, base, turn)
 	}
@@ -447,6 +462,9 @@ func ChangeOf(ctx context.Context, root, rel, base string, untracked bool, turn 
 	}
 	if redact == nil {
 		redact = func(s string) string { return s }
+	}
+	if base == BaseTurn {
+		turn = r.liveTurn(ctx, turn)
 	}
 	from, to, err := r.spec(ctx, base, turn)
 	if err != nil {

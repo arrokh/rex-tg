@@ -76,9 +76,9 @@
 
   function api(path) {
     return fetch(path, { headers: { "X-Telegram-Init-Data": initData } }).then(function (r) {
-      return r.json().then(function (body) {
-        if (!r.ok) {
-          var err = new Error(body.error || ("HTTP " + r.status));
+      return r.json().catch(function () { return null; }).then(function (body) {
+        if (!r.ok || !body) {
+          var err = new Error((body && body.error) || ("HTTP " + r.status));
           err.status = r.status;
           throw err;
         }
@@ -308,6 +308,7 @@
     var row = el("div", "trow" + (dir ? " dir" : ""));
     row.style.setProperty("--d", String(depth));
     row.setAttribute("role", "treeitem");
+    row.setAttribute("aria-level", String(depth + 1));
     row.tabIndex = 0;
     row.appendChild(el("span", "chev", dir ? "›" : ""));
     if (lead) { row.appendChild(lead); }
@@ -511,7 +512,7 @@
       { key: "turn", label: "Last turn" }
     ];
     // base "" lets rex-tg choose: the first of the three that shows changes.
-    var base = "", last = null, order = [], shut = {}, asked = 0;
+    var base = "", order = [], shut = {}, asked = 0, shown = 0;
     var wrapOn = load("rex-tg.wrap") === "1";
 
     var tabs = el("div", "tabs");
@@ -525,7 +526,9 @@
       t.appendChild(el("small", "", ""));
       t.addEventListener("click", function () {
         if (t.getAttribute("aria-disabled") === "true") {
+          var keep = sum.textContent;
           sum.textContent = t.title;
+          setTimeout(function () { if (sum.textContent === t.title) { sum.textContent = keep; } }, 4000);
           return;
         }
         base = b.key;
@@ -566,7 +569,6 @@
     }
 
     function render(l) {
-      last = l;
       setTabs(l);
       var text = (l.branch ? "🌿 " + l.branch + " · " : "");
       if (!l.total) {
@@ -577,6 +579,7 @@
       sum.textContent = text + (l.at ? " · " + l.at : "");
       tree.textContent = "";
       order = [];
+      order.base = l.base;
       if (l.note) { tree.appendChild(el("div", "tnote", l.note)); }
       if (!l.files || !l.files.length) {
         var none = { head: "Nothing is changed since the last commit.", branch: "This branch has no changes of its own.", turn: "The last turn changed no files." };
@@ -596,7 +599,7 @@
             kids.hidden = !on;
             if (on) { delete shut[d.path]; } else { shut[d.path] = true; }
           }
-          row.addEventListener("click", function () { set(!row.classList.contains("open")); });
+          row.addEventListener("click", function () { set(!row.classList.contains("open")); syncFold(); });
           box.appendChild(row);
           box.appendChild(kids);
           walk(d, kids, depth + 1);
@@ -612,6 +615,11 @@
           box.appendChild(row);
         });
       })(buildTree(l.files), tree, 0);
+      syncFold();
+    }
+
+    function syncFold() {
+      fold.textContent = tree.querySelector(".trow.dir.open") ? "Collapse all" : "Expand all";
     }
 
     function refresh() {
@@ -634,8 +642,11 @@
         });
     }
 
-    function showChange(at) {
-      var f = order[at];
+    // showChange opens file at of list (the list shown when the first file
+    // was opened: a refresh meanwhile does not move Previous and Next).
+    function showChange(at, list) {
+      list = list || order;
+      var f = list[at], mine = ++shown;
       if (!f) { return; }
       v.showItem(v.showList);
       v.item.textContent = "";
@@ -646,13 +657,14 @@
       var prev = chip("‹", "Previous file"), next = chip("›", "Next file");
       var wrap = chip("Wrap", "Wrap long lines");
       wrap.classList.toggle("on", wrapOn);
+      wrap.setAttribute("aria-pressed", wrapOn ? "true" : "false");
       prev.disabled = at === 0;
-      next.disabled = at === order.length - 1;
-      prev.addEventListener("click", function () { showChange(at - 1); });
-      next.addEventListener("click", function () { showChange(at + 1); });
+      next.disabled = at === list.length - 1;
+      prev.addEventListener("click", function () { showChange(at - 1, list); });
+      next.addEventListener("click", function () { showChange(at + 1, list); });
       nav.appendChild(wrap);
       nav.appendChild(prev);
-      nav.appendChild(el("span", "count", (at + 1) + "/" + order.length));
+      nav.appendChild(el("span", "count", (at + 1) + "/" + list.length));
       nav.appendChild(next);
       head.appendChild(back);
       head.appendChild(nav);
@@ -669,14 +681,15 @@
         wrapOn = !wrapOn;
         save("rex-tg.wrap", wrapOn ? "1" : null);
         wrap.classList.toggle("on", wrapOn);
+        wrap.setAttribute("aria-pressed", wrapOn ? "true" : "false");
         var d = body.querySelector(".fdiff");
         if (d) { d.classList.toggle("wrap", wrapOn); }
       });
-      var url = "api/changes?id=" + encodeURIComponent(id) + "&base=" + encodeURIComponent(last.base) +
+      var url = "api/changes?id=" + encodeURIComponent(id) + "&base=" + encodeURIComponent(list.base) +
         "&path=" + encodeURIComponent(f.path) + (f.status === "untracked" ? "&new=1" : "");
       api(url)
         .then(function (d) {
-          if (order[at] !== f || v.item.hidden) { return; } // another file was opened meanwhile
+          if (mine !== shown || v.item.hidden) { return; } // another file was opened meanwhile
           body.textContent = "";
           if (d.note) { body.appendChild(el("p", "note", d.note)); }
           if (d.html) {
@@ -688,6 +701,7 @@
           }
         })
         .catch(function (e) {
+          if (mine !== shown) { return; }
           body.textContent = "";
           body.appendChild(el("p", "note", e.message || "This change could not be loaded."));
         });
@@ -698,7 +712,7 @@
       tree.querySelectorAll(".trow.dir").forEach(function (r) {
         if (r.classList.contains("open") === anyOpen) { r.click(); }
       });
-      fold.textContent = anyOpen ? "Expand all" : "Collapse all";
+      syncFold();
     });
     reload.addEventListener("click", refresh);
     document.addEventListener("visibilitychange", function () {
