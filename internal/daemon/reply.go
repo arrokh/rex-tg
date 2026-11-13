@@ -63,7 +63,9 @@ func (d *daemon) replyQuote(m *telegram.Message, th store.Thread) string {
 }
 
 // sentText is the text of a message that rex-tg sent, from its stored part:
-// Markdown (a rich message) as plain text, HTML without its tags.
+// Markdown (a rich message, or an answer that went as a .md file) as plain
+// text, HTML without its tags, a code file as it is. An image has none.
+// inbound.WithReply cuts the quote to its start.
 func (d *daemon) sentText(threadID, msg int64) string {
 	content, f, ok, err := d.st.SentContent(d.ctx, threadID, msg)
 	if err != nil || !ok {
@@ -76,8 +78,13 @@ func (d *daemon) sentText(threadID, msg int64) string {
 		return sender.PlainFromHTML(content)
 	case store.FormatPlain:
 		return content
+	case store.FormatDocument:
+		if name, _, _ := d.st.SentFile(d.ctx, threadID, msg); strings.HasSuffix(strings.ToLower(name), ".md") {
+			return format.Plain(content)
+		}
+		return content
 	}
-	return "" // a document or an image: no text to quote
+	return "" // an image: its content is a file path
 }
 
 // agentQuote returns the quote to type with a message whose text is lead:

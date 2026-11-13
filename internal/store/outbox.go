@@ -436,6 +436,21 @@ func (s *Store) SentContent(ctx context.Context, threadID, msg int64) (content, 
 	return content, format, true, nil
 }
 
+// SentFile returns the file name of a document part that rex-tg sent as a
+// topic's Telegram message msg.
+func (s *Store) SentFile(ctx context.Context, threadID, msg int64) (name string, ok bool, err error) {
+	var n sql.NullString
+	err = s.db.QueryRowContext(ctx, `SELECT p.filename FROM outbox_part p JOIN outbox o ON o.id = p.outbox_id
+		WHERE o.thread_id=? AND p.tg_message_id=? LIMIT 1`, threadID, msg).Scan(&n)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, fmt.Errorf("store: sent file: %w", err)
+	}
+	return n.String, true, nil
+}
+
 // ResendPart moves one unknown part back to pending. It reports false when
 // the part is not unknown any more (for example, /resend came first).
 func (s *Store) ResendPart(ctx context.Context, outboxID int64, part int) (bool, error) {
