@@ -84,6 +84,22 @@ func TestTabFollowsTheTopicName(t *testing.T) {
 	if got := e.tabRenames(); len(got) != 1 {
 		t.Errorf("tab renames = %q: the tab's new name was undone", got)
 	}
+
+	// A " #2" that was typed is part of the name.
+	e.setTab("Sprint #2")
+	skew.Add(int64(31 * time.Second))
+	e.waitFor("the topic takes the typed name", func() bool { return topic() == "Sprint #2" })
+
+	// Named back to its "<folder> · <agent>" form, the tab and the topic
+	// follow the pane and the session again.
+	e.setTab("proj · pi") // the folder of paneCWD and the agent
+	skew.Add(int64(31 * time.Second))
+	e.waitFor("the topic named after the pane again", func() bool { return topic() == "pane one" })
+	skew.Add(int64(31 * time.Second))
+	e.waitFor("the tab named after the topic again", func() bool {
+		r := e.tabRenames()
+		return len(r) == 2 && r[1] == "pane one"
+	})
 }
 
 // The tab of a stopped agent shows a 🔴, as the topic does. It goes away when

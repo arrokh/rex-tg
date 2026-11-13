@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -332,5 +333,21 @@ func TestQuestionWithPreviews(t *testing.T) {
 		if strings.Contains(o.label, "contents") {
 			t.Errorf("a preview line became an answer: %+v", o)
 		}
+	}
+}
+
+// The preview box is cut by screen column: a wide answer label (an emoji)
+// before it does not shift the cut.
+func TestCutPreviewByScreenColumn(t *testing.T) {
+	lines := []string{
+		"❯ 1. Ship ✅ now        ┌────────┐",
+		"  2. Later              │ │ │ 1. x │",
+		"                        └────────┘",
+		"after",
+	}
+	got := cutPreview(lines)
+	want := []string{"❯ 1. Ship ✅ now", "  2. Later", "", "after"}
+	if !slices.Equal(got, want) {
+		t.Errorf("cutPreview = %q, want %q", got, want)
 	}
 }

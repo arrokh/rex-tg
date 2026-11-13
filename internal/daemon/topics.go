@@ -332,10 +332,24 @@ func (d *daemon) syncTab(th store.Thread, conv store.Conversation) {
 	set, hasSet, _ := d.st.Get(d.ctx, tabSetKey(th.ID))
 	if hasSet && current != set && strings.TrimSpace(current) != "" && th.Status != store.ThreadOffline {
 		// Someone else named the tab (you, or an agent with rex window
-		// rename): the name stays, and the topic takes it.
-		name := cleanLabel(strings.TrimPrefix(tabSuffix.ReplaceAllString(current, ""), offlineMark))
+		// rename): the name stays, and the topic takes it. A " #2" goes only
+		// when rex-tg had added it; one that was typed stays.
+		name := strings.TrimPrefix(current, offlineMark)
+		if sfx := tabSuffix.FindString(set); sfx != "" && strings.HasSuffix(name, sfx) {
+			name = strings.TrimSuffix(name, sfx)
+		}
+		name = cleanLabel(name)
 		if paneName(name) == "" { // "shell", "zsh": no name that anyone chose
 			_ = d.st.Set(d.ctx, tabSetKey(th.ID), current)
+			return
+		}
+		if name == tabLabel(conv.CWD, string(conv.Runtime)) {
+			// Back to the "<folder> · <agent>" form: rex-tg names the tab
+			// and the topic again.
+			_ = d.st.Delete(d.ctx, tabUserKey(th.ID))
+			_ = d.st.Set(d.ctx, tabSetKey(th.ID), current)
+			d.log.Info("tab named back to its agent form; rex-tg names it again", "thread", th.ID)
+			d.emit(evRename{thread: th.ID})
 			return
 		}
 		if err := d.st.Set(d.ctx, tabUserKey(th.ID), name); err != nil {
@@ -442,6 +456,14 @@ func (d *daemon) onState(c registry.Change) {
 	d.dirty[th.ID] = true
 	delete(d.nextPrep, th.ID)
 
+	if c.State == "blocked" {
+		if _, ok := d.blockedSince[c.ConversationID]; !ok {
+			d.blockedSince[c.ConversationID] = now
+		}
+	} else {
+		delete(d.blockedSince, c.ConversationID)
+		delete(d.recheckAt, c.ConversationID)
+	}
 	if c.State == "blocked" && (c.StateKind == store.AlertPermission || c.StateKind == store.AlertQuestion) {
 		d.openAlert(th, c.StateKind)
 		return

@@ -464,8 +464,9 @@ const promptGoneDelay = 300 * time.Millisecond
 
 // evPromptGone reports a blocked pane whose screen shows no prompt.
 type evPromptGone struct {
-	conv int64
-	at   time.Time
+	conv    int64
+	at      time.Time
+	stateAt time.Time // the blocked state that the screen was read for
 }
 
 // checkPromptGone asks for a look at the screen of a session whose
@@ -476,9 +477,40 @@ func (d *daemon) checkPromptGone(conv int64, now time.Time) {
 	}
 }
 
+// promptRecheckSlow is the pace of the screen checks of a pane that has
+// been blocked for a minute: an answer then often comes from the Mac, later.
+const promptRecheckSlow = 15 * time.Second
+
 // tickPromptChecks reads the screens that are due, of the panes that are
-// still blocked (core).
+// still blocked (core). A blocked pane is also checked on a clock, not only
+// when its transcript goes on: after an approved command starts, the agent
+// writes nothing until it ends. The clock is Timing.PromptRecheck for the
+// first minute, then promptRecheckSlow.
 func (d *daemon) tickPromptChecks(now time.Time) {
+	if now.Sub(d.blockedScanAt) >= nameSyncInterval {
+		// Panes blocked before a restart have no state change to note them.
+		d.blockedScanAt = now
+		if panes, err := d.st.Panes(d.ctx); err == nil {
+			for _, p := range panes {
+				if _, ok := d.blockedSince[p.ConversationID]; ok || p.State != "blocked" || p.ConversationID == 0 || !p.GoneAt.IsZero() {
+					continue
+				}
+				if _, linked := d.threadOf(p.ConversationID); linked { // only the panes that have a topic
+					d.blockedSince[p.ConversationID] = now
+				}
+			}
+		}
+	}
+	for conv, since := range d.blockedSince {
+		step := d.timing.PromptRecheck
+		if now.Sub(since) >= time.Minute {
+			step = max(step, promptRecheckSlow)
+		}
+		if now.Sub(d.recheckAt[conv]) >= step {
+			d.recheckAt[conv] = now
+			d.checkPromptGone(conv, now)
+		}
+	}
 	for conv, due := range d.promptChecks {
 		if now.Before(due) {
 			continue
@@ -486,6 +518,8 @@ func (d *daemon) tickPromptChecks(now time.Time) {
 		delete(d.promptChecks, conv)
 		p, ok, err := d.st.PaneByConversation(d.ctx, conv)
 		if err != nil || !ok || p.State != "blocked" || !p.GoneAt.IsZero() {
+			delete(d.blockedSince, conv)
+			delete(d.recheckAt, conv)
 			continue
 		}
 		var hashes []string // the open alerts' screens
@@ -504,7 +538,7 @@ func (d *daemon) tickPromptChecks(now time.Time) {
 			if screenHasPrompt(lastLines(screen, alertLines), hashes) {
 				return
 			}
-			d.emit(evPromptGone{conv: conv, at: d.now()})
+			d.emit(evPromptGone{conv: conv, at: d.now(), stateAt: p.StateAt})
 		})
 	}
 }
@@ -518,9 +552,16 @@ func screenHasPrompt(lines []string, alertHashes []string) bool {
 	if parsePromptView(lines, true).ok {
 		return true
 	}
-	for _, l := range lines {
-		t := strings.ToLower(l)
-		for _, w := range []string{"esc to cancel", "enter to select", "enter to confirm", "do you want to proceed", "would you like to run"} {
+	// Key hints sit at the bottom, under a prompt; the agent's own text
+	// higher up may quote them.
+	tail := 0
+	for i := len(lines) - 1; i >= 0 && tail < 4; i-- {
+		t := strings.ToLower(strings.TrimSpace(lines[i]))
+		if t == "" {
+			continue
+		}
+		tail++
+		for _, w := range []string{"esc to cancel", "enter to select", "enter to confirm", "press enter to"} {
 			if strings.Contains(t, w) {
 				return true
 			}
@@ -534,8 +575,8 @@ func screenHasPrompt(lines []string, alertHashes []string) bool {
 // registry's change closes the topic's alerts and lets waiting messages go.
 func (d *daemon) onPromptGone(e evPromptGone) {
 	p, ok, err := d.st.PaneByConversation(d.ctx, e.conv)
-	if err != nil || !ok || p.State != "blocked" {
-		return
+	if err != nil || !ok || p.State != "blocked" || !p.StateAt.Equal(e.stateAt) {
+		return // another prompt came while the screen was read: it decides
 	}
 	d.signal(e.conv, registry.Signal{State: "working", At: e.at})
 }
