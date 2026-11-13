@@ -422,6 +422,20 @@ func (s *Store) SentKind(ctx context.Context, threadID, msg int64) (kind string,
 	return kind, true, nil
 }
 
+// SentContent returns what rex-tg sent as a topic's Telegram message msg: the
+// part's content and format. ok is false when rex-tg sent no such part.
+func (s *Store) SentContent(ctx context.Context, threadID, msg int64) (content, format string, ok bool, err error) {
+	err = s.db.QueryRowContext(ctx, `SELECT p.content, p.format FROM outbox_part p JOIN outbox o ON o.id = p.outbox_id
+		WHERE o.thread_id=? AND p.tg_message_id=? LIMIT 1`, threadID, msg).Scan(&content, &format)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", "", false, nil
+	}
+	if err != nil {
+		return "", "", false, fmt.Errorf("store: sent content: %w", err)
+	}
+	return content, format, true, nil
+}
+
 // ResendPart moves one unknown part back to pending. It reports false when
 // the part is not unknown any more (for example, /resend came first).
 func (s *Store) ResendPart(ctx context.Context, outboxID int64, part int) (bool, error) {

@@ -3,7 +3,9 @@ package daemon
 import (
 	"strings"
 
+	"rex-tg/internal/format"
 	"rex-tg/internal/inbound"
+	"rex-tg/internal/sender"
 	"rex-tg/internal/store"
 	"rex-tg/internal/telegram"
 )
@@ -30,19 +32,20 @@ func (d *daemon) replyQuote(m *telegram.Message, th store.Thread) string {
 	if rm == nil || rm.ForumTopicCreated != nil || (m.MessageThreadID != 0 && rm.MessageID == m.MessageThreadID) {
 		return ""
 	}
-	if rm.From == nil {
-		return ""
+	// One of rex-tg's own messages: the store knows its kind and its text.
+	// A rich message (an answer, by default) reaches the bot without text
+	// in a reply, and maybe without a sender (seen live), so the store's
+	// copy is the quote then.
+	kind, sent, err := d.st.SentKind(d.ctx, th.ID, rm.MessageID)
+	if err != nil {
+		d.log.Warn("reply: sent kind", "thread", th.ID, "err", err)
 	}
-	if rm.From.IsBot {
-		kind, ok, err := d.st.SentKind(d.ctx, th.ID, rm.MessageID)
-		if err != nil {
-			d.log.Warn("reply: sent kind", "thread", th.ID, "err", err)
-		}
-		if !ok || !quotedKinds[kind] {
-			return ""
-		}
-	} else if !d.fromOwner(rm.From, m.Chat.ID) {
+	switch {
+	case sent && !quotedKinds[kind]:
 		return ""
+	case sent:
+	case rm.From == nil || rm.From.IsBot || !d.fromOwner(rm.From, m.Chat.ID):
+		return "" // not rex-tg's, and not the owner's own message
 	}
 	if m.Quote != nil && strings.TrimSpace(m.Quote.Text) != "" {
 		return m.Quote.Text
@@ -50,7 +53,31 @@ func (d *daemon) replyQuote(m *telegram.Message, th store.Thread) string {
 	if rm.Text != "" {
 		return rm.Text
 	}
-	return rm.Caption
+	if rm.Caption != "" {
+		return rm.Caption
+	}
+	if sent {
+		return d.sentText(th.ID, rm.MessageID)
+	}
+	return ""
+}
+
+// sentText is the text of a message that rex-tg sent, from its stored part:
+// Markdown (a rich message) as plain text, HTML without its tags.
+func (d *daemon) sentText(threadID, msg int64) string {
+	content, f, ok, err := d.st.SentContent(d.ctx, threadID, msg)
+	if err != nil || !ok {
+		return ""
+	}
+	switch f {
+	case store.FormatRich:
+		return format.Plain(content)
+	case store.FormatHTML:
+		return sender.PlainFromHTML(content)
+	case store.FormatPlain:
+		return content
+	}
+	return "" // a document or an image: no text to quote
 }
 
 // agentQuote returns the quote to type with a message whose text is lead:
