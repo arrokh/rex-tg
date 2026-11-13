@@ -174,7 +174,7 @@ Text that starts with `/` goes to the agent, except the commands below and the m
 ### Progress and answers
 
 - Only two kinds of message make a sound: the agent's answer (its first message) and a prompt that waits for you (an alert or its reminder). Progress, notices, the waiting notice, and replies to commands come silently. `/mute` makes a topic's answers and reminders silent too. An alert still makes a sound.
-- Under each answer, quick replies send their text to the agent with one tap, as if you typed it. They sit two to a row, so a phone shows their labels whole. The defaults are `Continue`, `Yes`, `Run tests`, and `Commit`. Set your own with `[display] quick_replies`: at most 8, each 1 to 64 characters, or `[]` for none. A quick reply waits like any typed message, for example while a prompt is open. An answer that comes as a `.md` file has no buttons.
+- Quick replies are buttons under each answer that send their text to the agent with one tap, as if you typed it. They are off by default. Set them with `[display] quick_replies`, such as `["Continue", "Yes", "Run tests", "Commit"]`: at most 8, each 1 to 64 characters. They sit two to a row, so a phone shows their labels whole. A quick reply waits like any typed message, for example while a prompt is open. An answer that comes as a `.md` file has no buttons.
 - `typing…` shows while the agent works, in the topic you used last.
 - The progress message appears after 2 seconds without an answer. It shows the latest commentary and the recent tool calls. It never shows tool output, unless `/verbose full` is on.
 - The progress message stays the last message of a running turn. When an alert, a notice, or your own message comes below it, it moves down. While a prompt waits for your answer, the alert stays last.
@@ -315,7 +315,7 @@ summary_after = "2m"                    # Keep the "Done" summary only for turns
 rich_messages = true                    # Send final answers as Telegram rich messages: Telegram renders tables and code itself.
 send_images = true                      # Send the image files that a final answer names.
 send_files = ["pdf", "csv", "tsv", "html", "htm", "xlsx", "docx", "pptx"]  # Other file types that a final answer offers, with a button to send each.
-quick_replies = ["Continue", "Yes", "Run tests", "Commit"]  # Buttons under each answer that send their text to the agent: at most 8, 1 to 64 characters each.
+quick_replies = []                      # Buttons under each answer that send their text to the agent, such as ["Continue", "Yes"]: at most 8, 1 to 64 characters each. Off by default.
 show_changes = true                     # A button under an answer that shows what the turn changed (needs [miniapp] url).
 message_length = 1500                   # About how long one message of a long answer is (300 to 4000).
 stream = false                          # Show the agent's text while it writes, as a Telegram draft.

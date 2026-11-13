@@ -195,7 +195,9 @@ func TestMiniAppRowComesBeforeQuickReplies(t *testing.T) {
 // An answer gets the quick replies; a tap sends that text to the agent, as
 // if typed, once.
 func TestQuickReplyTypesItsText(t *testing.T) {
-	e, p, thread := piTopic(t, "pi-quick")
+	e, p, thread := piTopicCfg(t, "pi-quick", func(e *env) {
+		e.cfg.Display.QuickReplies = []string{"Continue", "Yes", "Run tests", "Commit"} // off by default
+	})
 	p.User("check it")
 	time.Sleep(10 * time.Millisecond) // the answer's time comes after the prompt's: the pane is idle then
 	p.Final("All good. Shall I go on?")
