@@ -464,3 +464,14 @@ func TestBookkeepingLinesAreSkipped(t *testing.T) {
 		}
 	}
 }
+
+// A type that this adapter skips or handles is known; a counted unknown type
+// is not. Doctor and the daemon drop known types from old counts.
+func TestKnowsType(t *testing.T) {
+	a := claude.New()
+	for typ, want := range map[string]bool{"file-history-delta": true, "assistant": true, "summary": true, "brand-new-type": false} {
+		if got := agents.KnowsType(a, typ); got != want {
+			t.Errorf("KnowsType(%q) = %v, want %v", typ, got, want)
+		}
+	}
+}

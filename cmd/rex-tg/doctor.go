@@ -13,6 +13,10 @@ import (
 	"strings"
 	"syscall"
 
+	"rex-tg/internal/agents"
+	"rex-tg/internal/agents/claude"
+	"rex-tg/internal/agents/codex"
+	"rex-tg/internal/agents/pi"
 	"rex-tg/internal/daemon"
 	"rex-tg/internal/install"
 	"rex-tg/internal/keychain"
@@ -212,6 +216,18 @@ func unknownTypesLines(ctx context.Context, d *doctorOut, st *store.Store) {
 	var m map[string]map[string]int
 	if err == nil && ok && v != "" {
 		_ = json.Unmarshal([]byte(v), &m)
+	}
+	// Types that this binary's adapters know are no format change any more
+	// (counted by an older version).
+	adapters := map[string]agents.Adapter{"pi": pi.New(), "claude": claude.New(), "codex": codex.New()}
+	for rt, types := range m {
+		if a, ok := adapters[rt]; ok {
+			for typ := range types {
+				if agents.KnowsType(a, typ) {
+					delete(types, typ)
+				}
+			}
+		}
 	}
 	found := false
 	for _, rt := range []string{"pi", "claude", "codex"} {

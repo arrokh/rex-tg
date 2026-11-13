@@ -350,7 +350,7 @@ To delete the token: `security delete-generic-password -s rex-tg -a bot-token`. 
 | `/new`: "did not react to a key" | The startup question did not move its cursor. Answer it on the Mac. |
 | Telegram returns 409 Conflict | Another program uses the same bot token. Only one daemon may poll Telegram. |
 | Telegram says the bot was blocked | Unblock the bot in Telegram. |
-| `doctor` reports unknown line types | The agent changed its transcript format. rex-tg ignores those lines. The adapter may need an update. |
+| `doctor` reports unknown line types | The agent changed its transcript format. rex-tg ignores those lines. The adapter may need an update. Once a rex-tg update knows a type, doctor stops reporting it. |
 | "Not sent: the pane now runs ..." | The agent no longer runs in the pane. Start it again, or open another agent with `/agents`. |
 
 ### Slow or unreliable network

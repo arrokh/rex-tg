@@ -46,10 +46,7 @@ func (d *daemon) flushUnknown(ctx context.Context) {
 	if len(u.delta) == 0 {
 		return
 	}
-	stored := map[string]map[string]int{}
-	if v, ok, err := d.st.Get(ctx, unknownKey); err == nil && ok {
-		_ = json.Unmarshal([]byte(v), &stored)
-	}
+	stored := d.knownPruned(ctx)
 	for rt, m := range u.delta {
 		if stored[string(rt)] == nil {
 			stored[string(rt)] = map[string]int{}
@@ -68,4 +65,45 @@ func (d *daemon) flushUnknown(ctx context.Context) {
 	}
 	u.delta = nil
 	u.lastFlush = d.now()
+}
+
+// knownPruned reads the stored counts without the types that the adapters
+// know now (after an update taught them), so doctor stops reporting them.
+func (d *daemon) knownPruned(ctx context.Context) map[string]map[string]int {
+	stored := map[string]map[string]int{}
+	if v, ok, err := d.st.Get(ctx, unknownKey); err == nil && ok {
+		_ = json.Unmarshal([]byte(v), &stored)
+	}
+	for rt, m := range stored {
+		a, ok := d.adapters[agents.Runtime(rt)]
+		if !ok {
+			continue
+		}
+		for typ := range m {
+			if agents.KnowsType(a, typ) {
+				delete(m, typ)
+			}
+		}
+		if len(m) == 0 {
+			delete(stored, rt)
+		}
+	}
+	return stored
+}
+
+// pruneKnownTypes drops the counted types that the adapters know now (at
+// the start).
+func (d *daemon) pruneKnownTypes(ctx context.Context) {
+	v, ok, err := d.st.Get(ctx, unknownKey)
+	if err != nil || !ok {
+		return
+	}
+	stored := d.knownPruned(ctx)
+	b, err := json.Marshal(stored)
+	if err != nil || string(b) == v {
+		return
+	}
+	if err := d.st.Set(ctx, unknownKey, string(b)); err != nil {
+		d.log.Warn("save unknown line types", "err", err)
+	}
 }

@@ -78,6 +78,7 @@ func (d *daemon) startup(ctx context.Context) error {
 	if v, ok, _ := d.st.Get(ctx, "paused"); ok && v == "1" {
 		d.paused.Store(true)
 	}
+	d.pruneKnownTypes(ctx) // an update may have taught the adapters a type
 
 	if err := d.snd.Recover(ctx); err != nil {
 		return fmt.Errorf("daemon: recover sender: %w", err)

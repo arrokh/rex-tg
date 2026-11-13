@@ -8,6 +8,7 @@
 package agents
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"time"
@@ -201,4 +202,24 @@ func FallbackKey(r Runtime, sessionID string, offset int64) string {
 // Key builds a deduplication key from a line's own ID.
 func Key(r Runtime, sessionID, lineID string) string {
 	return fmt.Sprintf("%s:%s:%s", r, sessionID, lineID)
+}
+
+// KnowsType reports whether an adapter handles or deliberately skips a line
+// whose type field is typ: a counted unknown type that a newer adapter knows
+// is no longer a format change to report.
+func KnowsType(a Adapter, typ string) bool {
+	b, err := json.Marshal(map[string]string{"type": typ})
+	if err != nil {
+		return false
+	}
+	evs, err := a.ParseLine(b, LineContext{})
+	if err != nil {
+		return false
+	}
+	for _, ev := range evs {
+		if ev.Kind == KindUnknown && ev.Text == typ {
+			return false
+		}
+	}
+	return true
 }
