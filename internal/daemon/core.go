@@ -172,7 +172,10 @@ type daemon struct {
 	// (tickPromptChecks).
 	blockedSince  map[int64]time.Time
 	recheckAt     map[int64]time.Time
-	goneReads     goneConfirm // the first read without a prompt, until a second confirms it
+	goneReads     goneConfirm        // the first read without a prompt, until a second confirms it
+	turnTrees     map[int64]turnTree // the repository at each running turn's start, by session
+	miniSecret    []byte             // the key that checks the Mini App's signed requests
+	miniUp        atomic.Bool        // the Mini App's server listens
 	blockedScanAt time.Time
 	renamedBack   time.Time  // the last rename back of the session for /new (under tabMu)
 	vimStuck      sync.Map   // pane id -> vimStuckMark: the vim label that showed no reaction to a key
@@ -211,6 +214,9 @@ type daemon struct {
 	boardLoaded          bool                    // board was read from the store
 	reminders            map[int64]*reminder     // reminders of open alerts, by alert
 	lastRemind           time.Time               // the last look for due reminders
+	sched                map[int64]schedule      // scheduled messages (/at), by id
+	schedLoaded          bool                    // sched was read from the store
+	lastSched            time.Time               // the last look for due schedules
 	remindSwept          bool                    // stale reminders of closed alerts were dropped
 	macSwept             bool                    // with MacNotice off, holds from before the start were cleared
 	ctlPending           map[int64]ctlSet        // queued control commands, by row id
@@ -241,6 +247,7 @@ func newDaemon(cfg config.Config, home string, log *slog.Logger, now func() time
 		blockedSince: map[int64]time.Time{},
 		recheckAt:    map[int64]time.Time{},
 		goneReads:    goneConfirm{},
+		turnTrees:    map[int64]turnTree{},
 		events:       make(chan any, 256),
 		regq:         newJobQueue(),
 		tailers:      map[int64]*tailer{},
@@ -263,6 +270,7 @@ func newDaemon(cfg config.Config, home string, log *slog.Logger, now func() time
 		alertWanted:  map[int64]string{},
 		liveText:     map[int64]liveText{},
 		reminders:    map[int64]*reminder{},
+		sched:        map[int64]schedule{},
 		ctlPending:   map[int64]ctlSet{},
 		vimNoticed:   map[int64]bool{},
 		alertBusy:    map[int64]bool{},
@@ -339,6 +347,9 @@ func (d *daemon) run(parent context.Context) error {
 	d.spawn(func() { d.rexEventLoop(ctx) })
 	d.spawn(func() { d.spoolLoop(ctx) })
 	d.spawn(func() { d.pollLoop(ctx) })
+	if d.miniAppOn() && len(d.miniSecret) > 0 {
+		d.spawn(func() { d.serveMiniApp(ctx) })
+	}
 	if d.cfg.Display.Stream {
 		d.spawn(func() { d.liveLoop(ctx) })
 	}
@@ -387,6 +398,12 @@ func (d *daemon) handle(ev any) {
 		d.deadlines[e.alert] = e.d
 	case evPromptRead:
 		d.onPromptRead(e)
+	case evTurnTree:
+		d.onTurnTree(e)
+	case evTurnChanges:
+		d.onTurnChanges(e)
+	case evLater:
+		e.f()
 	case evRename:
 		d.onRename(e)
 	case evAlertFollow:
@@ -506,6 +523,7 @@ func (d *daemon) tick() {
 	}
 	d.tickBoard(now)
 	d.tickReminders(now)
+	d.tickSchedules(now)
 	d.sweepMacNotices()
 	d.checkUpdate(now)
 }
@@ -562,6 +580,7 @@ func (d *daemon) closeThread(threadID int64) {
 		}
 	}
 	d.closeAlerts(th, store.AlertGone)
+	d.dropSchedules(threadID)
 	// Messages that still wait for this topic can never be typed.
 	if qs, err := d.st.QueuedInbound(d.ctx, threadID); err == nil {
 		for _, q := range qs {
@@ -642,7 +661,7 @@ func (d *daemon) enqueue(it store.OutboxItem) {
 // stable inputs.
 func (d *daemon) notice(threadID int64, key, html string) {
 	d.enqueue(store.OutboxItem{
-		ThreadID: threadID, Key: key, Kind: "notice",
+		ThreadID: threadID, Key: key, Kind: "notice", Silent: true, // only answers and prompts make a sound
 		Parts: []store.PartContent{{Content: html, Format: store.FormatHTML}},
 	})
 }
@@ -654,10 +673,21 @@ func (d *daemon) say(chatID, threadID int64, html string, markup *telegram.Inlin
 }
 
 func (d *daemon) sendNow(chatID, threadID int64, html string, markup *telegram.InlineKeyboardMarkup) (telegram.Message, error) {
+	return d.sendMsg(chatID, threadID, html, markup, true)
+}
+
+// sendPrompt is sendNow for a prompt that waits for the user: it makes a
+// sound.
+func (d *daemon) sendPrompt(chatID, threadID int64, html string, markup *telegram.InlineKeyboardMarkup) (telegram.Message, error) {
+	return d.sendMsg(chatID, threadID, html, markup, false)
+}
+
+func (d *daemon) sendMsg(chatID, threadID int64, html string, markup *telegram.InlineKeyboardMarkup, silent bool) (telegram.Message, error) {
 	var msg telegram.Message
 	err := d.snd.Call(sender.PriorityAnswer, func(ctx context.Context, tg *telegram.Client) error {
 		m, err := tg.SendMessage(ctx, telegram.SendMessageParams{
 			ChatID: chatID, MessageThreadID: threadID, Text: html, ParseMode: "HTML", ReplyMarkup: markup,
+			DisableNotification: silent, // only answers and prompts make a sound
 		})
 		msg = m
 		return err

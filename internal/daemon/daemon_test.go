@@ -1,10 +1,12 @@
 package daemon_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image/png"
 	"os"
 	"path/filepath"
 	"slices"
@@ -496,7 +498,7 @@ func TestPermissionAlert(t *testing.T) {
 func TestScreenCommand(t *testing.T) {
 	e, _, thread := piTopic(t, "pi-screen")
 	e.setScreen("line one\nsecret sk-ant-" + "api03-abcdefghijklmnopqrstuvwxyz123456 <b>\nline three\n")
-	e.say(thread, "/screen")
+	e.say(thread, "/screen text")
 	m := e.waitText(thread, "line three")
 	if !strings.Contains(m.Text, "<pre>") || strings.Contains(m.Text, "abcdefghijklmnopqrstuvwxyz123456") {
 		t.Errorf("screen = %q (want a <pre> block with the key redacted)", m.Text)
@@ -504,8 +506,36 @@ func TestScreenCommand(t *testing.T) {
 	if !strings.Contains(m.Text, "&lt;b&gt;") {
 		t.Errorf("screen text is not escaped: %q", m.Text)
 	}
-	e.say(thread, "/screen 1")
+	e.say(thread, "/screen text 1")
 	e.waitFor("a one-line screen", func() bool { return e.countText(thread, "line three") == 2 })
+}
+
+// /screen sends the redacted screen as a silent photo. Nothing of the screen
+// goes out as text.
+func TestScreenSendsPhoto(t *testing.T) {
+	e, _, thread := piTopic(t, "pi-screen-photo")
+	e.setScreen("line one\nsecret sk-ant-" + "api03-abcdefghijklmnopqrstuvwxyz123456\n中文 line three\n")
+	e.say(thread, "/screen")
+	var photo tgtest.Message
+	e.waitFor("a photo", func() bool {
+		for _, m := range e.botMessages(thread) {
+			if m.Photo {
+				photo = m
+				return true
+			}
+		}
+		return false
+	})
+	if !photo.Silent {
+		t.Error("the screen photo made a sound")
+	}
+	if _, err := png.DecodeConfig(bytes.NewReader(photo.File)); err != nil {
+		t.Errorf("the photo is not a PNG: %v", err)
+	}
+	if e.hasText(thread, "line three") {
+		t.Error("the screen was also sent as text")
+	}
+	e.never("a text screen", 300*time.Millisecond, func() bool { return e.hasText(thread, "<pre>") })
 }
 
 // A reply whose send got no answer, and that Telegram never posted (seen
@@ -2081,7 +2111,7 @@ const pemKey = "-----BEGIN RSA PRIV" + "ATE KEY-----\nFAKEPEMLINEONEFAKEPEMLINEO
 func TestScreenRedactsMultiLineKeys(t *testing.T) {
 	e, _, thread := piTopic(t, "pi-pem")
 	e.setScreen("before\n" + pemKey + "\nafter\n")
-	e.say(thread, "/screen")
+	e.say(thread, "/screen text")
 	m := e.waitText(thread, "after")
 	if strings.Contains(m.Text, "FAKEPEMLINEONE") || strings.Contains(m.Text, "FAKEPEMLINETWO") {
 		t.Errorf("key body on screen: %q", m.Text)

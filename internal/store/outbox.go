@@ -395,6 +395,19 @@ func (s *Store) OutboxRow(ctx context.Context, id int64) (OutboxRow, error) {
 	return r, nil
 }
 
+// OutboxIDByKey returns the id of a topic's outbox item with an event key.
+func (s *Store) OutboxIDByKey(ctx context.Context, threadID int64, key string) (int64, bool, error) {
+	var id int64
+	err := s.db.QueryRowContext(ctx, `SELECT id FROM outbox WHERE thread_id=? AND event_key=?`, threadID, key).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, fmt.Errorf("store: outbox by key: %w", err)
+	}
+	return id, true, nil
+}
+
 // SentKind returns the kind of the outbox row of a topic that Telegram
 // message msg is a part of. ok is false when rex-tg sent no such part there.
 func (s *Store) SentKind(ctx context.Context, threadID, msg int64) (kind string, ok bool, err error) {

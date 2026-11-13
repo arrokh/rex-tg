@@ -45,6 +45,7 @@ var botCommands = []telegram.BotCommand{
 	{Command: "resend", Description: "Topic: resend an unknown message"},
 	{Command: "mute", Description: "Topic: answers without sound"},
 	{Command: "unmute", Description: "Topic: answers with sound"},
+	{Command: "at", Description: "Topic: send a message to the agent later"},
 	{Command: "rename", Description: "Topic: rename this topic and its tab"},
 	{Command: "unlink", Description: "Topic: stop mirroring this session"},
 	{Command: "help", Description: "List the commands"},

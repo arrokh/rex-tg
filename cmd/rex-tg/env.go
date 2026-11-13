@@ -127,7 +127,7 @@ func (e Env) loadConfig(path string) (config.Config, error) {
 }
 
 func (e Env) telegram(cfg config.Config, token string) *telegram.Client {
-	return telegram.New(token, telegram.WithBaseURL(cfg.Telegram.APIBase), telegram.WithProxy(cfg.TelegramProxy()))
+	return telegram.New(token, telegram.WithBaseURL(cfg.Telegram.APIBase), telegram.WithProxy(cfg.TelegramProxy()), telegram.WithFallback(cfg.Telegram.Fallback))
 }
 
 // paths returns the install locations, with the live folder of the config

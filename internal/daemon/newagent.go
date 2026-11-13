@@ -764,7 +764,7 @@ func (d *daemon) postQuestion(chat, thread int64, token, name string, m startupM
 		}})
 	}
 	q := &shownQuestion{id: m.id(), seq: seq, labels: m.labels, html: html, markup: &telegram.InlineKeyboardMarkup{InlineKeyboard: rows}}
-	if sent, err := d.sendNow(chat, thread, html+"\nTap an answer. rex-tg moves the cursor there and presses Enter.", q.markup); err == nil {
+	if sent, err := d.sendPrompt(chat, thread, html+"\nTap an answer. rex-tg moves the cursor there and presses Enter.", q.markup); err == nil {
 		q.msg = sent.MessageID
 	}
 	return q

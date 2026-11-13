@@ -232,6 +232,9 @@ func (d *daemon) onCallback(u telegram.Update) {
 		return n, err == nil
 	}
 	switch parts[0] {
+	case quickReplyData:
+		d.quickReplyButton(u.UpdateID, cb, parts)
+		return
 	case "o":
 		if id, ok := arg(1); ok {
 			var replyThread int64 // answer where the button was pressed

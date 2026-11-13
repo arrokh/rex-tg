@@ -367,13 +367,17 @@ func (d *daemon) work(th store.Thread, acts []turn.Action) []store.OutboxItem {
 			var parts []store.PartContent
 			if a.HTML != "" {
 				parts = []store.PartContent{{Content: a.HTML, Format: store.FormatHTML}}
+			} else if long, ok := d.longAnswerIf(a.Kind == "answer", th, a.Key, a.Markdown); ok {
+				parts = long // its start; the whole answer is a Mini App page
 			} else {
 				parts = d.markdownParts(a.Markdown, a.Kind, a.Kind == "answer")
 			}
 			if len(parts) == 0 {
 				continue
 			}
-			items = append(items, store.OutboxItem{ThreadID: th.ID, Key: a.Key, Kind: a.Kind, Parts: parts, Silent: a.Silent})
+			// Only the agent's answer makes a sound; its other posts (block
+			// mode text, prompts typed on the Mac, tool rows) are progress.
+			items = append(items, store.OutboxItem{ThreadID: th.ID, Key: a.Key, Kind: a.Kind, Parts: parts, Silent: a.Silent || a.Kind != "answer"})
 			if a.Kind == "answer" && a.HTML == "" {
 				if img, ok := d.imageItem(th, a); ok {
 					items = append(items, img)
@@ -520,6 +524,7 @@ func (d *daemon) onBatch(ev evBatch) {
 			echo := false
 			switch e.Kind {
 			case agents.UserPrompt:
+				d.turnStarted(conv.ID, conv.CWD, tr.Running())
 				if !e.Auto { // no person typed it, so it is no Telegram message
 					echo = d.echo(th, e, now)
 					if !echo && d.cfg.Display.MacNotice && d.typedRecently(th.ID, now) {
@@ -533,6 +538,7 @@ func (d *daemon) onBatch(ev evBatch) {
 			case agents.AssistantText:
 				if e.Phase == agents.Final {
 					d.signal(conv.ID, registry.Signal{State: "idle", At: at})
+					d.turnAnswered(conv.ID, th.ID, e.Key)
 				} else {
 					d.checkPromptGone(conv.ID, now)
 				}

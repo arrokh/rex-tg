@@ -21,6 +21,7 @@ Not supported: T3 Code panes, and Rex servers on other computers.
 - Go, to build (the version is in `.tool-versions`; `mise install` gets it)
 - A Telegram bot from @BotFather, with Threaded Mode on
 - For voice notes only: ffmpeg and whisper.cpp
+- For the Mini App only: Tailscale, with Funnel ([setup](docs/reference.md#mini-app))
 
 ## Setup
 
@@ -70,7 +71,7 @@ Your text goes to the agent. Text that starts with `/` also goes to the agent (f
 | Command | What it does |
 | --- | --- |
 | `/info` | Shows the agent's state. |
-| `/screen [lines]` | Shows the pane's screen, with secrets removed. |
+| `/screen [lines]` | Sends the pane's screen as a picture, with secrets removed. `/screen text` sends text. |
 | `/approve`, `/deny` | Answers the open permission prompt. |
 | `/esc`, `/interrupt`, `/key <keys>` | Sends Escape, stops the turn, or presses keys. |
 | `/force <text>` | Types text even when a prompt is open. |
@@ -81,6 +82,8 @@ Your text goes to the agent. Text that starts with `/` also goes to the agent (f
 | `/reasoning on\|off` | Shows the agent's thinking, when the agent stores it. |
 | `/resend [id]` | Sends again a reply that may not have arrived. |
 | `/mute`, `/unmute` | Answers arrive without or with sound. |
+| `/at <time or delay> <text>` | Sends text to the agent later, such as `/at 09:00 run the tests` or `/at 30m check the build`. `/at` lists, `/at cancel <n>` removes one. |
+| `/rename <name>` | Names the topic, and its Rex tab if the agent was started with `/new`. `/rename auto` names it after the session again. |
 | `/unlink` | Closes the topic in rex-tg. |
 
 To send an agent a command that has a bot command's name, use two slashes: `//help` sends `/help` to the agent, and `//model` sends the agent's own `/model`.
@@ -90,11 +93,12 @@ To send an agent a command that has a bot command's name, use two slashes: `//he
 - **While the agent works,** your message joins the current run at once, like typing on the Mac. Set `[input] while_busy = "wait"` to keep it until the agent is idle.
 - **⏳ Waiting:** a prompt is open, so your message waits. `⚡ Send now` types it at once. `✖ Cancel` drops it. A waiting message expires after 30 minutes.
 - **Reactions on your message:** 👀 means typed into the pane. 👍 means the agent got it. 👎 means refused; a reply says why.
-- **Progress:** one message updates while the agent works. When the turn ends, it becomes one summary line.
-- **Answer:** a new message. A long answer comes as a few chat-sized messages, split at paragraphs, without numbers.
+- **Progress:** one message updates while the agent works. When the turn ends, it becomes a summary line if the turn took 2 minutes or more, or if it failed or stopped. A shorter turn leaves just its answer.
+- **Answer:** a new message. A long answer comes as a few chat-sized messages, split at paragraphs, without numbers. With the Mini App set up, a long answer (over 3000 characters by default) shows its start, and `📄 Whole answer` opens the rest.
+- **Quick replies:** buttons under an answer send a short reply to the agent with one tap, such as `Continue` or `Yes`. Set them with `[display] quick_replies`.
 - **Live text (optional):** with `stream = true`, the text shows as a draft at the bottom of the topic while the agent writes (word by word for pi, block by block for Claude Code and Codex). Off by default.
 - **Files:** when an answer names an image on your Mac, rex-tg sends the picture too. A PDF, CSV, HTML, or Office file gets a 📎 button: tap it to get the file.
-- **Permission prompts:** the bot shows the bottom of the pane, with one button per answer.
+- **Permission prompts:** the bot shows the prompt the way a person reads it, with one button per answer.
 - **⏰ Still waiting for your answer:** a prompt has waited 10 minutes. Tap the reminder to jump to the prompt.
 - **💻 In use on the Mac:** you typed in the pane on the Mac. The replies stay on the Mac, and this one notice shows the latest prompt. `📄 Last answer` shows the newest answer. Write in the topic to go on in Telegram.
 - **🔴:** the agent stopped, or its pane closed.
@@ -142,6 +146,7 @@ Start with `rex-tg doctor`. Common cases:
 | "may not have arrived" | Tap `🔁 Send again`, or send `/resend`, if the reply is missing. |
 | "This topic is not linked" | Open the agent again with `/agents`. |
 | Telegram returns 409 Conflict | Another program uses the same bot token. Stop it. |
+| A Mini App page does not open | Check `[miniapp] url` and the Funnel ([Mini App](docs/reference.md#mini-app)). |
 
 More cases: [docs/reference.md](docs/reference.md#troubleshooting).
 
@@ -149,7 +154,8 @@ More cases: [docs/reference.md](docs/reference.md#troubleshooting).
 
 - The bot can type into your terminals. Protect your Telegram account (turn on two-step verification) and the bot token.
 - Only the owner can use the bot. rex-tg types only when the agent is in front in its pane and no prompt is open.
-- The token is only in the macOS Keychain. rex-tg opens no port.
+- The token is only in the macOS Keychain. rex-tg opens no port, except the Mini App's local one when `[miniapp] url` is set.
+- Mini App pages are reachable only through Telegram's signed requests, and only for the owner ([details](docs/reference.md#mini-app)).
 - Telegram bot chats are not end-to-end encrypted. rex-tg removes common secrets (API keys, tokens, private keys) before it sends text, but it cannot catch every secret.
 - Sent messages are deleted from the database after 30 days.
 

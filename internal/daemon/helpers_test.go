@@ -75,6 +75,7 @@ func newEnvSerial(t *testing.T) *env {
 	// rich messages unless a test turns them on.
 	cfg.Display.ProgressAnimation = config.Duration{}
 	cfg.Display.SummaryAfter = config.Duration{} // tests check the summaries
+	cfg.MiniApp.Listen = "127.0.0.1:0"           // tests run side by side: any free port
 	cfg.Display.RichMessages = false
 	cfg.InputSettings.JoinWindow = config.Duration{Duration: 50 * time.Millisecond}
 	cfg.InputSettings.JoinWindowLong = config.Duration{Duration: 100 * time.Millisecond}

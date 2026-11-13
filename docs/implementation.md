@@ -34,6 +34,10 @@ This guide is the contract between the packages of rex-tg. [design.md](design.md
 | `internal/config` | TOML config with defaults | toml |
 | `internal/registry` | Panes, sessions, state merge, take-over and resume rules (pure) | `agents` |
 | `internal/inbound` | Safety checks, waiting queue policy, echo matching | `agents` |
+| `internal/sender` | The only writer to Telegram: outbox, parts, rate limits, progress messages | `format`, `store`, `telegram` |
+| `internal/keychain` | The bot token in the macOS Keychain, through `security` | stdlib |
+| `internal/miniapp` | Mini App server: page signature check and page rendering | goldmark |
+| `internal/termimg` | The `/screen` picture (PNG), from terminal lines | `golang.org/x/image` |
 | `internal/daemon` | Wiring: core loop, sender, router, alerts, housekeeping | everything |
 | `cmd/rex-tg` | CLI: `daemon`, `hook`, `login`, `install`, `uninstall`, `status`, `doctor` | everything |
 
@@ -121,6 +125,7 @@ func Classify(err error) Class
 - `Class` values: `ClassNone`, `ClassRateLimited` (429), `ClassParseEntities`, `ClassNotModified`, `ClassEditTargetGone`, `ClassDeleteTargetGone`, `ClassThreadNotFound`, `ClassBlocked` (403), `ClassConflict` (409), `ClassBadRequest` (other 4xx), `ClassUnknownOutcome`.
 - Default timeouts: 15 s per call; `GetUpdates` uses its long-poll timeout plus 10 s. The token never appears in errors or logs.
 - `WithProxy(*url.URL)` sets a proxy (nil keeps `HTTP(S)_PROXY` and `ALL_PROXY` from the environment). `config.ParseProxy` accepts `http`, `https`, `socks5`, and `socks5h` URLs with a host, and its errors never hold the URL.
+- `WithFallback(true)` (with `WithProxy`) keeps a proxy client and a direct client. After 3 `NotSentError` results in a row, calls use the other one; a `NotSentError` is also tried once at once on the other route. Unknown outcomes are never sent again and do not change the route. `WithLogger` gets one info line per switch.
 - Dial and TLS handshake time out after 5 s. TCP keepalive is 5 s idle, 3 s interval, 3 probes. The daemon polls with a 25 s long poll and retries network failures after 0.5 s to 2 s (API errors: 1 s to 30 s, and `retry_after`). The sender pauses at most 3 s after a request that never left the machine.
 - The default transport speaks HTTP/1.1 only, and its connections drop unsent data when they close (`SO_LINGER` 0), so a request that timed out cannot reach Telegram later (design 9.1).
 - `tgtest.New(t)` starts an `httptest` server that implements the methods above, keeps chats, topics, and messages in memory (one message number counter per chat, shared by both sides, as Telegram does), records every call with its time, can fail or delay the next calls of a method, can handle a call and then lose its answer (`LoseAnswerNext`), sends the bot its own "topic created" message as an update, and lets a test push updates that a pending `getUpdates` returns at once.
@@ -348,13 +353,14 @@ type RuntimeInput struct {
 	Answers         []Answer // fallback permission answers when the screen shows no numbered options
 }
 type Config struct {
-	Telegram struct{ APIBase string; RatePerSecond float64; RateBurst int }
+	Telegram struct{ APIBase, Proxy string; Fallback bool; RatePerSecond float64; RateBurst int }
 	Rex      struct{ CLI string; ScanInterval Duration; NewSession string } // NewSession: the session for /new, default "rex-tg"
 	Agents   struct {
 		PiArgv0, ClaudeArgv0, ClaudeExecGlob, CodexNames []string
 		Pi, Claude, Codex                                RuntimeInput
 	}
-	Display struct{ Mode string; Backfill int; ShowMacPrompts, MacNotice bool; ProgressDelay, ProgressEditInterval Duration }
+	Display struct{ Mode string; Backfill int; ShowMacPrompts, MacNotice, ShowChanges bool; ProgressDelay, ProgressEditInterval Duration; QuickReplies []string }
+	MiniApp struct{ URL, Listen string; AnswerPreview int } // URL empty turns the Mini App off
 	Alerts  struct{ RemindAfter Duration; Reminders int } // 10m, 3; 0 turns reminders off
 	Input   struct{ QueueExpiry, JoinWindow, JoinWindowLong, BusyAfterTyping Duration; MaxUploadMB int }
 	Voice   struct{ WhisperCLI, Model, Language string } // optional; empty WhisperCLI turns voice notes off
@@ -366,7 +372,7 @@ func (c Config) DBPath() string; func (c Config) SpoolDir() string; func (c Conf
 func (c Config) Input(rt agents.Runtime) RuntimeInput
 ```
 
-Defaults come from design section 12 and the spikes: `ClaudeArgv0 ["claude", "cux"]` (cux runs claude as its child, so cux is the pane's foreground process); `Rex.NewSession "rex-tg"`, which must be a name that Rex takes (not empty, no leading `-`, no control characters, at most 128 characters); pi answers `[]`; Claude answers `1 Yes → ["1"]`, `2 Always → ["2"]`, `4 No → ["4"]`, `Esc → ["escape"]`; Codex answers `Yes → ["y"]`, `Always → ["p"]`, `No → ["escape"]`; every runtime `PasteEnterDelay 300ms`, `InterruptKeys ["escape"]`; `WhileWorking` steer for all three.
+Defaults come from design section 12 and the spikes: `ClaudeArgv0 ["claude", "cux"]` (cux runs claude as its child, so cux is the pane's foreground process); `Rex.NewSession "rex-tg"`, which must be a name that Rex takes (not empty, no leading `-`, no control characters, at most 128 characters); pi answers `[]`; Claude answers `1 Yes → ["1"]`, `2 Always → ["2"]`, `4 No → ["4"]`, `Esc → ["escape"]`; Codex answers `Yes → ["y"]`, `No → ["escape"]` (no "always" answer, since a key like `p` could make a lasting rule); every runtime `PasteEnterDelay 300ms`, `InterruptKeys ["escape"]`; `WhileWorking` steer for all three; `Telegram.Fallback` true; `Display.ShowChanges` true; `Display.QuickReplies` `Continue`, `Yes`, `Run tests`, `Commit`; `MiniApp.Listen "127.0.0.1:8770"`, `MiniApp.AnswerPreview` 3000.
 
 ### internal/registry
 
@@ -438,7 +444,7 @@ type Delivered struct{ UpdateID int64; BodyHash, Body string; DeliveredAt time.T
 func MatchEcho(prompt string, at time.Time, delivered []Delivered) (int64, bool) // hash within 10 min, else 40-character prefix within 30 s
 ```
 
-Topic commands: `info`, `screen`, `approve`, `deny`, `esc`, `interrupt`, `key`, `force`, `model`, `effort`, `mode`, `verbose`, `reasoning`, `resend`, `unlink`, `mute`, `unmute`, `help`. Main-chat commands: `start`, `agents`, `topics`, `status`, `pause`, `unpause`, `help`. `/cmd@<botUsername>` is the same command; a command addressed to another bot is ignored.
+Topic commands: `info`, `screen`, `approve`, `deny`, `esc`, `interrupt`, `key`, `force`, `model`, `effort`, `mode`, `verbose`, `reasoning`, `resend`, `unlink`, `mute`, `unmute`, `rename`, `at`, `help`. Main-chat commands: `start`, `agents`, `new`, `topics`, `status`, `pause`, `unpause`, `help`. `/cmd@<botUsername>` is the same command; a command addressed to another bot is ignored.
 
 ### internal/sender
 

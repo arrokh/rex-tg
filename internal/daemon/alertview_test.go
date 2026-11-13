@@ -129,7 +129,8 @@ func TestPromptViewSingleAndReview(t *testing.T) {
 		t.Errorf("single buttons %s", got)
 	}
 	r := parsePromptView(screenLines(reviewScreen), true)
-	if !r.ok || r.title != "Review your answers" || r.question != "Ready to submit your answers?" {
+	if !r.ok || !r.review || r.question != "Ready to submit your answers?" || len(r.answers) != 2 ||
+		r.answers[0].answer != "Blue" || r.answers[1].answer != "Small" {
 		t.Fatalf("review: %+v", r)
 	}
 	if got := labels(r.alertOptions()); got != "1 Submit answers=1 | 2 Cancel=2 | Esc=escape" {
@@ -287,7 +288,7 @@ Ready to submit your answers?
 	if !v.ok || !v.isQuestion() || v.question != "Ready to submit your answers?" {
 		t.Fatalf("view = %+v", v)
 	}
-	if h := alertHead(v, "Claude Code", store.AlertPermission); h != "❓ Claude Code: Ready to submit your answers?" {
+	if h := alertHead(v, "Claude Code", store.AlertPermission); h != "❓ Claude Code: Review your answers" {
 		t.Errorf("head = %q", h)
 	}
 }
@@ -349,5 +350,47 @@ func TestCutPreviewByScreenColumn(t *testing.T) {
 	want := []string{"❯ 1. Ship ✅ now", "  2. Later", "", "after"}
 	if !slices.Equal(got, want) {
 		t.Errorf("cutPreview = %q, want %q", got, want)
+	}
+}
+
+// The review page of long questions (Claude Code 2.1.323, seen live, made-up
+// text): its title is pushed above the lines read, and each question wraps.
+// It is known by its answers and reads as a list of questions and answers.
+const longReviewScreen = `pages are public to anyone with the
+   link, and a bot can't delete them. How should long
+   answers open?
+   → Private viewer (Recommended)
+ ● Which address should the viewer use? Only you can open
+   it, and every request is checked.
+   → Tunnel (Recommended)
+
+Ready to submit your answers?
+
+❯ 1. Submit answers
+  2. Cancel`
+
+func TestReviewPageOfLongQuestions(t *testing.T) {
+	v := parsePromptView(screenLines(longReviewScreen), false)
+	if !v.ok || !v.review || !v.isQuestion() {
+		t.Fatalf("not seen as the review page: %+v", v)
+	}
+	if len(v.answers) != 2 || v.answers[0].answer != "Private viewer (Recommended)" || v.answers[1].answer != "Tunnel (Recommended)" ||
+		!strings.HasPrefix(v.answers[0].question, "… pages are public") || !strings.HasPrefix(v.answers[1].question, "Which address should the viewer use? Only you can open it,") {
+		t.Fatalf("answers = %+v", v.answers)
+	}
+	h := alertHTML(v, "Claude Code", store.AlertPermission, nil)
+	for _, want := range []string{"❓ <b>Review your answers</b> · Claude Code", "→ <b>Tunnel (Recommended)</b>", "<b>Ready to submit your answers?</b>", "Tap Submit answers"} {
+		if !strings.Contains(h, want) {
+			t.Errorf("alert lacks %q:\n%s", want, h)
+		}
+	}
+	if strings.Contains(h, "Permission needed") || strings.Contains(h, "answer No") {
+		t.Errorf("reads as a permission prompt:\n%s", h)
+	}
+	if got := labels(v.alertOptions()); got != "1 Submit answers=1 | 2 Cancel=2 | Esc=escape" {
+		t.Errorf("buttons %s", got)
+	}
+	if hd := alertHead(v, "Claude Code", store.AlertPermission); hd != "❓ Claude Code: Review your answers" {
+		t.Errorf("head = %q", hd)
 	}
 }

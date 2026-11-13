@@ -8,6 +8,7 @@ import (
 
 	"rex-tg/internal/format"
 	"rex-tg/internal/store"
+	"rex-tg/internal/termimg"
 )
 
 // An alert shows the prompt the way a person reads it, not as a screen dump
@@ -55,10 +56,28 @@ type promptView struct {
 	notes    []string // warnings, such as "⚠ …"
 	question string   // "Do you want to proceed?", or the question asked
 	options  []viewOption
-	next     bool // a "Next" or "Submit" row under answers to tick
-	review   bool // the "Review your answers" page of several questions
-	ok       bool // the screen holds a prompt this view understands
+	next     bool         // a "Next" or "Submit" row under answers to tick
+	review   bool         // the "Review your answers" page of several questions
+	answers  []reviewItem // that page's questions and the answers given
+	ok       bool         // the screen holds a prompt this view understands
 }
+
+// reviewItem is one question on the review page, with the answer given.
+type reviewItem struct{ question, answer string }
+
+// reviewOptions tells the answers of the review page: Submit answers and
+// Cancel. The page is known by them also when its title is above the
+// lines read (long questions push it out).
+func reviewOptions(opts []viewOption) bool {
+	if len(opts) != 2 {
+		return false
+	}
+	return strings.EqualFold(opts[0].label, "Submit answers") && strings.EqualFold(opts[1].label, "Cancel")
+}
+
+// reviewLines is how far above its answers the review page is read: each
+// question there may wrap over several lines.
+const reviewLines = 30
 
 // isQuestion tells a question (AskUserQuestion) from a permission prompt.
 func (v promptView) isQuestion() bool {
@@ -161,27 +180,7 @@ func cutAtColumn(l string, col int) (head, rest string) {
 }
 
 // runeWidth is the number of terminal columns a character takes.
-func runeWidth(r rune) int {
-	switch {
-	case r < 0x1100:
-		return 1
-	case r <= 0x115F, r >= 0x2E80 && r <= 0xA4CF, r >= 0xAC00 && r <= 0xD7A3, r >= 0xF900 && r <= 0xFAFF,
-		r >= 0xFE30 && r <= 0xFE4F, r >= 0xFF00 && r <= 0xFF60, r >= 0xFFE0 && r <= 0xFFE6,
-		r >= 0x1F300 && r <= 0x1FAFF, r >= 0x20000 && r <= 0x3FFFD:
-		return 2
-	}
-	switch r { // emoji that terminals draw two columns wide
-	case 0x231A, 0x231B, 0x23E9, 0x23EA, 0x23EB, 0x23EC, 0x23F0, 0x23F3, 0x25FD, 0x25FE, 0x2614, 0x2615,
-		0x267F, 0x2693, 0x26A1, 0x26AA, 0x26AB, 0x26BD, 0x26BE, 0x26C4, 0x26C5, 0x26CE, 0x26D4, 0x26EA,
-		0x26F2, 0x26F3, 0x26F5, 0x26FA, 0x26FD, 0x2705, 0x270A, 0x270B, 0x2728, 0x274C, 0x274E, 0x2753,
-		0x2754, 0x2755, 0x2757, 0x2795, 0x2796, 0x2797, 0x27B0, 0x27BF, 0x2B1B, 0x2B1C, 0x2B50, 0x2B55:
-		return 2
-	}
-	if r >= 0x2648 && r <= 0x2653 {
-		return 2
-	}
-	return 1
-}
+func runeWidth(r rune) int { return termimg.RuneWidth(r) }
 
 // parsePromptView reads a prompt from the bottom lines of a screen. It finds
 // the last list of numbered answers, takes the prompt's lines above it (up to
@@ -253,8 +252,15 @@ func parsePromptView(lines []string, shortcuts bool) promptView {
 		}
 	}
 	// The prompt's lines above the answers.
+	if reviewOptions(v.options) {
+		v.review = true
+	}
+	limit := maxQuestionLines
+	if v.review {
+		limit = reviewLines
+	}
 	start := first
-	for i := first - 1; i >= 0 && first-i <= maxQuestionLines; i-- {
+	for i := first - 1; i >= 0 && first-i <= limit; i-- {
 		t := strings.TrimSpace(clean[i])
 		if ruleRe.MatchString(t) || (t != "" && isBorder(clean[i])) || agentOutRe.MatchString(t) || strings.HasPrefix(t, "❯ ") {
 			break
@@ -313,6 +319,30 @@ func parsePromptView(lines []string, shortcuts bool) promptView {
 		t := strings.TrimSpace(l)
 		bar := strings.HasPrefix(t, "│")
 		t = strings.TrimSpace(strings.TrimPrefix(t, "│"))
+		if v.review && (i < qFrom || question < 0) {
+			// The review page: "● question" (it may wrap) and "→ answer".
+			switch {
+			case strings.EqualFold(t, "Review your answers"):
+			case strings.HasPrefix(t, "●"):
+				v.answers = append(v.answers, reviewItem{question: strings.TrimSpace(strings.TrimPrefix(t, "●"))})
+			case strings.HasPrefix(t, "→"):
+				if len(v.answers) == 0 || v.answers[len(v.answers)-1].answer != "" {
+					v.answers = append(v.answers, reviewItem{question: "…"}) // its question is not on the screen
+				}
+				a := &v.answers[len(v.answers)-1]
+				a.answer = strings.TrimSpace(strings.TrimSpace(a.answer + " " + strings.TrimPrefix(t, "→")))
+			case len(v.answers) == 0:
+				v.answers = append(v.answers, reviewItem{question: "… " + t}) // its start is above the lines read
+			default:
+				a := &v.answers[len(v.answers)-1]
+				if a.answer != "" {
+					a.answer += " " + t
+				} else {
+					a.question += " " + t
+				}
+			}
+			continue
+		}
 		switch {
 		case i >= qFrom && i <= question && question >= 0:
 			qParts = append(qParts, t)
@@ -383,6 +413,20 @@ const (
 func alertHTML(v promptView, agent, kind string, dl *alertDeadline) string {
 	r := func(s string) string { return format.Escape(format.Redact(s)) }
 	var b strings.Builder
+	if v.review {
+		fmt.Fprintf(&b, "❓ <b>Review your answers</b> · %s", format.Escape(agent))
+		for _, a := range v.answers {
+			b.WriteString("\n• " + r(format.Truncate(a.question, 200)))
+			if a.answer != "" {
+				b.WriteString("\n   → <b>" + r(format.Truncate(a.answer, 200)) + "</b>")
+			}
+		}
+		if v.question != "" {
+			b.WriteString("\n\n<b>" + r(v.question) + "</b>")
+		}
+		b.WriteString("\n<i>Tap Submit answers to send them, or Cancel.</i>")
+		return b.String()
+	}
 	if v.isQuestion() || kind == store.AlertQuestion {
 		fmt.Fprintf(&b, "❓ <b>Question</b> · %s", format.Escape(agent))
 	} else {
@@ -462,6 +506,9 @@ func alertHead(v promptView, agent, kind string) string {
 	icon := "🔐"
 	if v.isQuestion() || kind == store.AlertQuestion {
 		icon = "❓"
+	}
+	if v.review {
+		return icon + " " + format.Escape(agent) + ": Review your answers"
 	}
 	what := v.title
 	if len(v.body) > 0 {

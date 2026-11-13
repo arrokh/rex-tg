@@ -70,8 +70,12 @@ type RuntimeInput struct {
 // Config is the whole configuration.
 type Config struct {
 	Telegram struct {
-		APIBase       string  `toml:"api_base"`
-		Proxy         string  `toml:"proxy"`
+		APIBase string `toml:"api_base"`
+		Proxy   string `toml:"proxy"`
+		// Fallback lets rex-tg switch between the proxy and the direct
+		// route to Telegram when one of them stops working. It is used
+		// only when Proxy is set.
+		Fallback      bool    `toml:"fallback"`
 		RatePerSecond float64 `toml:"rate_per_second"`
 		RateBurst     int     `toml:"rate_burst"`
 	} `toml:"telegram"`
@@ -125,6 +129,12 @@ type Config struct {
 		// that a final answer offers: a button per file sends it, as a
 		// document. An empty list offers none.
 		SendFiles []string `toml:"send_files"`
+		// QuickReplies are buttons under each answer that send their text
+		// to the agent with one tap. Empty: none.
+		QuickReplies []string `toml:"quick_replies"`
+		// ShowChanges adds a button to an answer that shows what the turn
+		// changed in its git repository, in the Mini App ([miniapp] url).
+		ShowChanges bool `toml:"show_changes"`
 		// Stream shows the agent's text while it writes, as a Telegram draft
 		// (sendMessageDraft): word by word for pi, block by block for Claude
 		// Code and Codex. Off by default.
@@ -140,6 +150,18 @@ type Config struct {
 	} `toml:"display"`
 	// Alerts holds the [alerts] table: reminders of permission prompts and
 	// questions that wait for an answer.
+	// MiniApp is rex-tg's Telegram Mini App: pages too big for a message
+	// (a long answer, the changes of a turn), only for the owner.
+	MiniApp struct {
+		// URL is the public HTTPS address that reaches Listen, such as a
+		// Tailscale Funnel. Empty turns the Mini App off.
+		URL string `toml:"url"`
+		// Listen is the local address of the Mini App's server.
+		Listen string `toml:"listen"`
+		// AnswerPreview: an answer longer than this many characters shows
+		// its start, with a button that opens the whole answer.
+		AnswerPreview int `toml:"answer_preview"`
+	} `toml:"miniapp"`
 	Alerts struct {
 		RemindAfter Duration `toml:"remind_after"` // the first reminder, and the gap between two; 0 turns them off
 		Reminders   int      `toml:"reminders"`    // the most reminders for one prompt
@@ -175,6 +197,7 @@ func secs(s float64) Duration { return Duration{time.Duration(s * float64(time.S
 func Default(home string) Config {
 	var c Config
 	c.Telegram.APIBase = "https://api.telegram.org"
+	c.Telegram.Fallback = true
 	c.Telegram.RatePerSecond = 1
 	c.Telegram.RateBurst = 5
 
@@ -221,6 +244,10 @@ func Default(home string) Config {
 	c.Alerts.Reminders = 3
 	c.Display.SendImages = true
 	c.Display.SendFiles = []string{"pdf", "csv", "tsv", "html", "htm", "xlsx", "docx", "pptx"}
+	c.Display.QuickReplies = []string{"Continue", "Yes", "Run tests", "Commit"}
+	c.Display.ShowChanges = true
+	c.MiniApp.Listen = "127.0.0.1:8770"
+	c.MiniApp.AnswerPreview = 3000
 	c.Display.Stream = false // off: at its fastest it changes once a second
 	c.Display.StreamInterval = Duration{MinStreamInterval}
 	c.Display.MessageLength = 1500
@@ -373,6 +400,20 @@ func (c Config) validate() error {
 	}
 	if c.Display.MessageLength < MinMessageLength || c.Display.MessageLength > MaxMessageLength {
 		return fmt.Errorf("display.message_length %d: want %d to %d characters", c.Display.MessageLength, MinMessageLength, MaxMessageLength)
+	}
+	if u := c.MiniApp.URL; u != "" && !strings.HasPrefix(u, "https://") {
+		return fmt.Errorf("miniapp.url %q: Telegram opens a Mini App only from an https:// address", u)
+	}
+	if c.MiniApp.AnswerPreview < 2000 {
+		return fmt.Errorf("miniapp.answer_preview %d: at least 2000 (the chat shows about 1200 characters of a longer answer)", c.MiniApp.AnswerPreview)
+	}
+	if len(c.Display.QuickReplies) > 8 {
+		return fmt.Errorf("display.quick_replies: at most 8 buttons")
+	}
+	for _, q := range c.Display.QuickReplies {
+		if n := len([]rune(strings.TrimSpace(q))); n == 0 || n > 64 {
+			return fmt.Errorf("display.quick_replies %q: 1 to 64 characters", q)
+		}
 	}
 	if c.Display.SummaryAfter.Duration < 0 {
 		return fmt.Errorf("display.summary_after %v: \"0s\" or more", c.Display.SummaryAfter.Duration)

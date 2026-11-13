@@ -145,9 +145,15 @@ type InlineKeyboardMarkup struct {
 
 // InlineKeyboardButton is one button; set CallbackData or URL.
 type InlineKeyboardButton struct {
-	Text         string `json:"text"`
-	CallbackData string `json:"callback_data,omitempty"`
-	URL          string `json:"url,omitempty"`
+	Text         string      `json:"text"`
+	CallbackData string      `json:"callback_data,omitempty"`
+	URL          string      `json:"url,omitempty"`
+	WebApp       *WebAppInfo `json:"web_app,omitempty"` // opens a Mini App (private chats only)
+}
+
+// WebAppInfo is the address of a Mini App that a button opens.
+type WebAppInfo struct {
+	URL string `json:"url"`
 }
 
 // BotCommand is one entry for SetMyCommands.

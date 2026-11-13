@@ -127,7 +127,11 @@ func (s *Sender) sendRich(ctx context.Context, p store.Part, silent bool) (int64
 	if err := s.token(ctx); err != nil {
 		return 0, vUnknown, err
 	}
-	m, err := s.tg.SendRichMessage(ctx, p.ChatID, p.MessageThreadID, p.Content, silent, nil)
+	var markup *telegram.InlineKeyboardMarkup
+	if s.markup != nil {
+		markup = s.markup(p)
+	}
+	m, err := s.tg.SendRichMessage(ctx, p.ChatID, p.MessageThreadID, p.Content, silent, markup)
 	switch telegram.Classify(err) {
 	case telegram.ClassParseEntities, telegram.ClassBadRequest:
 	default:
@@ -136,9 +140,9 @@ func (s *Sender) sendRich(ctx context.Context, p store.Part, silent bool) (int64
 	s.log.Warn("rich message rejected; falling back", "outbox", p.OutboxID, "part", p.Part, "err", err)
 	if utf8.RuneCountInString(p.Content) <= maxFallbackText {
 		if ms := format.Messages(p.Content, maxFallbackText, maxFallbackText); len(ms) == 1 {
-			return s.sendText(ctx, p.ThreadID, p.ChatID, p.MessageThreadID, ms[0].HTML, true, silent, nil)
+			return s.sendText(ctx, p.ThreadID, p.ChatID, p.MessageThreadID, ms[0].HTML, true, silent, markup)
 		}
-		return s.sendText(ctx, p.ThreadID, p.ChatID, p.MessageThreadID, p.Content, false, silent, nil)
+		return s.sendText(ctx, p.ThreadID, p.ChatID, p.MessageThreadID, p.Content, false, silent, markup)
 	}
 	if err := s.token(ctx); err != nil {
 		return 0, vUnknown, err

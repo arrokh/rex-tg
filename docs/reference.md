@@ -84,6 +84,28 @@ Doctor checks:
 
 ## Using rex-tg
 
+### Commands in a topic
+
+Text that starts with `/` goes to the agent, except the commands below and the main-chat commands (`/agents`, `/new`, and so on). `//name` sends `/name` to the agent.
+
+| Command | What it does |
+| --- | --- |
+| `/info` | Shows the session, the pane, the state, and the settings. |
+| `/screen [lines]`, `/screen text [lines]` | Sends the pane's screen as a picture, or as text. See [`/screen`](#screen). |
+| `/approve`, `/deny` | Answers the open prompt. |
+| `/esc`, `/interrupt`, `/key <keys>` | Presses Escape, stops the turn, or presses keys. |
+| `/force <text>` | Types text even when a prompt is open. |
+| `/model [name]`, `/effort [level]` | Shows or changes the model and the thinking effort. See [`/model` and `/effort`](#model-and-effort). |
+| `/mode progress\|block\|final` | Sets how replies appear. |
+| `/verbose on\|full\|off` | Shows each tool call (`on`), and also its output (`full`). |
+| `/reasoning on\|off` | Shows the agent's thinking, when the agent stores it. |
+| `/resend [id]` | Sends again a reply that may not have arrived. |
+| `/mute`, `/unmute` | Answers arrive without or with sound. |
+| `/at <time or delay> <text>`, `/at`, `/at cancel <n>` | Sends text to the agent later, lists the schedules, or removes one. See [`/at`](#at). |
+| `/rename <name>`, `/rename auto` | Names the topic, and its Rex tab if the agent was started with `/new`. `/rename auto` names it after the session again. |
+| `/unlink` | Closes the topic in rex-tg. |
+| `/help` | Lists the commands. |
+
 ### Agents and topics
 
 - `/agents` lists the agents: the ones that wait for you first, then working, then idle, each with how long it has been in that state, such as `waiting for you · 12m`. `💻 on the Mac` marks a session in use on the Mac.
@@ -139,8 +161,20 @@ Doctor checks:
 - Buttons for the model: Claude Code has `opus`, `sonnet`, `haiku`, and `fable`. Codex has the models in `~/.codex/models_cache.json`. pi has none, because it knows hundreds of models. Set your own with `[agents.<name>.choices]` (see Configuration).
 - `//model` still sends `/model` to the agent unchanged.
 
+### `/at`
+
+- `/at 09:00 run the tests and report` sends that text to the topic's agent at the next 09:00, by the clock of this Mac. If 09:00 has passed today, it is tomorrow's.
+- `/at 30m <text>` and `/at 2h <text>` send it after a delay. `1h30m` and `45s` work too. The longest delay is 30 days.
+- `/at` with no text lists the topic's schedules, numbered, with their times. `/at cancel <n>` removes one.
+- A topic holds at most 20 schedules. The text is at most 4000 characters.
+- When the time comes, rex-tg posts a silent note, `⏰ Sending the scheduled message: …`, and queues the text as if you had typed it in the topic. All the usual checks apply: the agent must be in front, a prompt that is open makes it wait, `input.while_busy` decides whether it steers a running turn, and you get the waiting notice. Text that starts with `/` or `!` waits until the agent is idle.
+- Schedules are kept across a restart. A schedule that came due while rex-tg was not running is sent at once, with a note, when it is less than 1 hour late. When it is later, it is not sent, and the topic says `⏰ Missed: … (rex-tg was not running at 09:00)`.
+- A schedule is removed when it is sent, cancelled, or its topic closes. A schedule is sent once, also across a restart.
+
 ### Progress and answers
 
+- Only two kinds of message make a sound: the agent's answer (its first message) and a prompt that waits for you (an alert or its reminder). Progress, notices, the waiting notice, and replies to commands come silently. `/mute` makes a topic's answers and reminders silent too. An alert still makes a sound.
+- Under each answer, quick replies send their text to the agent with one tap, as if you typed it. The defaults are `Continue`, `Yes`, `Run tests`, and `Commit`. Set your own with `[display] quick_replies`: at most 8, each 1 to 64 characters, or `[]` for none. A quick reply waits like any typed message, for example while a prompt is open. An answer that comes as a `.md` file has no buttons.
 - `typing…` shows while the agent works, in the topic you used last.
 - The progress message appears after 2 seconds without an answer. It shows the latest commentary and the recent tool calls. It never shows tool output, unless `/verbose full` is on.
 - The progress message stays the last message of a running turn. When an alert, a notice, or your own message comes below it, it moves down. While a prompt waits for your answer, the alert stays last.
@@ -148,7 +182,7 @@ Doctor checks:
 - Its first icon is an hourglass (⏳ ⌛) that turns every 3 seconds while the agent works, and the timer moves with it, so you can see that the turn is still running. Set `[display] progress_animation` to change the pace, or to `"0s"` to stop it; then the icon turns only when the message changes anyway.
 - Its timer moves on while the agent thinks or a long tool runs: every 10 seconds at first, then less often, at most once a minute later in a long turn. It stops while rex-tg waits for your answer.
 - At the end of the turn, the tool rows stay in a collapsed quote under the summary line.
-- A long answer comes as several messages of about 1500 characters, split at paragraphs and headings like a chat, never inside a code block, and without `(1/2)` numbers. Only the first one makes a sound. `message_length` sets the size (300 to 4000; 4000 splits only when Telegram's limit needs it). An answer that would take more than 6 messages comes in fuller ones, up to 4000 characters each. An answer longer than 16000 characters comes as a `.md` file.
+- A long answer comes as several messages of about 1500 characters, split at paragraphs and headings like a chat, never inside a code block, and without `(1/2)` numbers. Only the first one makes a sound. `message_length` sets the size (300 to 4000; 4000 splits only when Telegram's limit needs it). An answer that would take more than 6 messages comes in fuller ones, up to 4000 characters each. In rex-tg's own format, an answer longer than 16000 characters comes as a `.md` file.
 - While the agent writes, the text shows at the bottom of the topic as a draft, Telegram's preview of a message being written. pi's text grows word by word. Claude Code and Codex show each finished block, because they write nothing earlier. A draft never becomes a message: the answer replaces it. Final mode shows no drafts. Drafts are off by default; set `stream = true` to turn them on. `stream_interval` sets how often the draft changes: `1s` is the default and the fastest, because drafts share Telegram's budget of about one message a second in a chat; a larger value such as `"3s"` leaves more of it to answers.
 - Images named in a final answer come by themselves, as photos, up to 10 per answer. Set `send_images = false` to turn this off.
 - Files go to Telegram only from the agent's folder, your home folder, or a temporary folder, never from a hidden place such as `~/.ssh` or `.env`, or from `~/Library`. A tap checks the place again before the file goes.
@@ -167,6 +201,7 @@ Doctor checks:
 - Codex prints the key of each answer, such as `(y)` or `(esc)`; its buttons press that key.
 - Alerts read like the prompt: who asks, what it wants to do (the command in monospace), warnings, and the question in bold; the answers are the buttons. Once answered, an alert shrinks to one line with the question and your answer, so old prompts do not fill the topic.
 - Claude Code questions: tap an answer, or reply with text to give your own answer ("Type something"). For answers to tick, the `☐` buttons tick them and `Next ➡` goes on. With several questions, each next one, and the "Submit answers" page, comes as its own alert.
+- The review page of several questions (`Review your answers`) lists each question and its answer, as `• question` and `→ answer`. Its buttons are `1 Submit answers`, `2 Cancel`, and `Esc`. Tap `1 Submit answers` to send the answers.
 
 | Agent | Buttons | Reply with text |
 | --- | --- | --- |
@@ -174,6 +209,15 @@ Doctor checks:
 | Claude Code question | one per answer (☐ to tick, `Next ➡`), `Esc` | your own answer ("Type something") |
 | Codex | `Yes, proceed` (y), `don't ask again` (p), `No …` (Esc) | No (Esc) + your note |
 | pi | pi asks nothing before it acts | — |
+
+### `/screen`
+
+- `/screen [lines]` in a topic sends the pane's screen as a picture, without sound. Light text on a dark background is easy to read on a phone. The caption has the topic name and the time.
+- `[lines]` is how many of the bottom lines to show: 30 by default, at most 80. A picture holds at most 60 lines and 200 columns; rex-tg keeps the bottom lines.
+- The text is redacted first, as for every screen, so no secret is drawn.
+- The font is Menlo (macOS). Characters that Menlo lacks, such as many emoji, show as an empty box. Without Menlo, a small built-in font is used.
+- `/screen text [lines]` sends monospace text of up to 80 lines; longer text keeps its last 3800 characters. `text` and the number can come in either order. rex-tg also sends text when it cannot make the picture or Telegram refuses it.
+- If the send fails and the outcome is unknown, rex-tg does not send it again. Ask `/screen` again.
 
 ### Files and photos
 
@@ -197,6 +241,7 @@ Every key, with its default:
 [telegram]
 api_base = "https://api.telegram.org"  # Telegram Bot API address. Keep the default.
 proxy = ""                              # Proxy for Telegram: http, https, socks5, or socks5h URL. Empty uses HTTPS_PROXY or ALL_PROXY.
+fallback = true                         # Used only with proxy: switch to the direct route when the proxy fails, and back.
 rate_per_second = 1                     # Messages per second for the whole chat.
 rate_burst = 5                          # Messages that may be sent at once above that rate.
 
@@ -270,6 +315,8 @@ summary_after = "2m"                    # Keep the "Done" summary only for turns
 rich_messages = true                    # Send final answers as Telegram rich messages: Telegram renders tables and code itself.
 send_images = true                      # Send the image files that a final answer names.
 send_files = ["pdf", "csv", "tsv", "html", "htm", "xlsx", "docx", "pptx"]  # Other file types that a final answer offers, with a button to send each.
+quick_replies = ["Continue", "Yes", "Run tests", "Commit"]  # Buttons under each answer that send their text to the agent: at most 8, 1 to 64 characters each.
+show_changes = true                     # A button under an answer that shows what the turn changed (needs [miniapp] url).
 message_length = 1500                   # About how long one message of a long answer is (300 to 4000).
 stream = false                          # Show the agent's text while it writes, as a Telegram draft.
 stream_interval = "1s"                  # Least time between two drafts of a topic. 1s is the fastest: Telegram allows about one message a second in a chat.
@@ -286,6 +333,11 @@ busy_after_typing = "15s"               # After a message is typed, the pane cou
 while_busy = "steer"                    # A message sent while the agent works: "steer" joins the current run, "wait" waits until idle.
 max_upload_mb = 20                      # Largest photo or file to download from Telegram.
 
+[miniapp]
+url = ""                                # The Mini App's public https:// address (see Mini App). Empty turns it off.
+listen = "127.0.0.1:8770"               # Its local address.
+answer_preview = 3000                   # Longer answers show their start and open whole in the Mini App. At least 2000.
+
 [voice]
 whisper_cli = ""                        # Path to whisper-cli. Empty turns voice notes off.
 model = ""                              # Path to a ggml model file. Use an absolute path.
@@ -295,13 +347,40 @@ language = ""                           # Language code for whisper.cpp, such as
 dir = "~/.local/state/rex-tg"           # Database, spool, logs, and uploads.
 ```
 
+### Mini App
+
+The Mini App shows what does not fit a chat message. Its pages open from buttons under an answer, and only for you:
+
+- `📄 Whole answer`: an answer longer than `[miniapp] answer_preview` (3000 characters by default) shows its start in the chat. The whole answer, with its tables and code, is in the Mini App. Such an answer is not sent as one rich message.
+- `📝 2 files · +40 −12`: what the turn changed in the agent's git repository, file by file. rex-tg takes a snapshot of the working files (tracked and new, not ignored) when a turn starts and when it ends with its answer. The snapshots use a copy of git's index, so your own index stays as it is. They write objects into the repository, which git cleans up later. Other agents that work in the same repository at the same time show up in it too. Secrets are removed from the diff. A folder that is not a git repository gets no button. Set `[display] show_changes = false` to turn it off. A repository with more than 300 new files that are not ignored, or more than 20 MB of them, gets no button: the snapshot would be slow.
+
+The Mini App needs a public HTTPS address that reaches this Mac. It is off until `url` is set. With Tailscale:
+
+1. Start the Funnel for rex-tg's port: `tailscale funnel --bg --https=8443 http://127.0.0.1:8770`. `--bg` keeps it running after the command ends. Funnel works on ports 443, 8443, and 10000. Funnel must be on for your tailnet: HTTPS certificates in the admin console, and the `funnel` attribute in your access controls. `tailscale funnel status` shows its address.
+2. Put the address in the config. Its port must be the Funnel's port, and the Funnel's target must be the `listen` address:
+
+```toml
+[miniapp]
+url = "https://<your-mac>.<tailnet>.ts.net:8443"   # https:// only. Empty turns the Mini App off.
+listen = "127.0.0.1:8770"                           # the local target of the Funnel; keep it on 127.0.0.1
+answer_preview = 3000                               # longer answers open in the Mini App
+```
+
+Restart rex-tg with `launchctl kickstart -k gui/$(id -u)/local.rex-tg`. Then check the log: `mini app: serving` means the server runs. Send a long answer and tap `📄 Whole answer` to test it.
+
+Pages are reachable only through Telegram's signed requests, and only for the owner. Each page request carries the Mini App's init data, which Telegram signs for the account that opened it. rex-tg checks the signature with a key made from the bot token. It refuses a signature that is more than 24 hours old, or one that is not the owner's, and the log says `mini app: refused a request`, with the reason. The shell files `/app` and `/app.js` hold no data, so they need no signature. Pages are kept for 30 days.
+
+Funnel makes the server reachable from the internet, so keep `listen` on `127.0.0.1`. To turn the Mini App off, set `url = ""` and restart rex-tg. `tailscale funnel reset` removes every Funnel setting of this Mac.
+
+Answers are kept for 30 days, changes for 14, and at most 500 pages in all. While the Mini App's server is not running, answers come whole in the chat.
+
 ### Tables and rich messages
 
 A code block with a line longer than 80 characters does not fit a phone. It stays in the message as a short preview (3 lines), and the whole block comes right after as a file, such as `code-1.go` (named by the block's language, else `.txt`). Tap it to open or copy it.
 
 A table that is wider than a phone (more than 40 characters) becomes a list: one block per row, with the first cell in bold and `Column: value` for the others. A narrower table stays a monospace grid.
 
-Final answers go out in Telegram's rich message format (`[display] rich_messages`, on by default), so Telegram renders tables, code, and headings itself. If Telegram rejects one, rex-tg sends it in its own format (Telegram HTML, with the tables as above). An answer that does not fit one message goes as a `.md` file. Set `rich_messages = false` to always use rex-tg's own format.
+Final answers go out in Telegram's rich message format (`[display] rich_messages`, on by default), so Telegram renders tables, code, and headings itself. An answer of up to 32768 characters goes as one rich message. If Telegram rejects one, rex-tg sends the answer again in its own format (Telegram HTML, with the tables as above): as one message when it is up to 4000 characters, else as a `.md` file. Set `rich_messages = false` to always use rex-tg's own format. There, an answer longer than 16000 characters comes as a `.md` file. With the Mini App set up, an answer longer than `answer_preview` shows its start instead (see [Mini App](#mini-app)).
 
 ## Voice notes
 
@@ -367,6 +446,8 @@ To delete the token: `security delete-generic-password -s rex-tg -a bot-token`. 
 | `/new`: "has not reported its session yet" | The agent may wait for something on its screen, such as a login. The message shows the screen. Deal with it on the Mac, then open the agent with `/agents`. |
 | `/new`: "did not react to a key" | The startup question did not move its cursor. Answer it on the Mac. |
 | Telegram returns 409 Conflict | Another program uses the same bot token. Only one daemon may poll Telegram. |
+| Mini App page does not open | Check that `[miniapp] url` is the Funnel's `https://` address with the Funnel's port, and that the Funnel runs (`tailscale funnel status`). `mini app: serving` in the log means the server runs. See [Mini App](#mini-app). |
+| The log says `mini app: listen` | The `[miniapp] listen` address is in use or not valid. The buttons still show, but their pages do not open. Set `listen`, then restart rex-tg. |
 | Telegram says the bot was blocked | Unblock the bot in Telegram. |
 | `doctor` reports unknown line types | The agent changed its transcript format. rex-tg ignores those lines. The adapter may need an update. Once a rex-tg update knows a type, doctor stops reporting it. |
 | "Not sent: the pane now runs ..." | The agent no longer runs in the pane. Start it again, or open another agent with `/agents`. |
@@ -378,7 +459,8 @@ Some networks drop the route to Telegram for a minute or two, again and again. R
 - rex-tg notices a dead connection in about 15 seconds. It retries every 0.5 to 2 seconds, and sends queued replies within seconds after the route returns.
 - The log has one warning when a break starts, and one "Telegram reachable again" line when it ends.
 - If the breaks keep coming, send Telegram through a proxy or VPN: set `[telegram] proxy`, such as `"socks5h://127.0.0.1:40000"`. It takes an `http`, `https`, `socks5`, or `socks5h` URL. The log shows only the scheme and host, never a password.
-- When `proxy` is empty, rex-tg uses `HTTPS_PROXY` or `ALL_PROXY` from the daemon's environment.
+- With `proxy` set, rex-tg also uses the direct route when the proxy stops working. This is `[telegram] fallback`, on by default. Three requests in a row that never left the machine (a dial error, a TLS handshake timeout, a refused connection) make rex-tg use the other route for the next requests. It switches back the same way. Such a request is also tried once at once on the other route, because nothing was posted. A request with an unknown outcome is never sent again on the other route. The log has one line `Telegram route: direct` or `Telegram route: proxy` for each switch. Set `fallback = false` to keep the proxy only.
+- When `proxy` is empty, rex-tg uses `HTTPS_PROXY` or `ALL_PROXY` from the daemon's environment. There is no fallback then.
 
 ## Privacy
 
@@ -387,4 +469,4 @@ Some networks drop the route to Telegram for a minute or two, again and again. R
 - The database keeps message text. rex-tg deletes sent messages after 30 days.
 - Only you can read the state folder and the spool folder.
 - Before rex-tg types, it checks that the sender is the owner, the topic is live, the agent is in front in its pane, and no permission prompt is open. `/force` skips only the last check.
-- rex-tg makes only outgoing connections, opens no port, and never starts a Rex server.
+- rex-tg makes outgoing connections to Telegram and to Rex, and never starts a Rex server. Its one listening port is the Mini App's. It exists only when `[miniapp] url` is set (see [Mini App](#mini-app)).
