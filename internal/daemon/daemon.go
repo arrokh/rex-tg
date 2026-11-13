@@ -117,7 +117,7 @@ func Run(ctx context.Context, opt Options) error {
 		if u := cfg.TelegramProxy(); u != nil {
 			log.Info("Telegram goes through a proxy", "proxy", u.Scheme+"://"+u.Host) // never the password
 		}
-		tg = telegram.New(opt.Token, telegram.WithBaseURL(cfg.Telegram.APIBase), telegram.WithProxy(cfg.TelegramProxy()))
+		tg = telegram.New(opt.Token, telegram.WithBaseURL(cfg.Telegram.APIBase), telegram.WithProxy(cfg.TelegramProxy()), telegram.WithFallback(cfg.Telegram.Fallback), telegram.WithLogger(log))
 	}
 	// Every message number that a call returns goes into the store: the
 	// bot's own messages and those of updates. The sender checks a reply

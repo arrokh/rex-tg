@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"mime/multipart"
 	"net"
 	"net/http"
@@ -54,6 +55,9 @@ type Client struct {
 	downloadTimeout time.Duration
 	onMessage       atomic.Pointer[func(chatID, messageID int64)]
 	proxy           *url.URL
+	fallback        bool
+	log             *slog.Logger
+	fo              *failover // nil unless a proxy and a fallback are set
 }
 
 // OnMessage sets a function that gets the chat and the number of every
@@ -132,6 +136,14 @@ func WithBaseURL(u string) Option { return func(c *Client) { c.base = strings.Tr
 // WithHTTPClient.
 func WithProxy(u *url.URL) Option { return func(c *Client) { c.proxy = u } }
 
+// WithFallback lets the client switch between the proxy and the direct route
+// when one of them keeps failing with "not sent" errors. It needs WithProxy
+// and has no effect with WithHTTPClient.
+func WithFallback(on bool) Option { return func(c *Client) { c.fallback = on } }
+
+// WithLogger sets the logger of route switches (default: none).
+func WithLogger(l *slog.Logger) Option { return func(c *Client) { c.log = l } }
+
 // WithHTTPClient sets the HTTP client. Timeouts are applied through contexts.
 func WithHTTPClient(hc *http.Client) Option {
 	return func(c *Client) {
@@ -173,6 +185,11 @@ func New(token string, opts ...Option) *Client {
 	}
 	if c.hc == nil {
 		c.hc = &http.Client{Transport: newTransport(c.proxy)}
+		if c.proxy != nil && c.fallback {
+			direct := newTransport(nil)
+			direct.Proxy = nil // really direct: not the proxy from the environment
+			c.fo = newFailover(c.hc, &http.Client{Transport: direct}, c.log)
+		}
 	}
 	return c
 }
@@ -223,7 +240,27 @@ func (c *Client) unknown(method, format string, args ...any) error {
 }
 
 // call sends one request and decodes the result into out (may be nil).
+// With a fallback route, a request that was not sent is tried once more on
+// the other route at once: nothing was posted, so this cannot send it twice.
+// Any other failure is returned as it is.
 func (c *Client) call(ctx context.Context, method string, timeout time.Duration, contentType string, body []byte, out any) error {
+	if c.fo == nil {
+		return c.attempt(ctx, c.hc, method, timeout, contentType, body, out)
+	}
+	route, hc := c.fo.current()
+	err := c.attempt(ctx, hc, method, timeout, contentType, body, out)
+	c.fo.report(ctx, route, err)
+	if Classify(err) != ClassNotSent || ctx.Err() != nil {
+		return err
+	}
+	other := 1 - route
+	err = c.attempt(ctx, c.fo.clients[other], method, timeout, contentType, body, out)
+	c.fo.report(ctx, other, err)
+	return err
+}
+
+// attempt sends one request through hc.
+func (c *Client) attempt(ctx context.Context, hc *http.Client, method string, timeout time.Duration, contentType string, body []byte, out any) error {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.base+"/bot"+c.token+"/"+method, bytes.NewReader(body))
@@ -242,7 +279,7 @@ func (c *Client) call(ctx context.Context, method string, timeout time.Duration,
 			}
 		},
 	}))
-	resp, err := c.hc.Do(req)
+	resp, err := hc.Do(req)
 	if err != nil {
 		if !wrote.Load() {
 			return c.notSent(method, err)
@@ -607,7 +644,11 @@ func (c *Client) DownloadFile(ctx context.Context, filePath string, w io.Writer,
 	if err != nil {
 		return c.wrapErr(method, err)
 	}
-	resp, err := c.hc.Do(req)
+	hc := c.hc
+	if c.fo != nil {
+		_, hc = c.fo.current() // follows the route, but a download does not count
+	}
+	resp, err := hc.Do(req)
 	if err != nil {
 		return c.wrapErr(method, err)
 	}

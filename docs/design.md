@@ -698,6 +698,7 @@ Timeouts:
 - Connecting and the TLS handshake time out after 5 seconds each. TCP keepalive (5 s idle, 3 probes 3 s apart) ends a dead connection in about 15 seconds, so a silent outage does not hold a long poll for its whole timeout. Connections still use `SO_LINGER` 0 and HTTP/1.1 only.
 - After a network failure, the poll loop (and the startup `getMe`) retries after 0.5 s, doubling to 2 s. After an API error, it retries after 1 s, doubling to 30 s, and waits at least `retry_after` for a 429. The first failure of an outage is logged as a warning, later ones as debug, and one info line says when Telegram is reachable again and how long it was down.
 - `telegram.proxy` (optional) sends all Telegram traffic through an `http`, `https`, `socks5`, or `socks5h` proxy. When empty, `HTTPS_PROXY` and `ALL_PROXY` apply.
+- `telegram.fallback` (default true, used only with a proxy) lets the client use the direct route when the proxy fails. The client keeps a current route, the proxy at first. After 3 failures in a row that prove the request was not sent (`NotSentError`), later calls use the other route, and the same rule switches back. This includes long polls. A request that was not sent is also tried once at once on the other route, since nothing was posted. A failure with an unknown outcome is never sent again on the other route, so the at-most-once rule holds (9.1); it neither counts as a failure nor resets the run. An answer from Telegram, even a refusal, resets the run. Each switch logs one line, `Telegram route: direct` or `Telegram route: proxy`, with the reason class and never a URL.
 
 Telegram errors:
 
@@ -1018,6 +1019,7 @@ Config example:
 [telegram]
 # The token is in the Keychain. The owner is saved by pairing (rex-tg login).
 # proxy = "socks5://127.0.0.1:1080"  # optional; empty uses HTTPS_PROXY / ALL_PROXY
+# fallback = true                    # with a proxy: use the direct route when the proxy fails
 rate_per_second = 1
 rate_burst = 5
 

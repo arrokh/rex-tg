@@ -208,6 +208,7 @@ func TestLoadErrors(t *testing.T) {
 		{"relative state dir", "[state]\ndir = \"state\"\n", "absolute"},
 		{"proxy scheme", "[telegram]\nproxy = \"ftp://p.example:21\"\n", "socks5h"},
 		{"proxy no host", "[telegram]\nproxy = \"socks5://\"\n", "host"},
+		{"fallback not a bool", "[telegram]\nfallback = \"yes\"\n", "fallback"},
 		{"proxy not a url", "[telegram]\nproxy = \"nonsense\"\n", "telegram.proxy"},
 		{"plain http api", "[telegram]\napi_base = \"http://api.telegram.org\"\n", "https"},
 		{"empty new session", "[rex]\nnew_session = \" \"\n", "rex.new_session"},
@@ -286,5 +287,16 @@ func TestChoices(t *testing.T) {
 	}
 	if _, err := Load(write(t, "[agents.codex.choices]\nmodel = [\"a b\"]\n"), "/h"); err == nil || !strings.Contains(err.Error(), "agents.codex.choices.model") {
 		t.Errorf("a bad value gave %v", err)
+	}
+}
+
+func TestFallbackConfig(t *testing.T) {
+	c, err := Load(write(t, ""), "/h")
+	if err != nil || !c.Telegram.Fallback {
+		t.Fatalf("default: %v, %v", c.Telegram.Fallback, err)
+	}
+	c, err = Load(write(t, "[telegram]\nfallback = false\n"), "/h")
+	if err != nil || c.Telegram.Fallback {
+		t.Fatalf("off: %v, %v", c.Telegram.Fallback, err)
 	}
 }
