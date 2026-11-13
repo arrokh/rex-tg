@@ -92,6 +92,7 @@ Doctor checks:
 - An agent marked `(guess)` has no hook report yet. rex-tg took the newest transcript in the agent's folder that changed after the agent started.
 - An agent marked `(waiting for session)` has no known session file yet. rex-tg learns it at the agent's next prompt or turn end.
 - A topic is named after its Rex pane when you named the pane, else after the agent's session name. The name follows changes of both.
+- A name starts with a letter or digit, because Telegram draws a topic's icon from its first character. pi's `[folder][kind]` tags before a session name go: the folder tag is dropped, and other tags move to the end. Markdown marks (`**`, `` ` ``) and leading symbols go too.
 - A new session in the same pane, such as after the agent's `/clear`, takes over the topic. The bot posts a divider, such as `── claude · new session (clear) ──`.
 - After a Rex restart, the topic follows the session when the agent resumes in its pane.
 - When an agent exits or its pane closes, the topic shows `🔴 agent stopped`, a running turn ends, and the topic's name gets a 🔴. A tab in the `/new` session gets the 🔴 too, until the agent runs again. Messages you send there are refused, with a reason.
@@ -141,6 +142,7 @@ Doctor checks:
 - `typing…` shows while the agent works, in the topic you used last.
 - The progress message appears after 2 seconds without an answer. It shows the latest commentary and the recent tool calls. It never shows tool output, unless `/verbose full` is on.
 - The progress message stays the last message of a running turn. When an alert, a notice, or your own message comes below it, it moves down. While a prompt waits for your answer, the alert stays last.
+- Its first icon is a spinner (◐ ◓ ◑ ◒) that turns one step with each edit, so you can see that the turn is still running.
 - Its timer moves on while the agent thinks or a long tool runs: every 10 seconds at first, then less often, at most once a minute later in a long turn. It stops while rex-tg waits for your answer.
 - At the end of the turn, the tool rows stay in a collapsed quote under the summary line.
 - A long answer comes as several messages of about 1500 characters, split at paragraphs and headings like a chat, never inside a code block, and without `(1/2)` numbers. Only the first one makes a sound. `message_length` sets the size (300 to 4000; 4000 splits only when Telegram's limit needs it). An answer that would take more than 6 messages comes in fuller ones, up to 4000 characters each. An answer longer than 16000 characters comes as a `.md` file.
@@ -288,9 +290,11 @@ language = ""                           # Language code for whisper.cpp, such as
 dir = "~/.local/state/rex-tg"           # Database, spool, logs, and uploads.
 ```
 
-### Rich messages
+### Tables and rich messages
 
-`[display] rich_messages = true` sends final answers in Telegram's rich message format. If Telegram rejects one, rex-tg sends plain text. Text longer than 4000 characters goes as a `.md` file.
+A table that is wider than a phone (more than 40 characters) becomes a list: one block per row, with the first cell in bold and `Column: value` for the others. A narrower table stays a monospace grid.
+
+`[display] rich_messages = true` sends final answers in Telegram's rich message format, so Telegram renders tables and code itself. If Telegram rejects one, rex-tg sends plain text. Text longer than 4000 characters goes as a `.md` file.
 
 ## Voice notes
 

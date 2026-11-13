@@ -344,7 +344,7 @@ Rules:
 - **Agent exits, or its pane closes.** The topic becomes `offline`. rex-tg posts why: "🔴 pi stopped: its Rex pane was closed.", "…: it exited, and the pane is still open.", or "…: another session took its pane." A turn that was running ends within 2 seconds with a "🔴 Stopped" summary, so "typing…" stops (the agent's last lines are read by then; an answer gets 5 seconds). The topic's name, and the tab's name in the `/new` session, get a 🔴 in front until the agent runs again; then rex-tg posts "🟢 pi is running again." and the 🔴 goes away. Messages that you send while it is offline are refused with a reason.
 - **Deleted topic.** Telegram does not tell the bot that you deleted a topic. rex-tg finds out in two ways, and then the topic becomes `closed`: a send or a rename fails with "message thread not found", or you tap the agent in `/agents`. That button reports the tap to rex-tg instead of opening a link, and rex-tg first sets the topic's name with `editForumTopic` (Telegram answers `TOPIC_NOT_MODIFIED` when the name is the same). When the topic is gone and the pane and the session still exist, rex-tg makes a new topic for the session, with the intro card and the backfill (found live, spike S1).
 - **Unlink.** `/unlink` closes the topic in rex-tg. The topic stays in Telegram as history.
-- **Topic name.** A short name, at most 32 characters, cut at the end of a word: the name that you gave the Rex pane, else the session name, else the project folder, else the runtime. Rex's default pane name `shell` (and shell or agent program names) do not count. Every 30 seconds, rex-tg compares each live topic's name with its pane and session and renames the topic with `editForumTopic` when it changed. A take-over renames at once. When the agent's pane is in the Rex session for `/new` (`rex.new_session`, section 8.7), rex-tg gives the pane's tab the topic's name (`rex window rename`). It does this when the topic is linked and at every name check, whenever the tab's label (from `rex window ls`) differs, so nothing is renamed when it already matches. When the topic has only the folder name, the tab keeps the `<folder> · <agent>` form. Two tabs in that session never share a label: rex-tg adds ` #2`, ` #3`. While the topic is offline, the tab gets the same 🔴 in front; it goes away when the agent runs again. Tabs in other sessions are yours, and keep their names.
+- **Topic name.** A short name, at most 32 characters, cut at the end of a word: the name that you gave the Rex pane, else the session name, else the project folder, else the runtime. Rex's default pane name `shell` (and shell or agent program names) do not count. A name starts with a letter or digit, because Telegram draws a topic's icon from its first character: leading tags in brackets (pi's `[folder][kind] title`) go, the one that repeats the folder's name is dropped and the others move to the end; Markdown marks and the symbols before the first letter or digit go too (`tidyName`). Every 30 seconds, rex-tg compares each live topic's name with its pane and session and renames the topic with `editForumTopic` when it changed. A take-over renames at once. When the agent's pane is in the Rex session for `/new` (`rex.new_session`, section 8.7), rex-tg gives the pane's tab the topic's name (`rex window rename`). It does this when the topic is linked and at every name check, whenever the tab's label (from `rex window ls`) differs, so nothing is renamed when it already matches. When the topic has only the folder name, the tab keeps the `<folder> · <agent>` form. Two tabs in that session never share a label: rex-tg adds ` #2`, ` #3`. While the topic is offline, the tab gets the same 🔴 in front; it goes away when the agent runs again. Tabs in other sessions are yours, and keep their names.
 
 ## 8. Telegram display
 
@@ -362,7 +362,7 @@ OpenClaw and Hermes run the model loop themselves, so they get the answer token 
 While the agent works, one progress message is edited in place:
 
 ```
-⚙️ Running the parser tests to find the failure
+◓ Running the parser tests to find the failure
 ✅ 📖 Read · src/parser.go
 ✅ 🔍 Grep · "func parseLine"
 ✅ ✏️ Edit · src/parser.go
@@ -370,7 +370,7 @@ While the agent works, one progress message is edited in place:
 ⏱ 1m 12s · 4 tools
 ```
 
-- **Headline.** The first line of the agent's latest commentary, or "Working…" before there is any.
+- **Headline.** The first line of the agent's latest commentary as plain text (Markdown marks such as `**` dropped), or "Working…" before there is any. Its icon is a spinner (◐ ◓ ◑ ◒) that turns one step with each edit, so a running turn looks alive. A Telegram message cannot animate by itself, and an edit only for the spinner would spend the rate budget, so it turns with the edits that go out anyway (new tools, commentary, the timer).
 - **Rows.** One row per tool call: `▸` while it runs, `✅` when it ends, `❌` when it fails. Repeated calls of the same tool in a row collapse, for example `📖 Read ×3`. At most 8 rows of at most 120 characters, as in OpenClaw. Older rows drop off the top.
 - **Labels (D14).** A row shows a short label: Claude's Bash `description`, a file path relative to the project, or a search pattern. For a shell call without a description, it shows the start of the command after secret removal. A row never shows tool output or file contents.
 - **Footer.** Elapsed time and the number of tools. The time moves on even when nothing else changes, for example while the agent thinks or one long tool runs. Such an edit comes every 10 seconds at first. The step grows with the turn (a sixth of the elapsed time) up to one minute, so a long turn spends little of the rate budget. While the turn waits for the user's answer, the time stays.
@@ -415,7 +415,7 @@ While a turn runs, the topic shows the agent's text as a Telegram draft (`sendMe
   - A short last message joins the one before.
   - An answer that would take more than 6 such messages comes in fuller ones, of up to 4000 characters, still split at paragraphs: more messages are too many to read on a phone, and each one costs a second of the chat's budget.
   - There are no `(1/3)` counters. Only the first message makes a sound; the others come silently, as when a person sends a long reply in a few messages.
-- Tables become monospace blocks.
+- Tables become monospace blocks when they fit a phone (40 characters or less). A wider grid would wrap on a phone and its columns would fall apart, so a wider table becomes a list: one block per row, with the first cell in bold and then `Column: value` for the others. Links and code in cells keep their format. With `[display] rich_messages`, Telegram renders the table itself.
 - Link previews are off, because agent answers often hold URLs from logs and code.
 - An answer longer than four full messages (16000 characters) is sent as a `.md` file.
 

@@ -165,7 +165,8 @@ func TestNewStartsAnAgentAndOpensItsTopic(t *testing.T) {
 		args = e.rexCommand("window", "rename")
 		return args != nil
 	})
-	if want := []string{"window", "rename", "-s", "S2", "W2", title}; !reflect.DeepEqual(args, want) {
+	// pi's "[app]" tag repeats the folder's name, so it goes (tidyName).
+	if want := []string{"window", "rename", "-s", "S2", "W2", "Build the login page"}; !reflect.DeepEqual(args, want) {
 		t.Fatalf("rex %q,\nwant %q", args, want)
 	}
 }

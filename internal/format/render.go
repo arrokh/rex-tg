@@ -201,6 +201,9 @@ func (r *renderer) table(t *extast.Table) string {
 	if cols == 0 {
 		return ""
 	}
+	if w := tableWidth(rows, cols); w > phoneTableWidth && len(rows) > 1 {
+		return r.tableList(t)
+	}
 	widths := make([]int, cols)
 	for i := range widths {
 		widths[i] = 3
@@ -250,6 +253,67 @@ func (r *renderer) table(t *extast.Table) string {
 		return body
 	}
 	return "<pre>" + Escape(body) + "</pre>"
+}
+
+// phoneTableWidth is about the most monospace characters a phone shows on
+// one line of a message. A wider table grid wraps there and its columns fall
+// apart, so it becomes a list instead (tableList).
+const phoneTableWidth = 40
+
+// tableWidth is the width of the grid that table draws.
+func tableWidth(rows [][]string, cols int) int {
+	widths := make([]int, cols)
+	for i := range widths {
+		widths[i] = 3
+	}
+	for _, row := range rows {
+		for i, c := range row {
+			widths[i] = max(widths[i], utf8.RuneCountInString(c))
+		}
+	}
+	w := 1
+	for _, x := range widths {
+		w += x + 3
+	}
+	return w
+}
+
+// tableList renders a table that is too wide for a phone as one block per
+// row: the first cell in bold, then "Column: value" for the other cells.
+// The text wraps like any message, and links and code in cells keep their
+// format.
+func (r *renderer) tableList(t *extast.Table) string {
+	var head []string
+	var out []string
+	for row := t.FirstChild(); row != nil; row = row.NextSibling() {
+		var cells []string
+		for c := row.FirstChild(); c != nil; c = c.NextSibling() {
+			cells = append(cells, strings.Join(strings.Fields(r.inlines(c)), " "))
+		}
+		if _, ok := row.(*extast.TableHeader); ok {
+			for c := row.FirstChild(); c != nil; c = c.NextSibling() {
+				plain := &renderer{src: r.src}
+				head = append(head, strings.Join(strings.Fields(plain.inlines(c)), " "))
+			}
+			continue
+		}
+		var lines []string
+		for i, c := range cells {
+			switch {
+			case c == "":
+			case i == 0:
+				lines = append(lines, r.tag("b", c))
+			case i < len(head) && head[i] != "":
+				lines = append(lines, r.esc(head[i])+": "+c)
+			default:
+				lines = append(lines, c)
+			}
+		}
+		if len(lines) > 0 {
+			out = append(out, strings.Join(lines, "\n"))
+		}
+	}
+	return strings.Join(out, "\n\n")
 }
 
 func (r *renderer) inlines(n ast.Node) string {

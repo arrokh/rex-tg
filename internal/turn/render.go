@@ -7,6 +7,7 @@ import (
 	"unicode/utf8"
 
 	"rex-tg/internal/agents"
+	"rex-tg/internal/format"
 )
 
 var htmlEscaper = strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;")
@@ -136,17 +137,24 @@ func (t *Tracker) rows() []string {
 	return out
 }
 
+// spinner is the progress message's first icon. It turns one step with each
+// edit, so a running turn looks alive; a message cannot animate by itself,
+// and an edit only for the spinner would spend the chat's rate budget.
+var spinner = []string{"◐", "◓", "◑", "◒"}
+
 func (t *Tracker) progressHTML(now time.Time) string {
 	var b strings.Builder
 	switch {
 	case t.blocked:
 		b.WriteString("⏸ Waiting for your answer")
 	default:
-		h := firstLine(t.cfg.Redact(t.commentary))
+		// The headline is plain text: Markdown marks such as **bold** would
+		// show as they are, so the line is rendered to plain text first.
+		h := firstLine(format.Plain(firstLine(t.cfg.Redact(t.commentary))))
 		if h == "" {
 			h = "Working…"
 		}
-		b.WriteString("⚙️ " + escape(truncate(h, t.cfg.MaxRowRunes)))
+		b.WriteString(spinner[t.spin%len(spinner)] + " " + escape(truncate(h, t.cfg.MaxRowRunes)))
 	}
 	rows := t.rows()
 	if len(rows) > t.cfg.MaxRows {

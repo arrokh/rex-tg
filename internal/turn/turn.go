@@ -197,6 +197,7 @@ type Tracker struct {
 
 	shown         bool
 	lastEdit      time.Time
+	spin          int // the spinner's step, one more with each edit
 	dirty         bool
 	pendingRepost bool
 	finishHeld    bool   // the finish waits for EditInterval
@@ -637,10 +638,14 @@ func (t *Tracker) Tick(now time.Time) []Action {
 		h := t.progressHTML(now)
 		switch {
 		case repost:
+			t.spin++
+			h = t.progressHTML(now)
 			out = append(out, RepostProgress{HTML: h})
 			t.lastEdit = now
 			t.pendingRepost = false
 		case h != t.lastHTML:
+			t.spin++ // only a real change turns the spinner
+			h = t.progressHTML(now)
 			out = append(out, EditProgress{HTML: h})
 			t.lastEdit = now
 		}
@@ -653,6 +658,8 @@ func (t *Tracker) Tick(now time.Time) []Action {
 	// A wait for the user's answer keeps its time; the agent is not working.
 	if !t.blocked && now.Sub(t.lastEdit) >= t.timerStep(now.Sub(t.start)) {
 		if h := t.progressHTML(now); h != t.lastHTML {
+			t.spin++
+			h = t.progressHTML(now)
 			out = append(out, EditProgress{HTML: h})
 			t.lastHTML = h
 		}

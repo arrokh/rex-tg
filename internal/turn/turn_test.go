@@ -569,7 +569,7 @@ func TestBlockedHeadline(t *testing.T) {
 	if types(as) != "Typing,EditProgress" {
 		t.Fatalf("after unblock: %s", types(as))
 	}
-	if strings.Contains(as[1].(turn.EditProgress).HTML, "Waiting") || !strings.HasPrefix(as[1].(turn.EditProgress).HTML, "⚙️ Running things") {
+	if strings.Contains(as[1].(turn.EditProgress).HTML, "Waiting") || !strings.Contains(strings.SplitN(as[1].(turn.EditProgress).HTML, "\n", 2)[0], " Running things") {
 		t.Errorf("%s", as[1])
 	}
 }
@@ -651,7 +651,7 @@ func TestTruncationAndElapsed(t *testing.T) {
 	x.ev(call("c", "t", "Read", agents.ToolRead, strings.Repeat("x", 100)), 0)
 	html := find[turn.ShowProgress](t, x.tick(2)).HTML
 	for _, l := range strings.Split(html, "\n")[:2] {
-		if n := len([]rune(l)); n > 20+len([]rune("⚙️ ")) {
+		if n := len([]rune(l)); n > 20+len([]rune("◐ ")) {
 			t.Errorf("line too long (%d): %s", n, l)
 		}
 	}
@@ -1012,5 +1012,39 @@ func TestMessageBelowMovesTheProgressDown(t *testing.T) {
 	x.k.State(turn.StateWorking, at(31))
 	if got := types(without(x.tick(33))); got != "RepostProgress" {
 		t.Fatalf("after the answer: got %s", got)
+	}
+}
+
+// TestSpinnerTurnsWithEachEdit: the first icon of the progress message turns
+// one step with each edit that is sent anyway, and never causes one itself.
+func TestSpinnerTurnsWithEachEdit(t *testing.T) {
+	x := newH(t, turn.Config{}, progress)
+	x.ev(prompt("p", "go"), 0)
+	if show := find[turn.ShowProgress](t, x.tick(2)).HTML; !strings.HasPrefix(show, "◐ Working…") {
+		t.Fatalf("show = %q", show)
+	}
+	if got := without(x.tick(4)); len(got) != 0 {
+		t.Fatalf("an edit only for the spinner: %s", types(got))
+	}
+	for i, s := range []float64{12, 22, 32, 42} {
+		as := without(x.tick(s))
+		if types(as) != "EditProgress" {
+			t.Fatalf("tick %v: got %s", s, types(as))
+		}
+		if want := []string{"◓", "◑", "◒", "◐"}[i]; !strings.HasPrefix(as[0].(turn.EditProgress).HTML, want+" ") {
+			t.Errorf("tick %v: %q, want the spinner at %s", s, as[0].(turn.EditProgress).HTML, want)
+		}
+	}
+}
+
+// The headline shows the commentary's first line as plain text, without the
+// Markdown marks that a message would render.
+func TestHeadlineDropsMarkdownMarks(t *testing.T) {
+	x := newH(t, turn.Config{}, progress)
+	x.ev(prompt("p", "go"), 0)
+	x.ev(text("m", agents.Commentary, "No report found for **Full Stack Engineer APAC** in `docs`\nmore"), 0.5)
+	html := find[turn.ShowProgress](t, x.tick(2)).HTML
+	if first := strings.SplitN(html, "\n", 2)[0]; first != "◐ No report found for Full Stack Engineer APAC in docs" {
+		t.Errorf("headline = %q", first)
 	}
 }
