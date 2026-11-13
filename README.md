@@ -95,7 +95,7 @@ To send an agent a command that has a bot command's name, use two slashes: `//he
 - **Reactions on your message:** 👀 means typed into the pane. 👍 means the agent got it. 👎 means refused; a reply says why.
 - **Progress:** one message updates while the agent works. When the turn ends, it becomes a summary line if the turn took 2 minutes or more, or if it failed or stopped. A shorter turn leaves just its answer.
 - **Answer:** a new message. A long answer comes as a few chat-sized messages, split at paragraphs, without numbers. With the Mini App set up, a long answer (over 3000 characters by default) shows its start, and `📄 Whole answer` opens the rest.
-- **Quick replies:** buttons under an answer send a short reply to the agent with one tap, such as `Continue` or `Yes`. Set them with `[display] quick_replies`.
+- **Quick replies:** buttons under an answer that send a short reply to the agent with one tap, such as `Continue` or `Yes`. Off by default; set them with `[display] quick_replies`.
 - **Live text (optional):** with `stream = true`, the text shows as a draft at the bottom of the topic while the agent writes (word by word for pi, block by block for Claude Code and Codex). Off by default.
 - **Files:** when an answer names an image on your Mac, rex-tg sends the picture too. A PDF, CSV, HTML, or Office file gets a 📎 button: tap it to get the file.
 - **Permission prompts:** the bot shows the prompt the way a person reads it, with one button per answer.

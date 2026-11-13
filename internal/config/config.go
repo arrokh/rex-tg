@@ -130,7 +130,7 @@ type Config struct {
 		// document. An empty list offers none.
 		SendFiles []string `toml:"send_files"`
 		// QuickReplies are buttons under each answer that send their text
-		// to the agent with one tap. Empty: none.
+		// to the agent with one tap. Empty (the default): none.
 		QuickReplies []string `toml:"quick_replies"`
 		// ShowChanges adds a button to an answer that shows what the turn
 		// changed in its git repository, in the Mini App ([miniapp] url).
@@ -244,7 +244,6 @@ func Default(home string) Config {
 	c.Alerts.Reminders = 3
 	c.Display.SendImages = true
 	c.Display.SendFiles = []string{"pdf", "csv", "tsv", "html", "htm", "xlsx", "docx", "pptx"}
-	c.Display.QuickReplies = []string{"Continue", "Yes", "Run tests", "Commit"}
 	c.Display.ShowChanges = true
 	c.MiniApp.Listen = "127.0.0.1:8770"
 	c.MiniApp.AnswerPreview = 3000

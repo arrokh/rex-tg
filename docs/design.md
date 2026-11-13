@@ -644,7 +644,7 @@ These features are built. Some are off until you set them up.
 
 ### 8.9a Answer buttons and the Mini App
 
-- **Quick replies.** The last text message of an answer carries buttons from `[display] quick_replies`, two to a row (callback data `qr:<index>:<hash of the text>`). A tap queues the text like a message typed in the topic, with the tap's update id as the row id, so a repeat types nothing; a button made before the list changed is refused as out of date. The text follows the checks of a typed message (9.5), so it waits while a prompt is open. An answer that comes as a `.md` file has no buttons.
+- **Quick replies.** Off by default. With `[display] quick_replies` set, the last text message of an answer carries those buttons, two to a row (callback data `qr:<index>:<hash of the text>`). A tap queues the text like a message typed in the topic, with the tap's update id as the row id, so a repeat types nothing; a button made before the list changed is refused as out of date. The text follows the checks of a typed message (9.5), so it waits while a prompt is open. An answer that comes as a `.md` file has no buttons.
 - **Mini App.** A small local HTTP server (`[miniapp] listen`, 127.0.0.1:8770 by default) serves `/app`, `/app.js`, and `/api/page?id=…`. It runs only when `[miniapp] url` is set. `url` is the public HTTPS address that reaches it, such as a Tailscale Funnel (setup in [reference](reference.md#mini-app)). A page request must carry the Mini App's init data; rex-tg checks Telegram's HMAC signature with the key derived from the bot token (the server keeps that key, not the token), its age (at most 24 hours), and that it was signed for the owner. Pages live in kv `page:<random id>` for 30 days. Markdown is rendered with GFM; raw HTML in it is dropped.
 - **Long answers.** An answer longer than `[miniapp] answer_preview` characters is a page; the chat gets its first part (about 1200 characters, cut like a message) and a `📄 Whole answer` button.
 - **Turn changes.** When a turn's first prompt arrives, rex-tg writes the working files of the session's git repository as a tree, through a copy of the index (`GIT_INDEX_FILE`), so the user's index and files stay as they are; when the turn's answer arrives it does it again, and the diff of the two trees is a page. A `📝 <files> · +a −r` button goes on the answer, by the sender's markup hook when the page is ready before the answer goes out, else by an edit of the answer's keyboard. The diff is redacted. A folder that is not a git repository gets no button. The snapshots write objects into the repository, which git cleans up later. Each git call has a 15-second limit; a diff page holds at most 2 MB.
@@ -1055,7 +1055,7 @@ progress_delay = "2s"
 progress_edit_interval = "2s"
 progress_animation = "3s"
 rich_messages = true
-quick_replies = ["Continue", "Yes", "Run tests", "Commit"]
+quick_replies = []
 show_changes = true
 
 [input]
