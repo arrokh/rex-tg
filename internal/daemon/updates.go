@@ -102,12 +102,6 @@ func (d *daemon) onMessage(u telegram.Update) {
 		if m.From.IsBot && m.Chat.ID == d.ownerChat {
 			// In the private chat, the only bot is this one: Telegram sends the
 			// bot's own "topic created" notice as an update (seen live).
-			if e := m.ForumTopicEdited; e != nil && e.Name != "" {
-				// Telegram's word that a rename took effect, for the log.
-				th, ok, _ := d.st.ThreadByTopic(d.ctx, m.Chat.ID, m.MessageThreadID)
-				d.log.Info("Telegram confirmed a topic rename", "thread", th.ID, "known", ok, "as_stored", ok && e.Name == th.Name)
-				return
-			}
 			d.log.Debug("own service message", "update", u.UpdateID)
 			return
 		}
@@ -318,9 +312,10 @@ func (d *daemon) threadOfMessage(m *telegram.Message) (store.Thread, bool) {
 
 // sendNowButton is `⚡ Send now` on the topic's waiting notice: it types the
 // waiting messages of the topic without waiting, in order: the one the
-// notice is on, and the user's own text behind it. An agent command (a
-// /model button, //compact) or a shell command (!ls) behind it still waits
-// until the agent is idle; only its own notice sends it now.
+// notice is on, and the user's own text behind it, up to the first agent
+// command (a /model button, //compact) or shell command (!ls). That one
+// still waits until the agent is idle, and so does what came after it, so
+// the order stays; it gets the next notice.
 func (d *daemon) sendNowButton(cb *telegram.CallbackQuery, id int64) {
 	th, ok := d.threadOfMessage(cb.Message)
 	if !ok || !d.stillQueued(th.ID, id) {
@@ -329,10 +324,11 @@ func (d *daemon) sendNowButton(cb *telegram.CallbackQuery, id int64) {
 	}
 	n := 0
 	for _, q := range d.waitingInbound(th.ID) {
-		if q.UpdateID == id || steerable(q) {
-			d.actions[q.UpdateID] = inbound.ActSendNow
-			n++
+		if q.UpdateID != id && !steerable(q) {
+			break
 		}
+		d.actions[q.UpdateID] = inbound.ActSendNow
+		n++
 	}
 	d.dirty[th.ID] = true
 	delete(d.nextPrep, th.ID)

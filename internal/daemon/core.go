@@ -172,6 +172,7 @@ type daemon struct {
 	// (tickPromptChecks).
 	blockedSince  map[int64]time.Time
 	recheckAt     map[int64]time.Time
+	goneReads     goneConfirm // the first read without a prompt, until a second confirms it
 	blockedScanAt time.Time
 	renamedBack   time.Time  // the last rename back of the session for /new (under tabMu)
 	vimStuck      sync.Map   // pane id -> vimStuckMark: the vim label that showed no reaction to a key
@@ -239,6 +240,7 @@ func newDaemon(cfg config.Config, home string, log *slog.Logger, now func() time
 		promptChecks: map[int64]time.Time{},
 		blockedSince: map[int64]time.Time{},
 		recheckAt:    map[int64]time.Time{},
+		goneReads:    goneConfirm{},
 		events:       make(chan any, 256),
 		regq:         newJobQueue(),
 		tailers:      map[int64]*tailer{},
@@ -383,8 +385,8 @@ func (d *daemon) handle(ev any) {
 		d.onDraftSent(e)
 	case evAlertDeadline:
 		d.deadlines[e.alert] = e.d
-	case evPromptGone:
-		d.onPromptGone(e)
+	case evPromptRead:
+		d.onPromptRead(e)
 	case evRename:
 		d.onRename(e)
 	case evAlertFollow:

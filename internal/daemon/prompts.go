@@ -462,12 +462,37 @@ func (d *daemon) answerWithText(th store.Thread, al store.Alert, text, tag strin
 // so the agent has redrawn it.
 const promptGoneDelay = 300 * time.Millisecond
 
-// evPromptGone reports a blocked pane whose screen shows no prompt.
-type evPromptGone struct {
+// evPromptRead reports a read of a blocked pane's screen.
+type evPromptRead struct {
 	conv    int64
 	at      time.Time
 	stateAt time.Time // the blocked state that the screen was read for
+	gone    bool      // the screen shows no prompt
 }
+
+// goneConfirm decides when a prompt is gone: after two reads in a row that
+// show none, for the same blocked state, close together. One read may come
+// before the agent has drawn its prompt, or in the middle of a redraw.
+type goneConfirm map[int64]evPromptRead
+
+// observe takes one read and reports whether the prompt is gone now.
+func (g goneConfirm) observe(r evPromptRead, within time.Duration) bool {
+	prev, ok := g[r.conv]
+	if !r.gone {
+		delete(g, r.conv)
+		return false
+	}
+	if ok && prev.stateAt.Equal(r.stateAt) && r.at.Sub(prev.at) <= within {
+		delete(g, r.conv)
+		return true
+	}
+	g[r.conv] = r
+	return false
+}
+
+// goneWithin is the longest time between the two reads that confirm a prompt
+// is gone.
+const goneWithin = 10 * time.Second
 
 // checkPromptGone asks for a look at the screen of a session whose
 // transcript went on (core).
@@ -496,7 +521,7 @@ func (d *daemon) tickPromptChecks(now time.Time) {
 					continue
 				}
 				if _, linked := d.threadOf(p.ConversationID); linked { // only the panes that have a topic
-					d.blockedSince[p.ConversationID] = now
+					d.noteBlocked(p.ConversationID, now)
 				}
 			}
 		}
@@ -517,9 +542,9 @@ func (d *daemon) tickPromptChecks(now time.Time) {
 		}
 		delete(d.promptChecks, conv)
 		p, ok, err := d.st.PaneByConversation(d.ctx, conv)
-		if err != nil || !ok || p.State != "blocked" || !p.GoneAt.IsZero() {
-			delete(d.blockedSince, conv)
-			delete(d.recheckAt, conv)
+		_, linked := d.threadOf(conv) // only the panes that have a topic are read
+		if err != nil || !ok || p.State != "blocked" || !p.GoneAt.IsZero() || !linked {
+			d.forgetBlocked(conv)
 			continue
 		}
 		var hashes []string // the open alerts' screens
@@ -535,10 +560,8 @@ func (d *daemon) tickPromptChecks(now time.Time) {
 			if err != nil {
 				return // the next transcript line asks again
 			}
-			if screenHasPrompt(lastLines(screen, alertLines), hashes) {
-				return
-			}
-			d.emit(evPromptGone{conv: conv, at: d.now(), stateAt: p.StateAt})
+			gone := !screenHasPrompt(lastLines(screen, alertLines), hashes)
+			d.emit(evPromptRead{conv: conv, at: d.now(), stateAt: p.StateAt, gone: gone})
 		})
 	}
 }
@@ -571,12 +594,38 @@ func screenHasPrompt(lines []string, alertHashes []string) bool {
 	return slices.Contains(alertHashes, h)
 }
 
-// onPromptGone moves a pane that is still blocked to working (core). The
+// noteBlocked starts the clock of a pane's screen checks (core). The first
+// check comes one step later, not at once: the agent may not have drawn its
+// prompt yet when its hook arrives.
+func (d *daemon) noteBlocked(conv int64, now time.Time) {
+	if _, ok := d.blockedSince[conv]; !ok {
+		d.blockedSince[conv] = now
+		d.recheckAt[conv] = now
+	}
+}
+
+// forgetBlocked stops a pane's screen checks (core).
+func (d *daemon) forgetBlocked(conv int64) {
+	delete(d.blockedSince, conv)
+	delete(d.recheckAt, conv)
+	delete(d.goneReads, conv)
+}
+
+// onPromptRead takes a read of a blocked pane's screen (core). After two
+// reads in a row without a prompt, the pane is working again: the
 // registry's change closes the topic's alerts and lets waiting messages go.
-func (d *daemon) onPromptGone(e evPromptGone) {
+// After the first, the second read comes soon.
+func (d *daemon) onPromptRead(e evPromptRead) {
 	p, ok, err := d.st.PaneByConversation(d.ctx, e.conv)
 	if err != nil || !ok || p.State != "blocked" || !p.StateAt.Equal(e.stateAt) {
-		return // another prompt came while the screen was read: it decides
+		delete(d.goneReads, e.conv) // another prompt came while the screen was read: it decides
+		return
+	}
+	if !d.goneReads.observe(e, goneWithin) {
+		if e.gone {
+			d.promptChecks[e.conv] = d.now().Add(max(d.timing.PromptRecheck/3, 30*time.Millisecond))
+		}
+		return
 	}
 	d.signal(e.conv, registry.Signal{State: "working", At: e.at})
 }
