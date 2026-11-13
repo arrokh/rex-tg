@@ -63,19 +63,25 @@ func miniAppURL(base, id string) string { return strings.TrimRight(base, "/") + 
 
 // savePage keeps a page and returns its id (any goroutine).
 func (d *daemon) savePage(kind, title, text string) (string, error) {
+	return d.savePageOf(miniapp.Page{Kind: kind, Title: title, Text: text})
+}
+
+// savePageOf keeps a page and returns its new random id (any goroutine).
+func (d *daemon) savePageOf(p miniapp.Page) (string, error) {
 	var b [12]byte
 	if _, err := rand.Read(b[:]); err != nil {
 		return "", err
 	}
 	id := hex.EncodeToString(b[:])
-	v, err := json.Marshal(miniapp.Page{Kind: kind, Title: title, Text: text, At: d.now()})
+	p.At = d.now()
+	v, err := json.Marshal(p)
 	if err != nil {
 		return "", err
 	}
 	if err := d.st.Set(d.ctx, pageKey(id), string(v)); err != nil {
 		return "", err
 	}
-	if err := d.st.Set(d.ctx, pageAtKey(id), fmt.Sprintf("%d|%s", d.now().Unix(), kind)); err != nil {
+	if err := d.st.Set(d.ctx, pageAtKey(id), fmt.Sprintf("%d|%s", d.now().Unix(), p.Kind)); err != nil {
 		_ = d.st.Delete(d.ctx, pageKey(id))
 		return "", err
 	}
@@ -104,7 +110,10 @@ func loadPage(st *store.Store, id string) (miniapp.Page, bool) {
 func (d *daemon) serveMiniApp(ctx context.Context) {
 	owner := func() int64 { return d.kvInt("owner_user_id") }
 	srv := &http.Server{
-		Handler:           miniapp.NewWithSecret(d.miniSecret, owner, func(id string) (miniapp.Page, bool) { return loadPage(d.st, id) }, d.log).Handler(),
+		Handler: miniapp.NewWithSecret(d.miniSecret, owner, func(id string) (miniapp.Page, bool) { return loadPage(d.st, id) }, d.log).
+			WithScreen(d.liveScreen).
+			WithFiles(func() bool { return d.cfg.MiniApp.Files }, format.Redact).
+			Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      60 * time.Second,
@@ -573,8 +582,11 @@ func (d *daemon) prunePages(now time.Time) {
 		atText, kind, _ := strings.Cut(v, "|")
 		at, perr := strconv.ParseInt(atText, 10, 64)
 		age := pageMaxAge
-		if kind == miniapp.KindDiff {
+		switch kind {
+		case miniapp.KindDiff:
 			age = diffMaxAge
+		case miniapp.KindScreen, miniapp.KindFiles:
+			age = livePageMaxAge // since the last use
 		}
 		if perr != nil || now.Sub(time.Unix(at, 0)) > age {
 			drop(id)

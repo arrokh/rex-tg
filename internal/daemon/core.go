@@ -176,6 +176,9 @@ type daemon struct {
 	turnTrees     map[int64]turnTree // the repository at each running turn's start, by session
 	miniSecret    []byte             // the key that checks the Mini App's signed requests
 	miniUp        atomic.Bool        // the Mini App's server listens
+	screenMu      sync.Mutex
+	screenShots   map[int64]*screenRead // the last live-screen read of each topic (the map under screenMu)
+	liveMu        sync.Mutex            // held while a live page is found or made
 	blockedScanAt time.Time
 	renamedBack   time.Time  // the last rename back of the session for /new (under tabMu)
 	vimStuck      sync.Map   // pane id -> vimStuckMark: the vim label that showed no reaction to a key

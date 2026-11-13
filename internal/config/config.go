@@ -161,6 +161,8 @@ type Config struct {
 		// AnswerPreview: an answer longer than this many characters shows
 		// its start, with a button that opens the whole answer.
 		AnswerPreview int `toml:"answer_preview"`
+		// Files lets /files open a browser of the agent's folder, read-only.
+		Files bool `toml:"files"`
 	} `toml:"miniapp"`
 	Alerts struct {
 		RemindAfter Duration `toml:"remind_after"` // the first reminder, and the gap between two; 0 turns them off
@@ -247,6 +249,7 @@ func Default(home string) Config {
 	c.Display.ShowChanges = true
 	c.MiniApp.Listen = "127.0.0.1:8770"
 	c.MiniApp.AnswerPreview = 3000
+	c.MiniApp.Files = true
 	c.Display.Stream = false // off: at its fastest it changes once a second
 	c.Display.StreamInterval = Duration{MinStreamInterval}
 	c.Display.MessageLength = 1500

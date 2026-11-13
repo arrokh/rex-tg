@@ -34,6 +34,7 @@ const (
 		"Text goes to the agent. Text that starts with / goes to the agent too, except the commands below. Use //name to send /name.\n" +
 		"/info - session, pane, and state\n" +
 		"/screen [lines] - the pane screen as an image; /screen text sends text\n" +
+		"/files - browse the agent's folder in the Mini App\n" +
 		"/approve, /deny - answer the open prompt\n" +
 		"/esc, /interrupt - press Escape, or stop the turn\n" +
 		"/key &lt;keys&gt; - press keys\n" +
@@ -338,6 +339,8 @@ func (d *daemon) topicCommand(u telegram.Update, m *telegram.Message, th store.T
 		reply("info", d.infoText(th))
 	case "screen":
 		d.screenCommand(th, upd, r.Args)
+	case "files":
+		d.filesCommand(th, upd)
 	case "approve", "deny":
 		d.spawn(func() { d.approveDeny(th, upd, r.Command == "approve") })
 	case "esc":
@@ -504,8 +507,9 @@ func (d *daemon) sendScreenImage(th store.Thread, lines []string) bool {
 		caption = "Screen"
 	}
 	caption += " · " + d.now().Format("15:04:05")
+	markup := d.liveScreenButton(th) // nil without the Mini App
 	err = d.snd.Call(sender.PriorityAnswer, func(ctx context.Context, tg *telegram.Client) error {
-		_, err := tg.SendPhoto(ctx, th.ChatID, th.MessageThreadID, "screen.png", data, caption, true)
+		_, err := tg.SendPhotoMarkup(ctx, th.ChatID, th.MessageThreadID, "screen.png", data, caption, true, markup)
 		return err
 	})
 	if err == nil {

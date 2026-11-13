@@ -1,7 +1,8 @@
 // Package miniapp serves rex-tg's Telegram Mini App: pages that are too big
 // for a chat message, such as an agent's long answer or the changes of a
-// turn. The daemon keeps the pages; this package only checks who asks and
-// renders them.
+// turn, the live screen of a topic's pane, and the files of its folder. The
+// daemon keeps the pages and reads the screens; this package checks who
+// asks and renders them.
 //
 // Every request for a page must carry the Mini App's init data, which
 // Telegram signs with the bot's token. Only the owner's signed requests get
@@ -32,17 +33,29 @@ import (
 
 // Page is what the Mini App shows.
 type Page struct {
-	Kind  string    `json:"kind"`  // KindAnswer or KindDiff
-	Title string    `json:"title"` // a short title
-	Text  string    `json:"text"`  // Markdown (an answer) or a unified diff
-	At    time.Time `json:"at"`
+	Kind   string    `json:"kind"`             // KindAnswer, KindDiff, KindScreen or KindFiles
+	Title  string    `json:"title"`            // a short title
+	Text   string    `json:"text"`             // Markdown (an answer) or a unified diff
+	Thread int64     `json:"thread,omitempty"` // the topic of a screen or files page
+	Dir    string    `json:"dir,omitempty"`    // the folder of a files page
+	At     time.Time `json:"at"`
 }
 
 // Kinds of pages.
 const (
 	KindAnswer = "answer"
 	KindDiff   = "diff"
+	KindScreen = "screen" // the live screen of a topic's pane
+	KindFiles  = "files"  // the files of a folder
 )
+
+// Screen is what the live screen shows: the pane's text, or why there is
+// none (Error).
+type Screen struct {
+	Text  string `json:"text,omitempty"`
+	At    string `json:"at,omitempty"` // when it was read, "15:04:05"
+	Error string `json:"error,omitempty"`
+}
 
 // maxSkew is how far in the future a signature's time may be (clocks differ).
 const maxSkew = 5 * time.Minute
@@ -56,6 +69,9 @@ type Server struct {
 	secret []byte       // HMAC key from the bot token
 	owner  func() int64 // the paired owner's user id (0: none)
 	load   func(id string) (Page, bool)
+	screen func(Page) Screen   // nil: no live screen
+	files  func() bool         // whether the file browser is on (nil: off)
+	redact func(string) string // cleans a file's text before it is shown
 	now    func() time.Time
 	log    *slog.Logger
 	// refusedAt is when a refusal was last logged: the address is public,
@@ -74,6 +90,20 @@ func New(botToken string, owner func() int64, load func(string) (Page, bool), lo
 // caller need not keep the token.
 func NewWithSecret(secret []byte, owner func() int64, load func(string) (Page, bool), log *slog.Logger) *Server {
 	return &Server{secret: secret, owner: owner, load: load, now: time.Now, log: log}
+}
+
+// WithScreen turns on the live screen: read returns the screen of a screen
+// page's topic. It is called for each refresh of an open page.
+func (s *Server) WithScreen(read func(Page) Screen) *Server {
+	s.screen = read
+	return s
+}
+
+// WithFiles turns on the file browser while on() is true. redact cleans a
+// file's text before it is shown.
+func (s *Server) WithFiles(on func() bool, redact func(string) string) *Server {
+	s.files, s.redact = on, redact
+	return s
 }
 
 // Secret is the key that checks a Mini App's init data: HMAC-SHA256 of the
@@ -139,7 +169,8 @@ var appHTML []byte
 //go:embed app.js
 var appJS []byte
 
-// Handler serves /app (the page shell), /app.js, and /api/page?id=…
+// Handler serves /app (the page shell), /app.js, /api/page?id=…,
+// /api/screen?id=… and /api/files?id=…&path=…
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /app", func(w http.ResponseWriter, r *http.Request) {
@@ -151,6 +182,8 @@ func (s *Server) Handler() http.Handler {
 		_, _ = w.Write(appJS)
 	})
 	mux.HandleFunc("GET /api/page", s.page)
+	mux.HandleFunc("GET /api/screen", s.liveScreen)
+	mux.HandleFunc("GET /api/files", s.fileView)
 	return mux
 }
 
@@ -163,7 +196,9 @@ func (s *Server) headers(w http.ResponseWriter, ctype string) {
 	h.Set("Content-Security-Policy", "default-src 'none'; script-src 'self' https://telegram.org; style-src 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'")
 }
 
-func (s *Server) page(w http.ResponseWriter, r *http.Request) {
+// allowed checks that a request is the owner's, signed by Telegram. It
+// answers a refused request itself.
+func (s *Server) allowed(w http.ResponseWriter, r *http.Request) bool {
 	s.headers(w, "application/json")
 	user, err := CheckInitData(r.Header.Get("X-Telegram-Init-Data"), s.secret, s.now(), MaxAge)
 	owner := s.owner()
@@ -174,18 +209,76 @@ func (s *Server) page(w http.ResponseWriter, r *http.Request) {
 			s.log.Info("mini app: refused requests", "count", s.refused.Swap(0), "last_reason", refusal(err, owner))
 		}
 		http.Error(w, `{"error":"Open this page from its button in Telegram."}`, http.StatusForbidden)
-		return
+		return false
 	}
+	return true
+}
+
+// loadKind loads the page of the request's id. With kind set, the page must
+// be of that kind. It answers a missing page itself.
+func (s *Server) loadKind(w http.ResponseWriter, r *http.Request, kind string) (Page, bool) {
 	p, ok := s.load(r.URL.Query().Get("id"))
-	if !ok {
+	if !ok || (kind != "" && p.Kind != kind) {
 		http.Error(w, `{"error":"This page is gone."}`, http.StatusNotFound)
+		return Page{}, false
+	}
+	return p, true
+}
+
+func (s *Server) page(w http.ResponseWriter, r *http.Request) {
+	if !s.allowed(w, r) {
 		return
 	}
-	body := RenderAnswer(p.Text)
-	if p.Kind == KindDiff {
+	p, ok := s.loadKind(w, r, "")
+	if !ok {
+		return
+	}
+	var body string
+	switch p.Kind {
+	case KindDiff:
 		body = RenderDiff(p.Text)
+	case KindScreen, KindFiles: // the page asks for its content itself
+	default:
+		body = RenderAnswer(p.Text)
 	}
 	_ = json.NewEncoder(w).Encode(map[string]string{"kind": p.Kind, "title": p.Title, "html": body})
+}
+
+// liveScreen answers a refresh of a live screen.
+func (s *Server) liveScreen(w http.ResponseWriter, r *http.Request) {
+	if !s.allowed(w, r) {
+		return
+	}
+	p, ok := s.loadKind(w, r, KindScreen)
+	if !ok {
+		return
+	}
+	sc := Screen{Error: "The live screen is off."}
+	if s.screen != nil {
+		sc = s.screen(p)
+	}
+	_ = json.NewEncoder(w).Encode(sc)
+}
+
+// fileView answers a folder or file of a files page.
+func (s *Server) fileView(w http.ResponseWriter, r *http.Request) {
+	if !s.allowed(w, r) {
+		return
+	}
+	p, ok := s.loadKind(w, r, KindFiles)
+	if !ok {
+		return
+	}
+	if s.files == nil || !s.files() {
+		http.Error(w, `{"error":"The file browser is off."}`, http.StatusNotFound)
+		return
+	}
+	v, err := Browse(r.Context(), p.Dir, r.URL.Query().Get("path"), s.redact)
+	if err != nil {
+		http.Error(w, `{"error":"This file is not there, or it is hidden."}`, http.StatusNotFound)
+		return
+	}
+	_ = json.NewEncoder(w).Encode(v)
 }
 
 func refusal(err error, owner int64) string {

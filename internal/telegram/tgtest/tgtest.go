@@ -633,6 +633,9 @@ func markupOf(p map[string]any) (*telegram.InlineKeyboardMarkup, *apiErr) {
 		return nil, nil
 	}
 	b, _ := json.Marshal(raw)
+	if s, ok := raw.(string); ok { // a form field of an upload holds the JSON as text
+		b = []byte(s)
+	}
 	var mk telegram.InlineKeyboardMarkup
 	if err := json.Unmarshal(b, &mk); err != nil || mk.InlineKeyboard == nil {
 		return nil, bad("can't parse reply keyboard markup JSON object")
@@ -870,12 +873,16 @@ func (s *Server) handle(method string, p map[string]any, docName string, docData
 		if s.threadGone(chat, thread) {
 			return nil, bad("message thread not found")
 		}
+		mk, merr := markupOf(p)
+		if merr != nil {
+			return nil, merr
+		}
 		s.nextFile++
 		fid := "photo" + strconv.Itoa(s.nextFile)
 		fpath := "photos/file_" + strconv.Itoa(s.nextFile) + "_" + docName
 		s.files[fid] = &file{fid, fpath, docData}
 		m := s.addMsg(&Message{ChatID: chat, ThreadID: thread, FromBot: true, Text: str(p, "caption"),
-			Silent: flag(p, "disable_notification"), Filename: docName, File: docData, Photo: true})
+			Silent: flag(p, "disable_notification"), Filename: docName, File: docData, Photo: true, Markup: mk})
 		out := s.wire(m)
 		out.Photo = []telegram.PhotoSize{{FileID: fid, FileUniqueID: "u" + fid, FileSize: int64(len(docData))}}
 		return out, nil

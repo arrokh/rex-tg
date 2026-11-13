@@ -1,7 +1,14 @@
 package daemon_test
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"net"
+	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -9,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"rex-tg/internal/miniapp"
 	"rex-tg/internal/telegram/tgtest"
 )
 
@@ -235,4 +243,130 @@ func TestLongAnswerOpensInTheMiniApp(t *testing.T) {
 	if e.hasText(thread, "THE END") {
 		t.Error("the whole answer was posted in the chat")
 	}
+}
+
+// freeAddr is a local address with a free port, for a test that talks to
+// the Mini App's server.
+func freeAddr(t *testing.T) string {
+	t.Helper()
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := l.Addr().String()
+	_ = l.Close()
+	return addr
+}
+
+// signedInit is Mini App init data for a user, signed the way Telegram
+// signs it with the bot's token.
+func signedInit(token string, user int64) string {
+	vals := map[string]string{"auth_date": fmt.Sprint(time.Now().Unix()), "user": fmt.Sprintf(`{"id":%d}`, user)}
+	keys := []string{"auth_date", "user"}
+	var lines []string
+	for _, k := range keys {
+		lines = append(lines, k+"="+vals[k])
+	}
+	m := hmac.New(sha256.New, miniapp.Secret(token))
+	m.Write([]byte(strings.Join(lines, "\n")))
+	q := url.Values{}
+	for k, v := range vals {
+		q.Set(k, v)
+	}
+	q.Set("hash", hex.EncodeToString(m.Sum(nil)))
+	return q.Encode()
+}
+
+// miniGet asks the Mini App's server for an API path as a user.
+func miniGet(t *testing.T, e *env, addr, path string, user int64) (int, map[string]any) {
+	t.Helper()
+	req, _ := http.NewRequest("GET", "http://"+addr+path, nil)
+	req.Header.Set("X-Telegram-Init-Data", signedInit(e.tg.Token(), user))
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	var body map[string]any
+	_ = json.NewDecoder(res.Body).Decode(&body)
+	return res.StatusCode, body
+}
+
+func pageID(u string) string {
+	_, id, _ := strings.Cut(u, "/app?p=")
+	return id
+}
+
+// /screen's picture has a button that opens the live screen. The live
+// screen reads the pane again on each refresh, redacted, only for the owner.
+func TestScreenOpensTheLiveScreen(t *testing.T) {
+	addr := freeAddr(t)
+	e, _, thread := piTopicCfg(t, "pi-live", func(e *env) {
+		e.cfg.MiniApp.URL = "https://mac.example.ts.net:8443"
+		e.cfg.MiniApp.Listen = addr
+	})
+	e.setScreen("$ make test\nsecret sk-ant-" + "api03-abcdefghijklmnopqrstuvwxyz123456\n")
+	e.say(thread, "/screen")
+	var u string
+	e.waitFor("the live screen button", func() bool { u = webAppURL(e, thread, "🖥 Live screen"); return u != "" })
+	id := pageID(u)
+	if code, _ := miniGet(t, e, addr, "/api/screen?id="+id, ownerID+1); code != http.StatusForbidden {
+		t.Errorf("another user: %d", code)
+	}
+	code, body := miniGet(t, e, addr, "/api/screen?id="+id, ownerID)
+	text, _ := body["text"].(string)
+	if code != http.StatusOK || !strings.Contains(text, "$ make test") {
+		t.Fatalf("screen: %d %v", code, body)
+	}
+	if strings.Contains(text, "abcdefghijklmnop") {
+		t.Errorf("the live screen shows a secret: %q", text)
+	}
+	time.Sleep(1100 * time.Millisecond) // reads of one topic are a second apart
+	e.setScreen("$ make test\nok\n")
+	if _, body := miniGet(t, e, addr, "/api/screen?id="+id, ownerID); !strings.Contains(fmt.Sprint(body["text"]), "ok") {
+		t.Errorf("the screen was not read again: %v", body)
+	}
+	// A second /screen reuses the topic's page.
+	e.say(thread, "/screen")
+	e.waitFor("a second photo", func() bool {
+		n := 0
+		for _, m := range e.botMessages(thread) {
+			if m.Photo {
+				n++
+			}
+		}
+		return n == 2
+	})
+	for _, m := range e.botMessages(thread) {
+		if m.Photo && m.Markup != nil && pageID(m.Markup.InlineKeyboard[0][0].WebApp.URL) != id {
+			t.Errorf("a new page for the same topic: %s", m.Markup.InlineKeyboard[0][0].WebApp.URL)
+		}
+	}
+}
+
+// /files answers with a button that opens the agent's repository in the
+// Mini App's file browser.
+func TestFilesOpensTheBrowser(t *testing.T) {
+	addr := freeAddr(t)
+	e, _, thread, repo := repoTopic(t, "pi-files", func(e *env) {
+		e.cfg.MiniApp.URL = "https://mac.example.ts.net:8443"
+		e.cfg.MiniApp.Listen = addr
+	})
+	e.say(thread, "/files")
+	var u string
+	e.waitFor("the files button", func() bool { u = webAppURL(e, thread, "📂 Browse files"); return u != "" })
+	code, body := miniGet(t, e, addr, "/api/files?id="+pageID(u)+"&path=a.txt", ownerID)
+	if code != http.StatusOK || !strings.Contains(fmt.Sprint(body["html"]), "one") {
+		t.Fatalf("a.txt: %d %v", code, body)
+	}
+	if _, body := miniGet(t, e, addr, "/api/files?id="+pageID(u), ownerID); body["dir"] != true {
+		t.Errorf("the root of %s: %v", repo, body)
+	}
+}
+
+// Without the Mini App, /files says how to turn it on.
+func TestFilesWithoutTheMiniApp(t *testing.T) {
+	e, _, thread := piTopic(t, "pi-files-off")
+	e.say(thread, "/files")
+	e.waitText(thread, "[miniapp] url")
 }

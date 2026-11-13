@@ -89,3 +89,19 @@ func TestReplyToARichAnswerQuotesIt(t *testing.T) {
 		t.Fatalf("pasted %q, want %q", got, want)
 	}
 }
+
+// The "may not have arrived" notice is rex-tg's check note, edited: it is
+// no part of the answer. A reply to it quotes nothing, not the old answer.
+func TestReplyToALostReplyNoticeQuotesNothing(t *testing.T) {
+	e, p, thread := piTopic(t, "pi-reply-notice")
+	e.tg.LoseAnswerNext("sendMessage", 1) // posted, but the answer is lost: the outcome is unknown
+	p.User("report")
+	time.Sleep(10 * time.Millisecond) // the answer comes after the prompt: the pane is idle then
+	p.Final("the lost answer")
+	notice := e.waitText(thread, "may not have arrived")
+	e.tg.PushReply(chatID, thread, ownerID, notice.ID, "", "what was that?")
+	e.waitFor("the paste", func() bool { return len(e.pastes()) == 1 })
+	if got := e.pastes()[0]; got != "what was that?" {
+		t.Errorf("pasted %q, want the text alone", got)
+	}
+}
