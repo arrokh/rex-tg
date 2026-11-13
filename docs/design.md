@@ -1,6 +1,6 @@
 # rex-tg system design
 
-Status: draft, 2026-11-11. It includes the answers to plan questions Q1–Q10 and the revised topic binding (D5). No code exists yet. Work starts with the spikes in [plan.md](plan.md).
+Status: updated 2026-11-13. It includes the answers to plan questions Q1–Q10 and the revised topic binding (D5). The features in sections 8.9 and 8.9a are built. The assumptions that are still open are in section 14; the spikes in [plan.md](plan.md) check them.
 
 Related documents:
 
@@ -21,7 +21,7 @@ Supported agents: pi, Claude Code, and Codex, as CLIs that run in Rex panes on t
 
 Not supported: T3 Code panes (`tr3x`) and Rex servers on other hosts.
 
-Not in the first version: photos, files, voice notes, group chats, and more than one Telegram user.
+Not supported: group chats and more than one Telegram user. Photos, files, and voice notes are built (section 8.9).
 
 ## 2. Decisions
 
@@ -70,7 +70,7 @@ Why at most once (D7): Telegram has no idempotency key. If rex-tg crashes after 
                                          (private chat, one topic per agent session)
 ```
 
-rex-tg makes only outgoing connections. It opens no port, so it needs no webhook, tunnel, or Tailscale setup.
+The core makes only outgoing connections, to Telegram and to Rex. It polls Telegram, so it needs no webhook, tunnel, or Tailscale setup. Its one listening port is the Mini App's (section 8.9a). It exists only when `[miniapp] url` is set, and a Tailscale Funnel (or another HTTPS address) reaches it.
 
 ### 3.1 Components of the daemon
 
@@ -83,6 +83,7 @@ rex-tg makes only outgoing connections. It opens no port, so it needs no webhook
 | Turn tracker | Groups events into turns. Drives the live progress message and decides when a turn ends. |
 | Outbox and sender | Removes duplicates, keeps order, splits long text, formats it, respects rate limits, and sends or edits messages. |
 | Telegram poller and router | Reads updates with `getUpdates` long polling. Routes commands, button presses, and topic messages. |
+| Mini App server | Serves the owner's Mini App pages on `[miniapp] listen`, only when `[miniapp] url` is set. Checks Telegram's signature on each page request (8.9a). |
 | Input deliverer | Checks that typing is safe, steers a working agent or waits until it is idle, types the text, and adds delivery receipts. |
 
 The Rex gateway uses the CLI, not the server socket. The Rex skill guide asks tools to use the CLI's commands instead of the socket. The CLI path is set in the config, because `rex` is not on `PATH` in every shell.
@@ -420,6 +421,7 @@ While a turn runs, the topic shows the agent's text as a Telegram draft (`sendMe
 - In rex-tg's own format (rich messages off, or a rich message that Telegram rejected), tables become monospace blocks when they fit a phone (40 characters or less). A wider grid would wrap on a phone and its columns would fall apart, so a wider table becomes a list: one block per row, with the first cell in bold and then `Column: value` for the others. Links and code in cells keep their format. With `[display] rich_messages`, Telegram renders the table itself.
 - Link previews are off, because agent answers often hold URLs from logs and code.
 - An answer longer than four full messages (16000 characters) is sent as a `.md` file.
+- With the Mini App on (8.9a), an answer longer than `[miniapp] answer_preview` is not split like this. The chat gets its start, and the rest is in a page.
 
 ### 8.3 Modes
 
@@ -525,7 +527,7 @@ When the prompt ends, by a button or on the Mac, rex-tg removes the buttons from
 
 **When a prompt is answered.** Claude Code and Codex send no hook when a prompt is answered, so the pane stays `blocked` until the next prompt or the end of the turn, and messages that wait for the prompt would wait for the whole turn. So when a session's transcript goes on (a tool call or result, or commentary) while its pane is blocked, rex-tg reads the screen 300 ms later, and it also reads it on a clock while the pane stays blocked (`Timing.PromptRecheck`, 3 s, then every 15 s after the first minute; the first clock read comes one step after the pane became blocked), because an approved command writes nothing until it ends. Only the panes that have a topic are read. The prompt counts as gone only after two reads in a row show none, for the same blocked state, within 10 s (the second read comes soon after the first): one read may come before the agent has drawn its prompt, or in the middle of a redraw. Key hints at the bottom of the screen (`Esc to cancel`, `Enter to select`), or the same screen as an open alert, count as a prompt still there. A result that comes back after the pane's blocked state changed (another prompt) is dropped. Without a prompt on it, the pane counts as working again: the alerts close and waiting messages go in. The screen decides, not the transcript alone, because a tool that runs alongside can write its result while another still waits for its answer.
 
-**Questions.** Claude Code reports its questions (AskUserQuestion) as permission prompts, so rex-tg tells them apart by their layout: boxes, a text field, a Next row, or a tab bar (seen live in Claude Code 2.1.323). In a question with answers to tick, a digit ticks or unticks one; the alert stays open and shows the boxes as the screen does after the key. `Next ➡` moves the cursor to the Next row with Down or Up, one key at a time, reads the screen after each, and presses Enter there; every key passes the checks of a button first. Several questions show one at a time: after each answer rex-tg looks at the screen again (after 1 and 3 seconds), and when the pane is still blocked with another prompt that has answers, that prompt gets its own alert, up to "Review your answers" with `1. Submit answers` and `2. Cancel`. A reply to a question is your own answer: rex-tg presses the digit of "Type something", checks that the cursor is on it, pastes your text as one line, and presses Enter. A question with answers to tick takes no text from Telegram.
+**Questions.** Claude Code reports its questions (AskUserQuestion) as permission prompts, so rex-tg tells them apart by their layout: boxes, a text field, a Next row, or a tab bar (seen live in Claude Code 2.1.323). In a question with answers to tick, a digit ticks or unticks one; the alert stays open and shows the boxes as the screen does after the key. `Next ➡` moves the cursor to the Next row with Down or Up, one key at a time, reads the screen after each, and presses Enter there; every key passes the checks of a button first. Several questions show one at a time: after each answer rex-tg looks at the screen again (after 1 and 3 seconds), and when the pane is still blocked with another prompt that has answers, that prompt gets its own alert, up to "Review your answers" with `1. Submit answers` and `2. Cancel`. The review page lists each question with its answer (`• question`, `→ answer`), and its buttons are `1 Submit answers`, `2 Cancel`, and Esc. A reply to a question is your own answer: rex-tg presses the digit of "Type something", checks that the cursor is on it, pastes your text as one line, and presses Enter. A question with answers to tick takes no text from Telegram.
 
 **Keys by agent** (Claude Code 2.1.323 and Codex 0.167.1, read from their binaries).
 
@@ -570,11 +572,11 @@ The first line is the topic name (section 7), the state, and how long the agent 
 - A redraw uses the registry's state, so it runs no Rex scan. `↻ Refresh` scans first.
 - The list stays within Telegram's limits (4096 characters, 100 buttons): at most 20 agents, and then "… and N more". The waiting ones come first, so they are never cut.
 
-Commands in the main chat: `/agents`, `/new` (start an agent, see below), `/topics` (topics and their states), `/status` (daemon health), `/help`.
+Commands in the main chat: `/agents`, `/new` (start an agent, see below), `/topics` (topics and their states), `/status` (daemon health), `/pause` and `/unpause` (stop or allow typing into panes), `/help`.
 
-Commands in a topic: `/info`, `/screen [lines]` (a picture; `/screen text` sends text, see below), `/approve`, `/deny`, `/esc`, `/interrupt`, `/key <keys>`, `/force <text>`, `/model [value]`, `/effort [level]`, `/mode progress|block|final`, `/verbose on|full|off`, `/reasoning on|off`, `/resend [id]`, `/unlink`, `/help`.
+Commands in a topic: `/info`, `/screen [lines]` (a picture; `/screen text` sends text, see below), `/approve`, `/deny`, `/esc`, `/interrupt`, `/key <keys>`, `/force <text>`, `/model [value]`, `/effort [level]`, `/mode progress|block|final`, `/verbose on|full|off`, `/reasoning on|off`, `/resend [id]`, `/mute`, `/unmute`, `/at` (8.9), `/rename <name>` (8.9), `/unlink`, `/help`.
 
-**`/screen`.** It reads the pane (`rex capture --trim`), redacts the whole text, keeps the last `[lines]` lines (30 by default), and renders them to a PNG (`internal/termimg`): Menlo at 2x, light text on a dark background, a wide character in two cells, at most 60 lines and 200 columns, and within Telegram's photo limits (each side and the sum of both at most 10000 px). Redaction comes first, so the picture never holds an unredacted secret. The picture goes out with `sendPhoto`, silently, in one call from a worker, with the topic name and the time as caption. It does not use the outbox, so it is never sent again: a failure with an unknown outcome sends nothing more. When Telegram answers 400, or the request never left, or the picture cannot be made, the text goes out instead, as `<pre>`. `/screen text` always sends text. Without Menlo, the picture uses a small built-in font.
+**`/screen`.** It reads the pane (`rex capture --trim`), redacts the whole text, keeps the last `[lines]` lines (30 by default, at most 80), and renders them to a PNG (`internal/termimg`): Menlo at 2x, light text on a dark background, a wide character in two cells, at most 60 lines and 200 columns, and within Telegram's photo limits (each side and the sum of both at most 10000 px). Redaction comes first, so the picture never holds an unredacted secret. The picture goes out with `sendPhoto`, silently, in one call from a worker, with the topic name and the time as caption. It does not use the outbox, so it is never sent again: a failure with an unknown outcome sends nothing more. When Telegram answers 400, or the request never left, or the picture cannot be made, the text goes out instead, as `<pre>`. `/screen text` always sends text, the last 3800 characters at most. Without Menlo, the picture uses a small built-in font.
 
 How a topic routes text that starts with `/` (D15):
 
@@ -634,18 +636,18 @@ These features are built. Some are off until you set them up.
 | --- | --- | --- |
 | Photos and files | rex-tg downloads a photo or document, up to `[input] max_upload_mb` (20 MB, the Bot API limit), to `~/.local/state/rex-tg/uploads/<topic>/`, with mode 0600. Then it types the file's path, after the caption if there is one, like a text message. The agents read image and file paths from the prompt. Uploads older than 7 days are deleted. | On |
 | Voice notes | rex-tg downloads the voice note, converts it to 16 kHz mono WAV with ffmpeg, and runs `whisper_cli -m <model> -l <language> -nt -np -f <wav>`. It posts "🎤 <text>" in the topic and types the text like a text message. | Off until `[voice] whisper_cli` and `model` are set |
-| Rich messages | Final answers of up to 32768 characters go out with `sendRichMessage` (Bot API 10.1) as Markdown, so Telegram renders tables, code, and headings itself. On a 400 error, rex-tg sends the same answer in its own format (Telegram HTML, which falls back to plain text when Telegram cannot parse it), or as a `.md` file when it does not fit one message. This is safe for "at most once", because Telegram posted nothing. | On (`[display] rich_messages`) |
+| Rich messages | Final answers of up to 32768 characters go out with `sendRichMessage` (Bot API 10.1) as Markdown, so Telegram renders tables, code, and headings itself. On a 400 error, rex-tg sends the same answer in its own format (Telegram HTML, which falls back to plain text when Telegram cannot parse it), or as a `.md` file when it is longer than 4000 characters. This is safe for "at most once", because Telegram posted nothing. | On (`[display] rich_messages`) |
 | `/pause`, `/unpause` | In the main chat. `/pause` stops all typing into panes, for every topic, until `/unpause`. Outgoing messages continue. The flag survives a restart. | Not paused |
-| `/mute`, `/unmute` | In a topic. Muted topics send every message without sound. | Not muted |
+| `/mute`, `/unmute` | In a topic. A muted topic sends its answers and reminders without sound. An alert still makes a sound. | Not muted |
 | `/at <time or delay> <text>`, `/at`, `/at cancel <n>` | In a topic. Sends the text to the agent later, at an `HH:MM` time on this Mac or after a delay (`30m`, `2h`). `/at` lists the topic's schedules, `/at cancel <n>` removes one. A due text is queued like a typed message, so every normal check applies (flow 4). Kept in kv `sched:<id>`; at most 20 per topic. | None |
 | `/rename <name>` | In a topic. Names the topic, and its Rex tab in the session for `/new`, until `/rename auto`. | The session's name |
 
 ### 8.9a Answer buttons and the Mini App
 
-- **Quick replies.** The last text message of an answer carries buttons from `[display] quick_replies` (callback data `qr:<index>:<hash of the text>`). A tap queues the text like a message typed in the topic, with the tap's update id as the row id, so a repeat types nothing; a button made before the list changed is refused as out of date.
-- **Mini App.** A small HTTPS server (`[miniapp] listen`, reached through `[miniapp] url`, such as a Tailscale Funnel) serves `/app`, `/app.js`, and `/api/page?id=…`. A page request must carry the Mini App's init data; rex-tg checks Telegram's HMAC signature with the key derived from the bot token (the daemon keeps only that key), its age (at most 24 hours), and that it was signed for the owner. Pages live in kv `page:<random id>` for 30 days. Markdown is rendered with GFM; raw HTML in it is dropped.
+- **Quick replies.** The last text message of an answer carries buttons from `[display] quick_replies` (callback data `qr:<index>:<hash of the text>`). A tap queues the text like a message typed in the topic, with the tap's update id as the row id, so a repeat types nothing; a button made before the list changed is refused as out of date. The text follows the checks of a typed message (9.5), so it waits while a prompt is open. An answer that comes as a `.md` file has no buttons.
+- **Mini App.** A small local HTTP server (`[miniapp] listen`, 127.0.0.1:8770 by default) serves `/app`, `/app.js`, and `/api/page?id=…`. It runs only when `[miniapp] url` is set. `url` is the public HTTPS address that reaches it, such as a Tailscale Funnel (setup in [reference](reference.md#mini-app)). A page request must carry the Mini App's init data; rex-tg checks Telegram's HMAC signature with the key derived from the bot token (the server keeps that key, not the token), its age (at most 24 hours), and that it was signed for the owner. Pages live in kv `page:<random id>` for 30 days. Markdown is rendered with GFM; raw HTML in it is dropped.
 - **Long answers.** An answer longer than `[miniapp] answer_preview` characters is a page; the chat gets its first part (about 1200 characters, cut like a message) and a `📄 Whole answer` button.
-- **Turn changes.** When a turn's first prompt arrives, rex-tg writes the working files of the session's git repository as a tree, through a copy of the index (`GIT_INDEX_FILE`), so the user's index and files stay as they are; when the turn's answer arrives it does it again, and the diff of the two trees is a page. A `📝 <files> · +a −r` button goes on the answer, by the sender's markup hook when the page is ready before the answer goes out, else by an edit of the answer's keyboard. Each git call has a 15-second limit; a diff page holds at most 2 MB.
+- **Turn changes.** When a turn's first prompt arrives, rex-tg writes the working files of the session's git repository as a tree, through a copy of the index (`GIT_INDEX_FILE`), so the user's index and files stay as they are; when the turn's answer arrives it does it again, and the diff of the two trees is a page. A `📝 <files> · +a −r` button goes on the answer, by the sender's markup hook when the page is ready before the answer goes out, else by an edit of the answer's keyboard. The diff is redacted. A folder that is not a git repository gets no button. The snapshots write objects into the repository, which git cleans up later. Each git call has a 15-second limit; a diff page holds at most 2 MB.
 
 ### 8.10 Agent controls
 
@@ -701,7 +703,7 @@ Timeouts:
 - Connecting and the TLS handshake time out after 5 seconds each. TCP keepalive (5 s idle, 3 probes 3 s apart) ends a dead connection in about 15 seconds, so a silent outage does not hold a long poll for its whole timeout. Connections still use `SO_LINGER` 0 and HTTP/1.1 only.
 - After a network failure, the poll loop (and the startup `getMe`) retries after 0.5 s, doubling to 2 s. After an API error, it retries after 1 s, doubling to 30 s, and waits at least `retry_after` for a 429. The first failure of an outage is logged as a warning, later ones as debug, and one info line says when Telegram is reachable again and how long it was down.
 - `telegram.proxy` (optional) sends all Telegram traffic through an `http`, `https`, `socks5`, or `socks5h` proxy. When empty, `HTTPS_PROXY` and `ALL_PROXY` apply.
-- `telegram.fallback` (default true, used only with a proxy) lets the client use the direct route when the proxy fails. The client keeps a current route, the proxy at first. After 3 failures in a row that prove the request was not sent (`NotSentError`), later calls use the other route, and the same rule switches back. This includes long polls. A request that was not sent is also tried once at once on the other route, since nothing was posted. A failure with an unknown outcome is never sent again on the other route, so the at-most-once rule holds (9.1); it neither counts as a failure nor resets the run. An answer from Telegram, even a refusal, resets the run. Each switch logs one line, `Telegram route: direct` or `Telegram route: proxy`, with the reason class and never a URL.
+- `telegram.fallback` (default true, used only when `telegram.proxy` is set; an environment proxy has no fallback) lets the client use the direct route when the proxy fails. The client keeps a current route, the proxy at first. After 3 failures in a row that prove the request was not sent (`NotSentError`), later calls use the other route, and the same rule switches back. This includes long polls. A request that was not sent is also tried once at once on the other route, since nothing was posted. A failure with an unknown outcome is never sent again on the other route, so the at-most-once rule holds (9.1); it neither counts as a failure nor resets the run. An answer from Telegram, even a refusal, resets the run. Each switch logs one line, `Telegram route: direct` or `Telegram route: proxy`, with the reason class and never a URL.
 
 Telegram errors:
 
@@ -772,6 +774,7 @@ Which checks apply to which action:
 | Action | 1 Owner | 2 Live | 3 Agent in front | 4 No open prompt | Alert still matches |
 | --- | --- | --- | --- | --- | --- |
 | Text message, `⚡ Send now` | yes | yes | yes | yes | — |
+| Quick reply, or scheduled `/at` text | yes | yes | yes | yes | — |
 | `/force <text>` | yes | yes | yes | skipped | — |
 | `/key`, `/esc`, `/interrupt` | yes | yes | yes | — | — |
 | Prompt button, `/approve`, `/deny` | yes | yes | yes | a prompt must be open | yes |
@@ -971,7 +974,7 @@ What each table holds. The notes that were in the old inline comments are kept h
 - `progress`: the live progress message of the running turn. At most one per topic. `turn_key` is the session and the key of the turn's first event. `tg_message_id` is set once the message exists. `rows` is a JSON array.
 - `alert`: a permission prompt or question with answer buttons (section 8.6). `screen_hash` is a hash of the prompt text on the screen. `options` holds the button labels and keys, in order.
 - `inbound`: one incoming Telegram update. `update_id` makes each update count once. `kind` is `text`, `command`, `callback`, or `other`. `body_hash` is used to match the echo in the transcript. For text, `state` goes from `queued` to `typing`, then `delivered`, then `acked`. A `typing` row becomes `unknown` after a crash. `refused` and `expired` are the other end states. A handled command or button press is `done`. `reason` says why a message was refused or expired. `acked_event_key` is the transcript line that confirmed it.
-- `kv`: small values, such as the Telegram poll offset, the owner user ID and chat ID, and the schema version.
+- `kv`: small values, such as the Telegram poll offset, the owner user ID and chat ID, and the schema version. Scheduled messages (`sched:<id>`) and Mini App pages (`page:<id>`) are kv rows too.
 - Indexes: `pane_conversation` allows one pane per session. `thread_current` allows one open topic per current session. `outbox_part_state` and `inbound_thread` speed up lookups by state.
 
 `conversation` and `thread` refer to each other. The daemon writes them in one transaction, in this order: the `conversation` row with an empty `thread_id`, then the `thread` row, then `conversation.thread_id`. One rule must always hold, and a test checks it: the current session of a topic belongs to that topic. In other words, `thread.current_conversation_id` points to a conversation whose `thread_id` is that topic.
@@ -1002,6 +1005,7 @@ Housekeeping:
 - **Starting agents.** `/new` runs an agent's `launch` command (section 12) in a folder you name. Only the owner can use it, and it starts nothing while typing is paused.
 - **No server start.** rex-tg calls `rex` with `--autostart=false`.
 - **Local files.** The state folder and the spool folder are only readable by you (mode 0700). Spool files are mode 0600.
+- **Mini App.** Its pages are reachable only through Telegram's signed requests, and only for the owner. The shell files `/app` and `/app.js` hold no data and need no signature. The server listens on `[miniapp] listen` (127.0.0.1 by default). A Tailscale Funnel makes it reachable from the internet, so the signature check is the only guard for the pages.
 
 ## 12. Files, processes, and code
 
@@ -1022,7 +1026,7 @@ Config example:
 [telegram]
 # The token is in the Keychain. The owner is saved by pairing (rex-tg login).
 # proxy = "socks5://127.0.0.1:1080"  # optional; empty uses HTTPS_PROXY / ALL_PROXY
-# fallback = true                    # with a proxy: use the direct route when the proxy fails
+# fallback = true                    # used only with proxy: use the direct route when the proxy fails
 rate_per_second = 1
 rate_burst = 5
 
@@ -1051,12 +1055,19 @@ progress_delay = "2s"
 progress_edit_interval = "2s"
 progress_animation = "3s"
 rich_messages = true
+quick_replies = ["Continue", "Yes", "Run tests", "Commit"]
+show_changes = true
 
 [input]
 queue_expiry = "30m"
 join_window = "300ms"
 busy_after_typing = "15s"
 while_busy = "steer"
+
+[miniapp]
+url = ""                     # the Mini App's public https:// address (8.9a); empty turns it off
+listen = "127.0.0.1:8770"
+answer_preview = 3000
 ```
 
 CLI commands:
@@ -1066,11 +1077,12 @@ CLI commands:
 | `rex-tg daemon` | Run the daemon (launchd calls this). |
 | `rex-tg hook <runtime>` | Called by agent hooks. Writes one spool file and prints nothing. |
 | `rex-tg login` | Store the bot token in the Keychain, then pair your Telegram account (section 11). |
+| `rex-tg pair` | Make a new pairing code (section 11). |
 | `rex-tg install` / `uninstall` | Add or remove the launchd agent, the hooks, and the pi extension. `--only pi`, `--only claude`, or `--only codex` limits the change to one agent's hooks, plus the launchd agent on install. Back up each file before a change. Running either one twice changes nothing. |
 | `rex-tg status` | Show topics, queues, and recent errors. Opens the database read-only. |
 | `rex-tg doctor` | Check the Rex CLI path, the Rex server, the token, `getMe` (`has_topics_enabled`), the pairing, and the hooks. |
 
-Go stack (Go 1.25, installed through mise):
+Go stack (the version is in `.tool-versions`, installed through mise):
 
 | Need | Choice | Reason |
 | --- | --- | --- |
@@ -1088,22 +1100,27 @@ Go stack (Go 1.25, installed through mise):
 Source layout:
 
 ```
-cmd/rex-tg/main.go          CLI entry: daemon, hook, login, install, status, doctor
+cmd/rex-tg/                 CLI entry: daemon, hook, login, pair, install, uninstall, status, doctor
 internal/
-  config/
-  db/                       schema.sql (embedded), migrations
-  rex/                      CLI wrapper, event stream
-  registry/                 panes, sessions, scans, hook spool, resolver, take-over
-  agents/                   adapter interface
-  agents/pi/  agents/claude/  agents/codex/
-  tail/                     offset-based JSONL tailer
+  agents/                   the normalized event types and the Adapter interface
+  agents/pi/  agents/claude/  agents/codex/   transcript adapters
+  config/                   TOML config and its defaults
+  daemon/                   the whole daemon: core loop, Telegram router, alerts, /new, /at, Mini App
+  format/                   Markdown to Telegram HTML, splitting, UTF-16 length, secret removal
+  inbound/                  text routing, safety checks, waiting queue policy, echo matching
+  install/                  hook entries, the pi extension, the launchd agent
+  keychain/                 the bot token in the macOS Keychain (through the security command)
+  miniapp/                  the Mini App server, the signature check, page rendering
+  registry/                 panes, sessions, state, take-over and resume rules
+  rex/                      typed wrapper around the rex CLI (rex/rextest is its fake)
+  sender/                   the only writer to Telegram: outbox, parts, rate limits, progress
+  store/                    SQLite schema, migrations, and queries
+  tail/                     offset-based JSONL follower
+  telegram/                 Bot API client and error classes (telegram/tgtest is its fake)
+  termimg/                  the /screen picture (PNG)
   turn/                     turn tracker and progress message
-  outbox/                   outbox, sender, parts, format, redact
-  telegram/                 client, poller, router, views
-  inbound/                  safety check, queue, typing, receipts
-  install/                  claude, codex, pi, launchd
 extensions/pi/rex-tg.ts     pi extension template
-testdata/<runtime>/*.jsonl  synthetic transcripts only
+testdata/                   synthetic transcripts and golden files only, in some packages
 ```
 
 ## 13. Failure handling
@@ -1119,6 +1136,7 @@ testdata/<runtime>/*.jsonl  synthetic transcripts only
 | Transcript replaced or shortened | The offset no longer fits the file. | A new `dev_ino`, or a size below the offset, starts a read from byte 0. Every batch of that re-read carries `Reset` until it reaches the end of the file, so the replay guard and the unique keys (section 6) absorb repeats also in a long transcript. |
 | A transcript read fails | The follower stops. | It starts again from the stored cursor after 5 seconds. A missing file is not a failure: the follower waits for it. |
 | Telegram is unreachable | Rows wait in the outbox. | They are sent later, in order. Stale progress edits are dropped. |
+| The Mini App address is in use or not valid | The buttons still show, but their pages do not open. | The daemon logs `mini app: listen` and runs without the Mini App server. Set `[miniapp] listen`, then restart. |
 | Another program polls with the same token | Telegram answers 409. | Polling stops, and `rex-tg doctor` reports it. |
 | A line is not complete yet | A half line is at the end of the file. | The tailer reads only up to the last newline. |
 | A transcript line is very large | Tool output or images can be megabytes. | The tailer reads line by line and skips lines over a size limit after reading their type. |
@@ -1186,3 +1204,4 @@ Assumptions that the spikes in [plan.md](plan.md) must check. These are still op
 - S3: the Codex hooks at runtime. This covers the payload fields (their names occur in the Codex binary), whether Codex asks to trust new hook entries, and whether Codex hooks see `REX_BLOCK`.
 - S3: pi's `/new`, `/resume`, and forks, and whether pi loads every file in `~/.pi/agent/extensions/`.
 - S3: what pi does to the transcript on resume: the same file, or a new one.
+- Mini App: a live Telegram Mini App through a Tailscale Funnel on port 8443. The tests sign requests with a made-up token.

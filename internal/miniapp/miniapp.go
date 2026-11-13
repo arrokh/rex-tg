@@ -23,6 +23,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/yuin/goldmark"
@@ -57,6 +58,10 @@ type Server struct {
 	load   func(id string) (Page, bool)
 	now    func() time.Time
 	log    *slog.Logger
+	// refusedAt is when a refusal was last logged: the address is public,
+	// so refusals are logged at most once a minute.
+	refusedAt atomic.Int64
+	refused   atomic.Int64 // refusals since that log line
 }
 
 // New makes a server. botToken is used only to derive the key that checks
@@ -163,8 +168,10 @@ func (s *Server) page(w http.ResponseWriter, r *http.Request) {
 	user, err := CheckInitData(r.Header.Get("X-Telegram-Init-Data"), s.secret, s.now(), MaxAge)
 	owner := s.owner()
 	if err != nil || owner == 0 || user != owner {
-		if s.log != nil {
-			s.log.Info("mini app: refused a request", "reason", refusal(err, owner))
+		s.refused.Add(1)
+		if now := s.now().UnixNano(); s.log != nil && now-s.refusedAt.Load() >= int64(time.Minute) {
+			s.refusedAt.Store(now)
+			s.log.Info("mini app: refused requests", "count", s.refused.Swap(0), "last_reason", refusal(err, owner))
 		}
 		http.Error(w, `{"error":"Open this page from its button in Telegram."}`, http.StatusForbidden)
 		return

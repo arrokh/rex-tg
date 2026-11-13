@@ -34,6 +34,10 @@ This guide is the contract between the packages of rex-tg. [design.md](design.md
 | `internal/config` | TOML config with defaults | toml |
 | `internal/registry` | Panes, sessions, state merge, take-over and resume rules (pure) | `agents` |
 | `internal/inbound` | Safety checks, waiting queue policy, echo matching | `agents` |
+| `internal/sender` | The only writer to Telegram: outbox, parts, rate limits, progress messages | `format`, `store`, `telegram` |
+| `internal/keychain` | The bot token in the macOS Keychain, through `security` | stdlib |
+| `internal/miniapp` | Mini App server: page signature check and page rendering | goldmark |
+| `internal/termimg` | The `/screen` picture (PNG), from terminal lines | `golang.org/x/image` |
 | `internal/daemon` | Wiring: core loop, sender, router, alerts, housekeeping | everything |
 | `cmd/rex-tg` | CLI: `daemon`, `hook`, `login`, `install`, `uninstall`, `status`, `doctor` | everything |
 
@@ -349,13 +353,14 @@ type RuntimeInput struct {
 	Answers         []Answer // fallback permission answers when the screen shows no numbered options
 }
 type Config struct {
-	Telegram struct{ APIBase string; RatePerSecond float64; RateBurst int }
+	Telegram struct{ APIBase, Proxy string; Fallback bool; RatePerSecond float64; RateBurst int }
 	Rex      struct{ CLI string; ScanInterval Duration; NewSession string } // NewSession: the session for /new, default "rex-tg"
 	Agents   struct {
 		PiArgv0, ClaudeArgv0, ClaudeExecGlob, CodexNames []string
 		Pi, Claude, Codex                                RuntimeInput
 	}
-	Display struct{ Mode string; Backfill int; ShowMacPrompts, MacNotice bool; ProgressDelay, ProgressEditInterval Duration }
+	Display struct{ Mode string; Backfill int; ShowMacPrompts, MacNotice, ShowChanges bool; ProgressDelay, ProgressEditInterval Duration; QuickReplies []string }
+	MiniApp struct{ URL, Listen string; AnswerPreview int } // URL empty turns the Mini App off
 	Alerts  struct{ RemindAfter Duration; Reminders int } // 10m, 3; 0 turns reminders off
 	Input   struct{ QueueExpiry, JoinWindow, JoinWindowLong, BusyAfterTyping Duration; MaxUploadMB int }
 	Voice   struct{ WhisperCLI, Model, Language string } // optional; empty WhisperCLI turns voice notes off
@@ -367,7 +372,7 @@ func (c Config) DBPath() string; func (c Config) SpoolDir() string; func (c Conf
 func (c Config) Input(rt agents.Runtime) RuntimeInput
 ```
 
-Defaults come from design section 12 and the spikes: `ClaudeArgv0 ["claude", "cux"]` (cux runs claude as its child, so cux is the pane's foreground process); `Rex.NewSession "rex-tg"`, which must be a name that Rex takes (not empty, no leading `-`, no control characters, at most 128 characters); pi answers `[]`; Claude answers `1 Yes → ["1"]`, `2 Always → ["2"]`, `4 No → ["4"]`, `Esc → ["escape"]`; Codex answers `Yes → ["y"]`, `Always → ["p"]`, `No → ["escape"]`; every runtime `PasteEnterDelay 300ms`, `InterruptKeys ["escape"]`; `WhileWorking` steer for all three.
+Defaults come from design section 12 and the spikes: `ClaudeArgv0 ["claude", "cux"]` (cux runs claude as its child, so cux is the pane's foreground process); `Rex.NewSession "rex-tg"`, which must be a name that Rex takes (not empty, no leading `-`, no control characters, at most 128 characters); pi answers `[]`; Claude answers `1 Yes → ["1"]`, `2 Always → ["2"]`, `4 No → ["4"]`, `Esc → ["escape"]`; Codex answers `Yes → ["y"]`, `No → ["escape"]` (no "always" answer, since a key like `p` could make a lasting rule); every runtime `PasteEnterDelay 300ms`, `InterruptKeys ["escape"]`; `WhileWorking` steer for all three; `Telegram.Fallback` true; `Display.ShowChanges` true; `Display.QuickReplies` `Continue`, `Yes`, `Run tests`, `Commit`; `MiniApp.Listen "127.0.0.1:8770"`, `MiniApp.AnswerPreview` 3000.
 
 ### internal/registry
 
@@ -439,7 +444,7 @@ type Delivered struct{ UpdateID int64; BodyHash, Body string; DeliveredAt time.T
 func MatchEcho(prompt string, at time.Time, delivered []Delivered) (int64, bool) // hash within 10 min, else 40-character prefix within 30 s
 ```
 
-Topic commands: `info`, `screen`, `approve`, `deny`, `esc`, `interrupt`, `key`, `force`, `model`, `effort`, `mode`, `verbose`, `reasoning`, `resend`, `unlink`, `mute`, `unmute`, `help`. Main-chat commands: `start`, `agents`, `topics`, `status`, `pause`, `unpause`, `help`. `/cmd@<botUsername>` is the same command; a command addressed to another bot is ignored.
+Topic commands: `info`, `screen`, `approve`, `deny`, `esc`, `interrupt`, `key`, `force`, `model`, `effort`, `mode`, `verbose`, `reasoning`, `resend`, `unlink`, `mute`, `unmute`, `rename`, `at`, `help`. Main-chat commands: `start`, `agents`, `new`, `topics`, `status`, `pause`, `unpause`, `help`. `/cmd@<botUsername>` is the same command; a command addressed to another bot is ignored.
 
 ### internal/sender
 
