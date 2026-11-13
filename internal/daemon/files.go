@@ -154,7 +154,13 @@ func (d *daemon) fileOfferButton(cb *telegram.CallbackQuery, parts []string) {
 	}
 	// The offer may be days old: the path may lead somewhere else now.
 	home, _ := os.UserHomeDir()
-	real, ok := placeOK(path, home, o.CWD)
+	cwd := o.CWD
+	if cwd == "" { // an offer of v0.1.10 or older: the topic's agent folder
+		if conv, err := d.st.Conversation(d.ctx, th.CurrentConversationID); err == nil {
+			cwd = conv.CWD
+		}
+	}
+	real, ok := placeOK(path, home, cwd)
 	if !ok {
 		d.answerCallback(cb.ID, name+" is not in a place rex-tg sends files from.", false)
 		return

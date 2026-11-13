@@ -1189,3 +1189,70 @@ func TestStaleCheckNoteIsSweptAtStart(t *testing.T) {
 		t.Errorf("%d sends, want only the first note", n)
 	}
 }
+
+// TestCheckWaitsAgainAfterALongStop: a check stops while it waits for a
+// poll, and rex-tg stays down for 10 minutes. After the start, the wait for
+// a poll begins again: the part is judged when Telegram answers, instead of
+// giving the notice at once because the note is old.
+func TestCheckWaitsAgainAfterALongStop(t *testing.T) {
+	var stopping atomic.Bool
+	stopCh := make(chan func(), 1)
+	e := newEnv(t, sender.Options{PolledSince: func(time.Time) bool {
+		if stopping.CompareAndSwap(false, true) {
+			go func() { (<-stopCh)() }()
+		}
+		time.Sleep(20 * time.Millisecond) // real time: see the tests above
+		return false
+	}})
+	th := e.topic(1)
+	id := e.lostSend(th, true)
+	stop := e.start()
+	stopCh <- stop
+	waitFor(t, "the note", func() bool { return len(e.srv.Calls("sendMessage")) == 1 })
+	waitFor(t, "the stop", func() bool { return stopping.Load() })
+	stop()
+	e.clk.mu.Lock()
+	e.clk.now = e.clk.now.Add(10 * time.Minute) // rex-tg is down
+	e.clk.mu.Unlock()
+	var asks atomic.Int32
+	e.s = sender.New(e.st, e.srv.Client(), sender.Options{Now: e.clk.Now, Sleep: e.clk.Sleep, PolledSince: func(time.Time) bool {
+		return asks.Add(1) > 3 // Telegram answers after a few tries
+	}})
+	if err := e.s.Recover(ctx); err != nil {
+		t.Fatal(err)
+	}
+	e.start()
+	e.waitState(id, store.OutboxSent)
+	for _, c := range e.srv.Calls("sendMessage") {
+		if s, _ := c.Params["text"].(string); strings.Contains(s, "may not have arrived") {
+			t.Fatalf("a notice came at once: %q", s)
+		}
+	}
+}
+
+// TestNoteOfAGonePartIsDeletedAtStart: a note's row whose part is gone (an
+// old reply pruned) still deletes its note, by the chat kept with it. A row
+// in the old form, without the chat, is only forgotten.
+func TestNoteOfAGonePartIsDeletedAtStart(t *testing.T) {
+	e := newEnv(t, sender.Options{})
+	th := e.topic(1)
+	if err := e.st.Set(ctx, "check_note:9999:0", fmt.Sprintf("77:0:%d:%d", th.ChatID, th.ID)); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.st.Set(ctx, "check_note:9998:0", "78:0"); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.s.Recover(ctx); err != nil {
+		t.Fatal(err)
+	}
+	e.start()
+	waitFor(t, "the note deleted", func() bool { return len(e.srv.Calls("deleteMessage")) == 1 })
+	if got := fmt.Sprint(e.srv.Calls("deleteMessage")[0].Params["message_id"]); got != "77" {
+		t.Errorf("deleted message %s, want the note 77", got)
+	}
+	for _, k := range []string{"check_note:9999:0", "check_note:9998:0"} {
+		if _, ok, _ := e.st.Get(ctx, k); ok {
+			t.Errorf("row %s is left", k)
+		}
+	}
+}

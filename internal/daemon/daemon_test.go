@@ -855,6 +855,50 @@ func TestRapidMessagesAreJoined(t *testing.T) {
 	e.never("the joined prompt posted back", 400*time.Millisecond, func() bool { return e.hasText(thread, "You (on Mac)") })
 }
 
+// With input.while_busy = "steer" (the default), a message sent while the
+// agent works is typed at once and joins the run, with no waiting notice.
+// A message sent while a prompt is open still waits.
+func TestMessageSteersAWorkingAgent(t *testing.T) {
+	e, p, thread := piTopicCfg(t, "pi-steer", func(e *env) { e.cfg.InputSettings.WhileBusy = "steer" })
+	p.User("busy work")
+	p.ToolCall("c1", "sleep 5")
+	e.waitFor("the progress message", func() bool { return e.hasText(thread, "⏱") })
+
+	id := e.say(thread, "also check the docs, and do not open a PR yet")
+	e.waitFor("the text typed while the agent works", func() bool { return len(e.pastes()) == 1 })
+	if got := e.pastes()[0]; got != "also check the docs, and do not open a PR yet" {
+		t.Errorf("pasted %q", got)
+	}
+	e.waitFor("eyes", func() bool { m, _ := e.message(id); return m.Reaction == "👀" })
+	if e.hasText(thread, "Waiting until the agent is idle") {
+		t.Error("a steered message got a waiting notice")
+	}
+
+	// A prompt shows on the screen before its alert: nothing is pasted
+	// into it, and the message goes once the screen is clear.
+	e.setScreen(permScreen)
+	e.say(thread, "second note")
+	e.never("a paste into the prompt on the screen", 700*time.Millisecond, func() bool { return len(e.pastes()) > 1 })
+	e.setScreen("")
+	e.waitFor("the second note after the prompt went", func() bool { return len(e.pastes()) == 2 })
+
+	// A prompt is open: the next message waits for it, and says so.
+	e.setScreen(permScreen)
+	e.setStatus("blocked", "permission")
+	e.waitText(thread, "Permission needed")
+	e.say(thread, "and this one waits")
+	e.waitText(thread, "Waiting until the prompt is answered")
+	e.never("typing while the prompt is open", 500*time.Millisecond, func() bool { return len(e.pastes()) > 2 })
+	e.setScreen("")
+	e.setStatus("working", "")
+	e.waitFor("the waiting message after the prompt", func() bool { return len(e.pastes()) == 3 })
+
+	// An agent command never joins a running turn: it waits until idle.
+	e.say(thread, "//compact")
+	e.waitText(thread, "Waiting until the agent is idle")
+	e.never("an agent command typed into the run", 500*time.Millisecond, func() bool { return len(e.pastes()) > 3 })
+}
+
 func TestSendNowAndCancelButtons(t *testing.T) {
 	e, _, thread := piTopic(t, "pi-buttons")
 	working(e, e.pi, thread)

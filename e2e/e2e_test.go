@@ -420,7 +420,8 @@ func runFlow(t *testing.T, runtime string) {
 		return endsRecorded(reactions(tg, chatID, u1.Message.MessageID))
 	})
 
-	// Second prompt starts a run; the third is sent while the agent works.
+	// Second prompt starts a run; the third is sent while the agent works
+	// and steers it (the dummy agent then takes it after the second run).
 	p2, p3 := "second prompt", "third prompt while working"
 	tg.PushMessage(chatID, threadID, ownerID, p2)
 	eventually(t, 30*time.Second, "dummy agent to receive the second prompt", func() bool {
@@ -435,13 +436,11 @@ func runFlow(t *testing.T, runtime string) {
 		_, ok := findEntry(agentLog, "prompt", p3)
 		return ok
 	})
+	// input.while_busy = "steer" (the default): the third prompt is typed
+	// while the agent works, as typing on the Mac would, not after the run.
 	e3, _ := findEntry(agentLog, "prompt", p3)
-	d2, ok := findEntry(agentLog, "done", p2)
-	if !ok {
-		t.Fatalf("third prompt arrived but the second run never finished")
-	}
-	if e3.Busy || e3.time().Before(d2.time()) {
-		t.Errorf("third prompt was typed while the agent was working (prompt at %s, second run done at %s, busy=%v)", e3.At, d2.At, e3.Busy)
+	if d2, ok := findEntry(agentLog, "done", p2); !e3.Busy || (ok && !e3.time().Before(d2.time())) {
+		t.Errorf("third prompt was not typed while the agent worked (prompt at %s, busy=%v, second run done=%v at %s)", e3.At, e3.Busy, ok, d2.At)
 	}
 	for _, p := range []string{p2, p3} {
 		p := p

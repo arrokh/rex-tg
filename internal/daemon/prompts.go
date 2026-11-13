@@ -301,7 +301,7 @@ func (d *daemon) alertNote(u telegram.Update, m *telegram.Message, th store.Thre
 			d.replyTopic(th, tag, format.Escape(said)+" Your note was not sent.")
 			return
 		}
-		d.emit(evQueueText{threadID: th.ID, orig: upd, tgMsg: msg, text: note, kind: "text", action: inbound.ActText,
+		d.emit(evQueueText{threadID: th.ID, orig: upd, tgMsg: msg, text: note, kind: kindNote, action: inbound.ActText,
 			note: &noteDone{tag: tag, label: label}})
 	})
 	return true

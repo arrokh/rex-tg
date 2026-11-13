@@ -87,7 +87,8 @@ To send an agent a command that has a bot command's name, use two slashes: `//he
 
 ### What you see
 
-- **⏳ Waiting:** the agent is busy, so your message waits. It is typed when the agent is idle. `⚡ Send now` types it at once. `✖ Cancel` drops it. A waiting message expires after 30 minutes.
+- **While the agent works,** your message joins the current run at once, like typing on the Mac. Set `[input] while_busy = "wait"` to keep it until the agent is idle.
+- **⏳ Waiting:** a prompt is open, so your message waits. `⚡ Send now` types it at once. `✖ Cancel` drops it. A waiting message expires after 30 minutes.
 - **Reactions on your message:** 👀 means typed into the pane. 👍 means the agent got it. 👎 means refused; a reply says why.
 - **Progress:** one message updates while the agent works. When the turn ends, it becomes one summary line.
 - **Answer:** a new message. A long answer comes as a few chat-sized messages, split at paragraphs, without numbers.

@@ -74,8 +74,16 @@ func TestUnansweredPromptGetsReminders(t *testing.T) {
 	})
 	e.never("a third reminder", 900*time.Millisecond, func() bool { return len(reminders(e, thread)) > 2 })
 
-	// The prompt ends: its reminder goes.
+	// The prompt ends: its reminder goes. Here that delete fails, and the
+	// reminder keeps its Dismiss button, so the user can still remove it.
+	e.tg.FailNext("deleteMessage", 1, 400, "Bad Request: message can't be deleted", 0)
 	e.setStatus("working", "")
+	e.waitFor("the failed delete", func() bool { return len(e.tg.Calls("deleteMessage")) >= 2 })
+	e.never("the Dismiss button taken away", 300*time.Millisecond, func() bool {
+		return buttonData(reminders(e, thread)[1], "Dismiss") == ""
+	})
+	r2 := reminders(e, thread)[1]
+	e.pressButton(r2, buttonData(r2, "Dismiss"))
 	e.waitFor("the reminder deleted", func() bool {
 		rs := reminders(e, thread)
 		return len(rs) == 2 && rs[1].Deleted

@@ -142,6 +142,11 @@ type Config struct {
 		JoinWindowLong  Duration `toml:"join_window_long"`
 		BusyAfterTyping Duration `toml:"busy_after_typing"`
 		MaxUploadMB     int      `toml:"max_upload_mb"`
+		// WhileBusy is what a message sent while the agent works does:
+		// "steer" types it into the current run at once (when the agent's
+		// while_working is steer or queue), "wait" waits until the agent is
+		// idle, with ⚡ Send now and ✖ Cancel.
+		WhileBusy string `toml:"while_busy"`
 	} `toml:"input"`
 	// Voice is optional. An empty WhisperCLI turns voice notes off.
 	Voice struct {
@@ -216,6 +221,7 @@ func Default(home string) Config {
 	c.InputSettings.JoinWindow = Duration{300 * time.Millisecond}
 	c.InputSettings.JoinWindowLong = Duration{1500 * time.Millisecond}
 	c.InputSettings.BusyAfterTyping = Duration{15 * time.Second}
+	c.InputSettings.WhileBusy = "steer"
 	c.InputSettings.MaxUploadMB = 20
 
 	c.State.Dir = filepath.Join(home, ".local/state/rex-tg")
@@ -299,6 +305,11 @@ func (c Config) validate() error {
 	case "progress", "block", "final":
 	default:
 		return fmt.Errorf("display.mode %q: want progress, block, or final", c.Display.Mode)
+	}
+	switch c.InputSettings.WhileBusy {
+	case "steer", "wait":
+	default:
+		return fmt.Errorf("input.while_busy %q: want steer or wait", c.InputSettings.WhileBusy)
 	}
 	for name, in := range map[string]RuntimeInput{"pi": c.Agents.Pi, "claude": c.Agents.Claude, "codex": c.Agents.Codex} {
 		switch in.WhileWorking {

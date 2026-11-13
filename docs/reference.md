@@ -109,9 +109,12 @@ Doctor checks:
 
 ### Waiting and sending
 
-- The waiting notice `⏳ Waiting until the agent is idle.` goes away when the message is typed (👀, then 👍) or refused (👎).
+- A message you send while the agent works joins the current run at once, as typing on the Mac does. Claude Code reads it after its current tool. Set `[input] while_busy = "wait"` to wait until the agent is idle instead.
+- A message still waits while a prompt is open, or for a moment right after another message was typed. Agent commands (`//compact`, `/model` buttons), shell commands (`!ls`), and the note of a prompt answer always wait until the agent is idle.
+- While the agent works, rex-tg reads the screen right before it types. If a prompt is on the screen, it waits instead of typing into it.
+- A message that waits 3 seconds or more gets a notice that says what it waits for, such as `⏳ Waiting until the prompt is answered.`, with `⚡ Send now` and `✖ Cancel`. The notice goes away when the message is typed (👀, then 👍) or refused (👎).
 - Waiting messages go in the order you sent them. Each one is its own turn.
-- `⚡ Send now` types the message while the agent works. All three agents steer: the message joins the current run.
+- `⚡ Send now` types a waiting message at once. All three agents steer: the message joins the current run.
 - Telegram splits long messages into parts. rex-tg joins parts that arrive close together into one prompt. The window is 300 ms, or 1500 ms for long messages.
 - A reply tells the agent what you reply to. Your text comes first, then `In reply to:` and the replied message as a quote (`> …`), cut at 600 characters. If you quote part of a message in Telegram, only that part is sent.
 - This works for replies to the agent's messages (answers, tool lines, prompts typed on the Mac) and to your own messages. A reply to one of rex-tg's own messages (notices, alerts, cards) sends only your text. So do an agent command such as `//compact` and a shell command such as `!ls`.
@@ -151,7 +154,7 @@ Doctor checks:
 
 - Tap a button to send its key to the pane. The buttons go away when the prompt ends. A button of an old prompt is refused.
 - `/approve` and `/deny` answer the open prompt too. `/deny` presses Esc, which both Claude Code and Codex read as "no, wait for me"; it never presses an answer that allows, makes a lasting rule, or starts something else.
-- Reminders: when a prompt waits for 10 minutes, the topic gets `⏰ Still waiting for your answer`, as a reply to the prompt. More reminders come 10 minutes after the one before, at most 3, and each one replaces the one before. They go away when the prompt ends; a reminder that Telegram did not confirm stays, and its `✓ Dismiss` button removes it. Set `[alerts] remind_after` and `reminders` to change this, and `remind_after = "0s"` to turn them off.
+- Reminders: when a prompt waits for 10 minutes, the topic gets `⏰ Still waiting for your answer`, as a reply to the prompt. More reminders come 10 minutes after the one before, at most 3, and each one replaces the one before. They go away when the prompt ends; a reminder that Telegram did not confirm, or that could not be deleted, stays, and its `✓ Dismiss` button removes it. Set `[alerts] remind_after` and `reminders` to change this, and `remind_after = "0s"` to turn them off.
 - Questions that allow free text get a `✍ Other…` button. Your next message becomes the answer. This is not tested yet (spike S2).
 - Time limits: a Claude Code safety check blocks the request by itself after a while (`automatically block this request in 2:00`). The alert then says `⏳ Answer within 2:00 (by 07:00:57)`, one reminder comes 30 seconds before, and if the time runs out the topic says `⌛ Blocked`.
 - Reply to a permission prompt with text to answer No with a note: rex-tg refuses it with Esc, then types your text as your next message, when the agent waits for it. A reply that starts with yes, ok, ya, iya, lanjut, or gas presses nothing: tap Yes for that. It works like Claude Code's "Tab to amend" for No, and Codex's "No, and tell Codex what to do differently". For Yes with a note, tap Yes and send the note as a message.
@@ -272,6 +275,7 @@ queue_expiry = "30m"                    # A waiting message expires after this t
 join_window = "300ms"                   # Messages that arrive this close together become one prompt.
 join_window_long = "1500ms"             # Join window when a message is 4000 characters or longer.
 busy_after_typing = "15s"               # After a message is typed, the pane counts as busy for up to this long.
+while_busy = "steer"                    # A message sent while the agent works: "steer" joins the current run, "wait" waits until idle.
 max_upload_mb = 20                      # Largest photo or file to download from Telegram.
 
 [voice]
