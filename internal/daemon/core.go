@@ -162,14 +162,17 @@ type daemon struct {
 	// below holds the topics where a message came below the progress
 	// message from outside the turn (any goroutine); tick hands them to
 	// the trackers (core).
-	belowMu     sync.Mutex
-	below       map[int64]bool
-	renamedBack time.Time  // the last rename back of the session for /new (under tabMu)
-	vimStuck    sync.Map   // pane id -> vimStuckMark: the vim label that showed no reaction to a key
-	newMu       sync.Mutex // held while /new finds or makes a session, see startTab
-	botUser     string     // set before the workers start
-	scanQueue   atomic.Bool
-	ctl         controlStore // latest setting values per session, see controls.go
+	belowMu sync.Mutex
+	below   map[int64]bool
+	// promptChecks are the sessions whose transcript went on while their
+	// pane may be blocked, by when to read the screen (checkPromptGone).
+	promptChecks map[int64]time.Time
+	renamedBack  time.Time  // the last rename back of the session for /new (under tabMu)
+	vimStuck     sync.Map   // pane id -> vimStuckMark: the vim label that showed no reaction to a key
+	newMu        sync.Mutex // held while /new finds or makes a session, see startTab
+	botUser      string     // set before the workers start
+	scanQueue    atomic.Bool
+	ctl          controlStore // latest setting values per session, see controls.go
 
 	// core
 	ownerUser, ownerChat int64
@@ -186,6 +189,7 @@ type daemon struct {
 	nextPrep             map[int64]time.Time
 	delivering           map[int64]*delivery
 	waitNoticed          map[int64]bool
+	waitTexts            map[int64]string        // the text of each posted waiting notice
 	macNotes             map[int64]*macNote      // the Mac hold's notice, by thread
 	drafts               map[int64]*draft        // the draft of a running turn, by thread
 	deadlines            map[int64]alertDeadline // the time limit of an open alert, by alert
@@ -224,34 +228,36 @@ func newDaemon(cfg config.Config, home string, log *slog.Logger, now func() time
 	}
 	d := &daemon{
 		cfg: cfg, timing: timing, home: home, log: log, now: now, st: st, tg: tg, rx: rx, snd: snd, adapters: adapters,
-		polled:      &atomic.Int64{}, // Run shares its own with the sender
-		below:       map[int64]bool{},
-		events:      make(chan any, 256),
-		regq:        newJobQueue(),
-		tailers:     map[int64]*tailer{},
-		pending:     map[int64]pendingTail{},
-		trackers:    map[int64]*turn.Tracker{},
-		snaps:       map[int64]string{},
-		joining:     map[int64]int64{},
-		extra:       map[int64][]int64{},
-		actions:     map[int64]inbound.Action{},
-		dirty:       map[int64]bool{},
-		busy:        map[int64]bool{},
-		nextPrep:    map[int64]time.Time{},
-		delivering:  map[int64]*delivery{},
-		waitNoticed: map[int64]bool{},
-		macNotes:    map[int64]*macNote{},
-		drafts:      map[int64]*draft{},
-		deadlines:   map[int64]alertDeadline{},
-		follows:     map[int64]alertFollow{},
-		alertWanted: map[int64]string{},
-		liveText:    map[int64]liveText{},
-		reminders:   map[int64]*reminder{},
-		ctlPending:  map[int64]ctlSet{},
-		vimNoticed:  map[int64]bool{},
-		alertBusy:   map[int64]bool{},
-		opening:     map[int64]bool{},
-		newFlows:    map[string]*newFlow{},
+		polled:       &atomic.Int64{}, // Run shares its own with the sender
+		below:        map[int64]bool{},
+		promptChecks: map[int64]time.Time{},
+		events:       make(chan any, 256),
+		regq:         newJobQueue(),
+		tailers:      map[int64]*tailer{},
+		pending:      map[int64]pendingTail{},
+		trackers:     map[int64]*turn.Tracker{},
+		snaps:        map[int64]string{},
+		joining:      map[int64]int64{},
+		extra:        map[int64][]int64{},
+		actions:      map[int64]inbound.Action{},
+		dirty:        map[int64]bool{},
+		busy:         map[int64]bool{},
+		nextPrep:     map[int64]time.Time{},
+		delivering:   map[int64]*delivery{},
+		waitNoticed:  map[int64]bool{},
+		waitTexts:    map[int64]string{},
+		macNotes:     map[int64]*macNote{},
+		drafts:       map[int64]*draft{},
+		deadlines:    map[int64]alertDeadline{},
+		follows:      map[int64]alertFollow{},
+		alertWanted:  map[int64]string{},
+		liveText:     map[int64]liveText{},
+		reminders:    map[int64]*reminder{},
+		ctlPending:   map[int64]ctlSet{},
+		vimNoticed:   map[int64]bool{},
+		alertBusy:    map[int64]bool{},
+		opening:      map[int64]bool{},
+		newFlows:     map[string]*newFlow{},
 	}
 	d.hasProgram = func(name string) bool { return installed(home, name) }
 	jw := cfg.InputSettings.JoinWindow.Duration
@@ -369,6 +375,10 @@ func (d *daemon) handle(ev any) {
 		d.onDraftSent(e)
 	case evAlertDeadline:
 		d.deadlines[e.alert] = e.d
+	case evPromptGone:
+		d.onPromptGone(e)
+	case evRename:
+		d.onRename(e)
 	case evAlertFollow:
 		d.onAlertFollow(e)
 	case evLive:
@@ -472,6 +482,7 @@ func (d *daemon) tick() {
 		d.requestScan()
 	}
 	d.tickFollows(now)
+	d.tickPromptChecks(now)
 	d.expireNewFlows(now)
 	d.maybeFlushUnknown(now)
 	if now.Sub(d.lastHouse) >= 24*time.Hour {

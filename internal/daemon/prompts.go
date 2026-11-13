@@ -3,12 +3,14 @@ package daemon
 import (
 	"fmt"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
 
 	"rex-tg/internal/format"
 	"rex-tg/internal/inbound"
+	"rex-tg/internal/registry"
 	"rex-tg/internal/store"
 	"rex-tg/internal/telegram"
 )
@@ -445,4 +447,95 @@ func (d *daemon) answerWithText(th store.Thread, al store.Alert, text, tag strin
 	}
 	d.finishAlert(th.ChatID, al.TGMessageID, al.ID, "✍ "+format.Escape(format.Truncate(line, 200)))
 	d.emit(evAlertFollow{thread: th.ID, hash: al.ScreenHash})
+}
+
+// A pane is blocked from the agent's prompt hook until a new prompt or the
+// end of the turn; Claude Code and Codex report no hook when the prompt is
+// answered. Messages that wait for the prompt would then wait for the whole
+// turn. So when the session's transcript goes on (a tool call or result, or
+// commentary) while the pane is blocked, rex-tg reads the screen: without a
+// prompt on it, the prompt is over, and the pane is working again. The
+// screen decides, not the transcript alone: a tool that runs in parallel
+// can write its result while another one still waits for its answer.
+
+// promptGoneDelay is how long after the transcript line the screen is read,
+// so the agent has redrawn it.
+const promptGoneDelay = 300 * time.Millisecond
+
+// evPromptGone reports a blocked pane whose screen shows no prompt.
+type evPromptGone struct {
+	conv int64
+	at   time.Time
+}
+
+// checkPromptGone asks for a look at the screen of a session whose
+// transcript went on (core).
+func (d *daemon) checkPromptGone(conv int64, now time.Time) {
+	if _, ok := d.promptChecks[conv]; !ok {
+		d.promptChecks[conv] = now.Add(promptGoneDelay)
+	}
+}
+
+// tickPromptChecks reads the screens that are due, of the panes that are
+// still blocked (core).
+func (d *daemon) tickPromptChecks(now time.Time) {
+	for conv, due := range d.promptChecks {
+		if now.Before(due) {
+			continue
+		}
+		delete(d.promptChecks, conv)
+		p, ok, err := d.st.PaneByConversation(d.ctx, conv)
+		if err != nil || !ok || p.State != "blocked" || !p.GoneAt.IsZero() {
+			continue
+		}
+		var hashes []string // the open alerts' screens
+		if th, ok := d.threadOf(conv); ok {
+			if als, err := d.st.OpenAlerts(d.ctx, th.ID); err == nil {
+				for _, a := range als {
+					hashes = append(hashes, a.ScreenHash)
+				}
+			}
+		}
+		d.spawn(func() {
+			screen, err := d.rx.Capture(d.ctx, p.Session, p.Block)
+			if err != nil {
+				return // the next transcript line asks again
+			}
+			if screenHasPrompt(lastLines(screen, alertLines), hashes) {
+				return
+			}
+			d.emit(evPromptGone{conv: conv, at: d.now()})
+		})
+	}
+}
+
+// screenHasPrompt tells whether the bottom lines of a screen may still show
+// a prompt: one that parsePromptView reads, key hints that only a prompt
+// shows ("Esc to cancel", "Enter to select"), or the same screen as an open
+// alert. A prompt in a layout that rex-tg cannot read still counts, so it is
+// never taken for gone.
+func screenHasPrompt(lines []string, alertHashes []string) bool {
+	if parsePromptView(lines, true).ok {
+		return true
+	}
+	for _, l := range lines {
+		t := strings.ToLower(l)
+		for _, w := range []string{"esc to cancel", "enter to select", "enter to confirm", "do you want to proceed", "would you like to run"} {
+			if strings.Contains(t, w) {
+				return true
+			}
+		}
+	}
+	h := alertHash(lines)
+	return slices.Contains(alertHashes, h)
+}
+
+// onPromptGone moves a pane that is still blocked to working (core). The
+// registry's change closes the topic's alerts and lets waiting messages go.
+func (d *daemon) onPromptGone(e evPromptGone) {
+	p, ok, err := d.st.PaneByConversation(d.ctx, e.conv)
+	if err != nil || !ok || p.State != "blocked" {
+		return
+	}
+	d.signal(e.conv, registry.Signal{State: "working", At: e.at})
 }

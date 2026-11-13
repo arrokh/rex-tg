@@ -290,3 +290,47 @@ Ready to submit your answers?
 		t.Errorf("head = %q", h)
 	}
 }
+
+// A question whose answers have previews (Claude Code 2.1.323, seen live,
+// made-up text): the preview box stands right of the answers, "Chat about
+// this" has no number, and a notes hint sits under the box.
+const previewScreen = `────────────────────────────────────────────────────────────────────────────────────────────
+ ☐ Layout
+
+│ Which layout should the report use? The table one is wider, the list one
+│ reads better on a phone.
+
+❯ 1. Table                        ┌──────────────────────────────────────────────────┐
+  2. List                         │ | Name | Qty |                                   │
+                                  │ | apple | 3 |                                    │
+                                  │ 1. Table of contents                             │
+                                  └──────────────────────────────────────────────────┘
+
+                                  Notes: press n to add notes
+
+────────────────────────────────────────────────────────────────────────────────────────────
+  Chat about this
+
+Enter to select · ↑/↓ to navigate · n to add notes · Esc to cancel`
+
+func TestQuestionWithPreviews(t *testing.T) {
+	v := parsePromptView(screenLines(previewScreen), false)
+	if !v.ok || !v.isQuestion() {
+		t.Fatalf("not seen as a question: %+v", v)
+	}
+	if want := "Which layout should the report use? The table one is wider, the list one reads better on a phone."; v.question != want {
+		t.Errorf("question = %q", v.question)
+	}
+	if got := labels(v.alertOptions()); got != "1 Table=1 | 2 List=2 | Esc=escape" {
+		t.Errorf("buttons %s", got)
+	}
+	if h := alertHead(v, "Claude Code", store.AlertPermission); !strings.HasPrefix(h, "❓ Claude Code: Which layout") {
+		t.Errorf("head = %q", h)
+	}
+	// The preview's own numbered line is not an answer.
+	for _, o := range v.options {
+		if strings.Contains(o.label, "contents") {
+			t.Errorf("a preview line became an answer: %+v", o)
+		}
+	}
+}

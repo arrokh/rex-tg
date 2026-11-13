@@ -255,6 +255,7 @@ func (d *daemon) tracker(th store.Thread) *turn.Tracker {
 		ProgressDelay:   d.cfg.Display.ProgressDelay.Duration,
 		EditInterval:    d.cfg.Display.ProgressEditInterval.Duration,
 		AnimateInterval: d.cfg.Display.ProgressAnimation.Duration,
+		SummaryAfter:    d.cfg.Display.SummaryAfter.Duration,
 		AnswerGrace:     d.timing.AnswerGrace,
 		StoppedGrace:    d.timing.StoppedGrace,
 		TypingInterval:  d.timing.Typing,
@@ -389,6 +390,8 @@ func (d *daemon) work(th store.Thread, acts []turn.Action) []store.OutboxItem {
 			d.snd.Progress(th.ID, sender.ProgressOp{Kind: sender.Repost, HTML: a.HTML})
 		case turn.FinishProgress:
 			d.snd.Progress(th.ID, sender.ProgressOp{Kind: sender.Finish, HTML: a.HTML})
+		case turn.RemoveProgress:
+			d.snd.Progress(th.ID, sender.ProgressOp{Kind: sender.Remove})
 		case turn.Typing:
 			if d.lastThread == th.ID {
 				d.snd.Typing(th.ChatID, th.MessageThreadID)
@@ -530,7 +533,11 @@ func (d *daemon) onBatch(ev evBatch) {
 			case agents.AssistantText:
 				if e.Phase == agents.Final {
 					d.signal(conv.ID, registry.Signal{State: "idle", At: at})
+				} else {
+					d.checkPromptGone(conv.ID, now)
 				}
+			case agents.ToolCall, agents.ToolResult:
+				d.checkPromptGone(conv.ID, now)
 			case agents.TurnEnd:
 				d.signal(conv.ID, registry.Signal{State: "idle", At: at})
 			case agents.Title:

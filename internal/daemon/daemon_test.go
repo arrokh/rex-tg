@@ -940,6 +940,64 @@ func TestProgressMovesBelowAlertsAndMessages(t *testing.T) {
 	})
 }
 
+// No hook says that a prompt was answered (Claude Code and Codex report
+// none). When the transcript goes on and the screen shows no prompt, the
+// pane is working again and a waiting message goes in at once. A tool
+// result while the prompt is still on the screen changes nothing.
+func TestAnsweredPromptLetsWaitingMessagesGo(t *testing.T) {
+	e, p, thread := piTopicCfg(t, "pi-unblock", func(e *env) { e.cfg.InputSettings.WhileBusy = "steer" })
+	p.User("busy work")
+	p.ToolCall("c1", "rm -rf build")
+	e.waitFor("the progress message", func() bool { return e.hasText(thread, "⏱") })
+	e.setScreen(permScreen)
+	e.setStatus("blocked", "permission")
+	e.waitText(thread, "Permission needed")
+	e.say(thread, "and then check the docs")
+	e.waitText(thread, "Waiting until the prompt is answered")
+
+	// A tool that runs alongside writes its result; the prompt is still there.
+	p.ToolCall("c2", "ls")
+	p.ToolResult("c2")
+	e.never("typing while the prompt is on the screen", 700*time.Millisecond, func() bool { return len(e.pastes()) > 0 })
+
+	// The prompt is answered on the Mac: the screen clears and the run goes on.
+	e.setScreen("")
+	p.ToolResult("c1")
+	e.waitFor("the waiting message typed into the run", func() bool { return len(e.pastes()) == 1 })
+	if got := e.pastes()[0]; got != "and then check the docs" {
+		t.Errorf("pasted %q", got)
+	}
+}
+
+// Messages that wait share one notice: it counts them, and its buttons act
+// on all of them, so a later message never looks ignored.
+func TestOneWaitNoticeForAllWaitingMessages(t *testing.T) {
+	e, _, thread := piTopic(t, "pi-one-notice")
+	working(e, e.pi, thread)
+	e.say(thread, "first thing")
+	notice := e.waitText(thread, "Waiting until the agent is idle")
+	e.say(thread, "second thing")
+	e.waitFor("the notice counts both", func() bool {
+		m, _ := e.message(notice.ID)
+		return strings.Contains(m.Text, "2 messages wait until the agent is idle") && buttonData(m, "Send all now") != ""
+	})
+	n := 0
+	for _, m := range e.botMessages(thread) {
+		if strings.Contains(m.Text, "Waiting") || strings.Contains(m.Text, "messages wait") {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Fatalf("%d waiting notices, want one for both messages", n)
+	}
+	m, _ := e.message(notice.ID)
+	e.pressButton(m, buttonData(m, "Send all now"))
+	e.waitFor("both messages typed", func() bool { return len(e.pastes()) == 2 })
+	if got := e.pastes(); got[0] != "first thing" || got[1] != "second thing" {
+		t.Errorf("pasted %q, want both in order", got)
+	}
+}
+
 func TestSendNowAndCancelButtons(t *testing.T) {
 	e, _, thread := piTopic(t, "pi-buttons")
 	working(e, e.pi, thread)

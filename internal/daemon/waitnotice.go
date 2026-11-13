@@ -10,11 +10,14 @@ import (
 )
 
 // The waiting notice: "⏳ Waiting until the agent is idle." with ⚡ Send now
-// and ✖ Cancel, posted once for a message that waits in the queue. It is
-// only true while the message waits, so it goes away when the message leaves
-// the queue: it was typed (👀, then 👍 on the message), refused or expired
-// (👎 and a reply that says why), or typing failed (a notice says so).
-// ✖ Cancel turns it into "✖ Cancelled" instead.
+// and ✖ Cancel. A topic has one: the oldest waiting message gets it, and it
+// counts the messages behind it ("⏳ 2 messages wait …", ⚡ Send all now,
+// ✖ Cancel all); its buttons act on every waiting message of the topic. It
+// is only true while that message waits, so it goes away when the message
+// leaves the queue: it was typed (👀, then 👍 on the message), refused or
+// expired (👎 and a reply that says why), or typing failed (a notice says
+// so); a message still waiting behind it gets the next notice. ✖ Cancel
+// turns it into "✖ Cancelled" instead.
 //
 // Its chat and message number are kept in the store (kv), so a restart in
 // between does not leave it behind.
@@ -25,13 +28,13 @@ func waitNoticeKey(updateID int64) string { return fmt.Sprintf("wait_notice:%d",
 
 // postWaitNotice posts the waiting notice of a queued message (worker) and
 // reports its message number to the core.
-func (d *daemon) postWaitNotice(th store.Thread, updateID int64, text string) {
+func (d *daemon) postWaitNotice(th store.Thread, updateID int64, text string, n int) {
 	if text == "" {
 		text = waitNoticeText
 	}
 	chat, thread, tid := th.ChatID, th.MessageThreadID, th.ID
 	d.spawn(func() {
-		m, err := d.sendNow(chat, thread, text, waitMarkup(updateID))
+		m, err := d.sendNow(chat, thread, text, waitMarkup(updateID, n))
 		if err == nil && m.MessageID != 0 {
 			d.markBelow(tid)
 			d.emit(evWaitNotice{updateID: updateID, chat: chat, msg: m.MessageID})
@@ -64,6 +67,30 @@ func (d *daemon) onWaitNotice(e evWaitNotice) {
 	if !ok || (in.State != store.InboundQueued && in.State != store.InboundTyping) {
 		d.dropWaitNotice(e.updateID)
 	}
+}
+
+// updateWaitNotice edits the topic's waiting notice when its text changed:
+// another message joined the queue, or the wait has another reason (core).
+func (d *daemon) updateWaitNotice(updateID int64, text string, n int) {
+	if d.waitTexts[updateID] == text {
+		return
+	}
+	v, ok, err := d.st.Get(d.ctx, waitNoticeKey(updateID))
+	if err != nil || !ok {
+		return // not posted yet: the next check edits it
+	}
+	var chat, msg int64
+	if _, err := fmt.Sscanf(v, "%d:%d", &chat, &msg); err != nil || msg == 0 {
+		return
+	}
+	d.waitTexts[updateID] = text
+	d.spawn(func() {
+		_ = d.snd.Call(sender.PriorityEdit, func(ctx context.Context, tg *telegram.Client) error {
+			_, err := tg.EditMessageText(ctx, telegram.EditMessageTextParams{
+				ChatID: chat, MessageID: msg, Text: text, ReplyMarkup: waitMarkup(updateID, n)})
+			return err
+		})
+	})
 }
 
 // keepWaitNotice forgets the waiting notice of a message without deleting

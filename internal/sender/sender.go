@@ -76,6 +76,8 @@ const (
 	Repost
 	// Finish edits the progress message a last time and forgets it.
 	Finish
+	// Remove deletes the progress message of a turn and forgets it.
+	Remove
 )
 
 // ProgressOp is one change to a topic's progress message.

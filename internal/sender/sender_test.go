@@ -1258,3 +1258,33 @@ func TestNoteOfAGonePartIsDeletedAtStart(t *testing.T) {
 		}
 	}
 }
+
+// Remove deletes the running turn's progress message and forgets it; a kept
+// summary of an earlier turn stays.
+func TestRemoveDeletesOnlyTheRunningProgress(t *testing.T) {
+	e := newEnv(t, sender.Options{})
+	th := e.topic(1)
+	e.s.Progress(th.ID, sender.ProgressOp{Kind: sender.Show, HTML: "one"})
+	e.start()
+	e.waitShown(th.ID)
+	e.s.Progress(th.ID, sender.ProgressOp{Kind: sender.Finish, HTML: "summary of a long turn"})
+	waitFor(t, "the summary", func() bool { ms := e.srv.Messages(chat); return len(ms) == 1 && ms[0].Text == "summary of a long turn" })
+	e.s.Progress(th.ID, sender.ProgressOp{Kind: sender.Remove}) // no running progress: the summary stays
+
+	e.s.Progress(th.ID, sender.ProgressOp{Kind: sender.Show, HTML: "two"})
+	waitFor(t, "the next progress", func() bool { return len(e.srv.Messages(chat)) == 2 })
+	e.s.Progress(th.ID, sender.ProgressOp{Kind: sender.Edit, HTML: "two, edited"})
+	e.s.Progress(th.ID, sender.ProgressOp{Kind: sender.Remove})
+	waitFor(t, "the progress deleted", func() bool {
+		ms := e.srv.Messages(chat)
+		return len(ms) == 2 && ms[1].Deleted
+	})
+	if ms := e.srv.Messages(chat); ms[0].Deleted {
+		t.Error("the summary of the earlier turn was deleted")
+	}
+	if _, ok, _ := e.st.Progress(ctx, th.ID); ok {
+		t.Error("the removed progress row is left")
+	}
+	e.s.Progress(th.ID, sender.ProgressOp{Kind: sender.Show, HTML: "three"})
+	waitFor(t, "a new progress after the removal", func() bool { return len(e.srv.Messages(chat)) == 3 })
+}

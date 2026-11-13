@@ -80,3 +80,21 @@ func TestPromptGuardSeesEachAgentsPrompt(t *testing.T) {
 		}
 	}
 }
+
+// A prompt that rex-tg cannot read still counts as a prompt: by its key hints,
+// or by being the same screen as an open alert. A plain working screen does
+// not.
+func TestScreenHasPrompt(t *testing.T) {
+	odd := []string{"Pick a plan", "  (a) fast", "  (b) safe", "Enter to select · Esc to cancel"}
+	if !screenHasPrompt(odd, nil) {
+		t.Error("key hints of an unreadable prompt were missed")
+	}
+	same := []string{"Allow this?", "  yes / no"}
+	if screenHasPrompt(same, nil) || !screenHasPrompt(same, []string{alertHash(same)}) {
+		t.Error("the open alert's screen must count, and only that one")
+	}
+	working := []string{"⏺ Reading files", "✻ Thinking… (esc to interrupt)", "> "}
+	if screenHasPrompt(working, []string{"other"}) {
+		t.Error("a working screen counts as a prompt")
+	}
+}
