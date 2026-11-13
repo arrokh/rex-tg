@@ -170,7 +170,7 @@ func (d *daemon) sendReminder(th store.Thread, a store.Alert, n int, now time.Ti
 		err := d.snd.Call(sender.PriorityAlert, func(ctx context.Context, tg *telegram.Client) error {
 			m, err := tg.SendMessage(ctx, telegram.SendMessageParams{
 				ChatID: chat, MessageThreadID: topic, Text: text, ParseMode: "HTML",
-				DisableNotification: silent, ReplyToMessageID: reply,
+				DisableNotification: silent, ReplyToMessageID: reply, ReplyMarkup: dismissMarkup,
 			})
 			msg = m
 			return err
@@ -226,15 +226,52 @@ func (d *daemon) dropReminder(alert int64, r *reminder) {
 // deleteMessage deletes a bot message (worker). A message that is gone
 // already is fine.
 func (d *daemon) deleteMessage(chat, msg int64) {
+	if err := d.tryDelete(chat, msg); err != nil && d.ctx.Err() == nil {
+		d.log.Debug("delete message", "chat", chat, "message", msg, "err", err)
+		d.removeButtons(chat, msg)
+	}
+}
+
+// tryDelete deletes a message; it returns nil also when the message is gone
+// already (a worker).
+func (d *daemon) tryDelete(chat, msg int64) error {
 	err := d.snd.Call(sender.PriorityEdit, func(ctx context.Context, tg *telegram.Client) error {
 		return tg.DeleteMessage(ctx, chat, msg)
 	})
 	switch telegram.Classify(err) {
 	case telegram.ClassNone, telegram.ClassDeleteTargetGone, telegram.ClassThreadNotFound:
-		return
+		return nil
 	}
-	if d.ctx.Err() == nil {
-		d.log.Debug("delete message", "chat", chat, "message", msg, "err", err)
-		d.removeButtons(chat, msg)
+	return err
+}
+
+// dismissData is the callback data of a reminder's "✓ Dismiss" button. A
+// reminder whose send got no answer may still have arrived, with a number
+// that rex-tg never learns, so it cannot delete it when the prompt ends.
+// It never guesses that number: in a private chat a bot may delete the
+// user's messages too. The button deletes the message that holds it, whose
+// number the tap reports.
+const dismissData = "rx"
+
+var dismissMarkup = &telegram.InlineKeyboardMarkup{InlineKeyboard: [][]telegram.InlineKeyboardButton{
+	{{Text: "✓ Dismiss", CallbackData: dismissData}},
+}}
+
+// dismissButton deletes the reminder whose button was tapped (core).
+func (d *daemon) dismissButton(cb *telegram.CallbackQuery) {
+	chat, msg := cb.Message.Chat.ID, cb.Message.MessageID
+	for alert, r := range d.reminders {
+		if r.chat == chat && r.msg == msg {
+			r.chat, r.msg = 0, 0 // gone: nothing to delete later
+			d.saveReminder(alert, r)
+		}
 	}
+	d.answerCallback(cb.ID, "", false)
+	d.spawn(func() {
+		// When the delete fails, the button stays, so a second tap can try
+		// again (deleteMessage would take the buttons away).
+		if err := d.tryDelete(chat, msg); err != nil && d.ctx.Err() == nil {
+			d.log.Debug("dismiss: delete failed", "chat", chat, "message", msg, "err", err)
+		}
+	})
 }

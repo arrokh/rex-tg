@@ -178,7 +178,8 @@ func (d *daemon) pollLoop(ctx context.Context) {
 	var out outage
 	allowed := []string{"message", "edited_message", "callback_query"}
 	for ctx.Err() == nil {
-		ups, err := d.tg.GetUpdates(ctx, offset, longPollSeconds, allowed)
+		started := d.now()
+		ups, err := d.tg.GetUpdates(ctx, offset, max(1, int(d.timing.LongPoll/time.Second)), allowed)
 		if err != nil {
 			if ctx.Err() != nil {
 				return
@@ -202,6 +203,7 @@ func (d *daemon) pollLoop(ctx context.Context) {
 			d.log.Info("Telegram reachable again", "down", down.Round(time.Second), "failed_tries", tries)
 		}
 		if len(ups) == 0 {
+			d.markPolled(started)
 			continue
 		}
 		done := make(chan struct{})
@@ -212,12 +214,23 @@ func (d *daemon) pollLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		}
+		if next > ups[len(ups)-1].UpdateID {
+			d.markPolled(started) // the whole batch is stored
+		}
 		if next > offset {
 			offset = next
 		} else if !sleepCtx(ctx, time.Second) { // nothing was stored; try again later
 			return
 		}
 	}
+}
+
+// markPolled notes that a getUpdates call that started at started has
+// finished and its updates are stored: every message sent before that time
+// has its number noted (seen_message). The sender's check of a part with an
+// unknown outcome waits for this (sender.Options.PolledSince).
+func (d *daemon) markPolled(started time.Time) {
+	d.polled.Store(started.UnixNano())
 }
 
 // longPollSeconds is the getUpdates long-poll time. It is short, so a poll

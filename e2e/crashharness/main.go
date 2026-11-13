@@ -62,7 +62,7 @@ func main() {
 		Rex:       rex.New(*bin),
 		Telegram:  telegram.New(*token, telegram.WithBaseURL(*api)),
 		ProcStart: func(int) (time.Time, error) { return time.Now().Add(-time.Hour), nil },
-		Timing:    daemon.Timing{CheckDelay: time.Second},
+		Timing:    daemon.Timing{CheckDelay: time.Second, LongPoll: time.Second},
 	})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "crashharness:", err)

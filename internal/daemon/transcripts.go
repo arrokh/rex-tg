@@ -412,7 +412,9 @@ func (d *daemon) imageItem(th store.Thread, a turn.Post) (store.OutboxItem, bool
 	home, _ := os.UserHomeDir()
 	var parts []store.PartContent
 	for _, p := range findFiles(a.Markdown, home, conv.CWD, exts) {
-		parts = append(parts, store.PartContent{Content: p, Format: store.FormatImage, Filename: filepath.Base(p)})
+		if real, ok := placeOK(p, home, conv.CWD); ok { // the sender reads the checked path
+			parts = append(parts, store.PartContent{Content: real, Format: store.FormatImage, Filename: filepath.Base(p)})
+		}
 	}
 	if len(parts) == 0 {
 		return store.OutboxItem{}, false

@@ -43,6 +43,10 @@ type Settings struct {
 type Config struct {
 	ProgressDelay time.Duration // default 2s
 	EditInterval  time.Duration // default 2s
+	// TimerInterval is the least time between two edits that only move the
+	// elapsed time on, while nothing else changes (the agent thinks or a long
+	// tool runs). The step grows with the turn, up to one minute. Default 10s.
+	TimerInterval time.Duration
 	AnswerGrace   time.Duration // default 5s
 	// StoppedGrace is the wait for the last lines of an agent that stopped.
 	// Its lines were written before it exited, so they are read by the time
@@ -61,6 +65,9 @@ func (c Config) withDefaults() Config {
 	}
 	if c.EditInterval <= 0 {
 		c.EditInterval = 2 * time.Second
+	}
+	if c.TimerInterval <= 0 {
+		c.TimerInterval = 10 * time.Second
 	}
 	if c.AnswerGrace <= 0 {
 		c.AnswerGrace = 5 * time.Second
@@ -635,8 +642,27 @@ func (t *Tracker) Tick(now time.Time) []Action {
 		}
 		t.lastHTML = h
 		t.dirty, t.pendingRepost = false, false
+		return out
+	}
+	// Nothing changed, but the elapsed time moves on: without this the
+	// message would show "⏱ 2s" until the turn ends while the agent thinks.
+	// A wait for the user's answer keeps its time; the agent is not working.
+	if !t.blocked && now.Sub(t.lastEdit) >= t.timerStep(now.Sub(t.start)) {
+		if h := t.progressHTML(now); h != t.lastHTML {
+			out = append(out, EditProgress{HTML: h})
+			t.lastHTML = h
+		}
+		t.lastEdit = now
 	}
 	return out
+}
+
+// timerStep is the wait between two edits that only move the timer on. It
+// grows with the turn (a sixth of the elapsed time), from TimerInterval up to
+// one minute, so a long turn spends little of the chat's rate budget.
+func (t *Tracker) timerStep(elapsed time.Duration) time.Duration {
+	step := min(elapsed/6, time.Minute)
+	return max(step, t.cfg.TimerInterval, t.cfg.EditInterval)
 }
 
 // ProgressGone tells the tracker that the progress message was deleted outside

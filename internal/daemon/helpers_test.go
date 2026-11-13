@@ -158,6 +158,7 @@ var testTiming = daemon.Timing{
 	LiveCheck:    30 * time.Millisecond,
 	DeadlineWarn: 400 * time.Millisecond,
 	AlertFollow:  100 * time.Millisecond,
+	LongPoll:     time.Second, // the shortest that Telegram takes
 }
 
 // start runs the daemon in a goroutine.

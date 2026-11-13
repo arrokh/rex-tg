@@ -3,6 +3,7 @@ package sender_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"path/filepath"
 	"strings"
@@ -1066,5 +1067,125 @@ func TestDaemonNoticeIsCheckedLikeAReply(t *testing.T) {
 	waitFor(t, "the note to go", func() bool { return len(e.visible()) == 1 })
 	if ms := e.visible(); !strings.Contains(ms[0].Text, "Sending 1 part") {
 		t.Fatalf("messages = %+v", ms)
+	}
+}
+
+// The check compares the numbers only once a getUpdates call finished after
+// its note: a message of the user's sent just before the note may not be
+// fetched yet, and its number would look like the part's. (The test clock
+// jumps on each wait, so the poll answers "not yet" a few times.)
+func TestCheckWaitsForAPollAfterItsNote(t *testing.T) {
+	var asked atomic.Int32
+	e := newEnv(t, sender.Options{PolledSince: func(time.Time) bool { return asked.Add(1) > 3 }})
+	th := e.topic(1)
+	id := e.enqueue(th, "k", store.FormatPlain, "hello")
+	e.srv.FailNext("sendMessage", 1, 500, "Internal Server Error", 0) // nothing posted
+	e.start()
+	e.event(sender.PartUnknown)
+	e.waitState(id, store.OutboxSent)
+	if n := asked.Load(); n < 4 {
+		t.Fatalf("the check judged after %d looks at the poll, want it to wait for one", n)
+	}
+	var texts []string
+	for _, c := range e.srv.Calls("sendMessage") {
+		s, _ := c.Params["text"].(string)
+		texts = append(texts, s)
+	}
+	if len(texts) != 3 || texts[2] != "hello" {
+		t.Fatalf("sends %q, want the reply, the note, the reply again (no notice)", texts)
+	}
+}
+
+// A check cut by a stop between its note and its verdict goes on after the
+// start with the same note: no second note, and the note does not stay.
+func TestCheckResumesWithItsNoteAfterARestart(t *testing.T) {
+	var polled, stopping atomic.Bool
+	stopCh := make(chan func(), 1)
+	e := newEnv(t, sender.Options{PolledSince: func(time.Time) bool {
+		if polled.Load() {
+			return true
+		}
+		if stopping.CompareAndSwap(false, true) {
+			go func() { (<-stopCh)() }() // stop while the check waits for getUpdates
+		}
+		// Real time, so the stop lands long before the test clock (which
+		// jumps on each wait) reaches the check's 3-minute limit.
+		time.Sleep(20 * time.Millisecond)
+		return false
+	}})
+	th := e.topic(1)
+	id := e.lostSend(th, true)
+	stop := e.start()
+	stopCh <- stop
+	waitFor(t, "the note", func() bool { return len(e.srv.Calls("sendMessage")) == 1 })
+	waitFor(t, "the stop", func() bool { return stopping.Load() })
+	stop()
+	if v, ok, _ := e.st.Get(ctx, fmt.Sprintf("check_note:%d:0", id)); !ok || v == "" {
+		t.Fatal("the note is not kept for the next start")
+	}
+	polled.Store(true)
+	// The next start: a new sender over the same store and chat.
+	e.s = sender.New(e.st, e.srv.Client(), sender.Options{Now: e.clk.Now, Sleep: e.clk.Sleep, PolledSince: func(time.Time) bool { return true }})
+	if err := e.s.Recover(ctx); err != nil { // the start checks the part again
+		t.Fatal(err)
+	}
+	e.start()
+	e.waitState(id, store.OutboxSent)
+	waitFor(t, "the note to go", func() bool { return len(e.visible()) == 2 })
+	notes := 0
+	for _, c := range e.srv.Calls("sendMessage") {
+		if s, _ := c.Params["text"].(string); strings.Contains(s, "Checking whether it arrived") {
+			notes++
+		}
+	}
+	if notes != 1 {
+		t.Errorf("%d notes, want 1: the check went on with its note", notes)
+	}
+}
+
+// TestStaleCheckNoteIsSweptAtStart: a check stops while it waits, and its
+// part is settled while rex-tg is down. The next start deletes that note
+// (by the number stored with it) and its row, and checks nothing.
+func TestStaleCheckNoteIsSweptAtStart(t *testing.T) {
+	var stopping atomic.Bool
+	stopCh := make(chan func(), 1)
+	e := newEnv(t, sender.Options{PolledSince: func(time.Time) bool {
+		if stopping.CompareAndSwap(false, true) {
+			go func() { (<-stopCh)() }()
+		}
+		time.Sleep(20 * time.Millisecond) // real time: see the test above
+		return false
+	}})
+	th := e.topic(1)
+	id := e.lostSend(th, true)
+	stop := e.start()
+	stopCh <- stop
+	waitFor(t, "the note", func() bool { return len(e.srv.Calls("sendMessage")) == 1 })
+	waitFor(t, "the stop", func() bool { return stopping.Load() })
+	stop()
+	key := fmt.Sprintf("check_note:%d:0", id)
+	v, ok, _ := e.st.Get(ctx, key)
+	var noteID, at int64
+	if _, err := fmt.Sscanf(v, "%d:%d", &noteID, &at); !ok || err != nil || noteID == 0 {
+		t.Fatalf("no note kept: %q", v)
+	}
+	// While rex-tg is down, the part is settled (here: its notice is out).
+	if err := e.st.MarkPartChecked(ctx, id, 0); err != nil {
+		t.Fatal(err)
+	}
+	e.s = sender.New(e.st, e.srv.Client(), sender.Options{Now: e.clk.Now, Sleep: e.clk.Sleep, PolledSince: func(time.Time) bool { return true }})
+	if err := e.s.Recover(ctx); err != nil {
+		t.Fatal(err)
+	}
+	e.start()
+	waitFor(t, "the note to be deleted", func() bool { return len(e.srv.Calls("deleteMessage")) == 1 })
+	if got := fmt.Sprint(e.srv.Calls("deleteMessage")[0].Params["message_id"]); got != fmt.Sprint(noteID) {
+		t.Errorf("deleted message %s, want the note %d", got, noteID)
+	}
+	if _, ok, _ := e.st.Get(ctx, key); ok {
+		t.Error("the note's row is left")
+	}
+	if n := len(e.srv.Calls("sendMessage")); n != 1 {
+		t.Errorf("%d sends, want only the first note", n)
 	}
 }

@@ -338,8 +338,57 @@ func TestWorkingDuringGraceResumes(t *testing.T) {
 	x.tick(2)
 	x.k.State(turn.StateIdle, at(5))
 	x.k.State(turn.StateWorking, at(6))
-	if got := without(x.tick(12)); len(got) != 0 {
-		t.Errorf("got %s", types(got))
+	// The turn goes on: only the timer moves, nothing is finished.
+	if got := types(without(x.tick(12))); got != "EditProgress" {
+		t.Errorf("got %s", got)
+	}
+}
+
+// TestTimerMovesWhileTheAgentThinks: with no tool and no commentary, the
+// progress message still edits its elapsed time, at a step that grows with
+// the turn, and not while the turn waits for the user's answer.
+func TestTimerMovesWhileTheAgentThinks(t *testing.T) {
+	x := newH(t, turn.Config{}, progress)
+	x.ev(prompt("p", "go"), 0)
+	if got := types(without(x.tick(2))); got != "ShowProgress" {
+		t.Fatalf("show: got %s", got)
+	}
+	if got := without(x.tick(11)); len(got) != 0 {
+		t.Fatalf("before the step: got %s", types(got))
+	}
+	as := without(x.tick(12))
+	if types(as) != "EditProgress" || !strings.Contains(as[0].(turn.EditProgress).HTML, "⏱ 12s · 0 tools") {
+		t.Fatalf("after 10s: got %+v", as)
+	}
+	// At 3 minutes the step is a sixth of the elapsed time: about 36s.
+	x.tick(180)
+	if got := without(x.tick(215)); len(got) != 0 {
+		t.Fatalf("within the step: got %s", types(got))
+	}
+	as = without(x.tick(216))
+	if types(as) != "EditProgress" || !strings.Contains(as[0].(turn.EditProgress).HTML, "⏱ 3m 36s") {
+		t.Fatalf("after the step: got %+v", as)
+	}
+	// Past 6 minutes the step stays at one minute.
+	x.tick(600)
+	if got := without(x.tick(659)); len(got) != 0 {
+		t.Fatalf("within the minute: got %s", types(got))
+	}
+	if got := types(without(x.tick(660))); got != "EditProgress" {
+		t.Fatalf("after a minute: got %s", got)
+	}
+}
+
+func TestTimerWaitsWhileBlocked(t *testing.T) {
+	x := newH(t, turn.Config{}, progress)
+	x.ev(prompt("p", "go"), 0)
+	x.tick(2)
+	x.k.State(turn.StateBlocked, at(3))
+	x.tick(5) // the edit to "Waiting for your answer"
+	for _, s := range []float64{20, 100, 400} {
+		if got := without(x.tick(s)); len(got) != 0 {
+			t.Fatalf("tick %v while blocked: got %s", s, types(got))
+		}
 	}
 }
 

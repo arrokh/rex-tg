@@ -121,3 +121,28 @@ func TestDaemonStopsForAnUpdateOfItsBinary(t *testing.T) {
 	e.cancel, e.done = nil, nil // it stopped by itself
 	e.mu.Unlock()
 }
+
+// A reminder whose send got no answer may have arrived: rex-tg never
+// guesses its number to delete it. Its "✓ Dismiss" button deletes the
+// message that holds it, and nothing else.
+func TestLostReminderIsDismissedByItsButton(t *testing.T) {
+	e, _, thread := piTopicCfg(t, "pi-remind-lost", func(e *env) {
+		e.cfg.Alerts.RemindAfter = config.Duration{Duration: 300 * time.Millisecond}
+		e.cfg.Alerts.Reminders = 1
+	})
+	e.setScreen(permScreen)
+	e.setStatus("blocked", "permission")
+	e.waitText(thread, "Permission needed")
+	e.waitFor("the progress message", func() bool { return e.hasText(thread, "Waiting for your answer") })
+	e.tg.LoseAnswerNext("sendMessage", 1) // the reminder arrives; its answer is lost
+	e.waitFor("the reminder", func() bool { return len(reminders(e, thread)) == 1 })
+	r := reminders(e, thread)[0]
+	if buttonData(r, "Dismiss") == "" {
+		t.Fatalf("the reminder has no Dismiss button: %+v", r.Markup)
+	}
+	e.setStatus("working", "")
+	// The prompt ends: the reminder's number is unknown, so it stays.
+	e.never("the lost reminder deleted on a guess", 500*time.Millisecond, func() bool { return reminders(e, thread)[0].Deleted })
+	e.pressButton(r, buttonData(r, "Dismiss"))
+	e.waitFor("the reminder dismissed", func() bool { return reminders(e, thread)[0].Deleted })
+}

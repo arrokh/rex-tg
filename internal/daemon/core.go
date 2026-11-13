@@ -156,12 +156,13 @@ type daemon struct {
 	regq   *jobQueue
 
 	paused      atomic.Bool
-	answering   sync.Map   // alert ids whose answer is being sent
-	alertEdits  sync.Map   // alert id -> *sync.Mutex, see alertLock
-	renamedBack time.Time  // the last rename back of the session for /new (under tabMu)
-	vimStuck    sync.Map   // pane id -> vimStuckMark: the vim label that showed no reaction to a key
-	newMu       sync.Mutex // held while /new finds or makes a session, see startTab
-	botUser     string     // set before the workers start
+	answering   sync.Map      // alert ids whose answer is being sent
+	alertEdits  sync.Map      // alert id -> *sync.Mutex, see alertLock
+	polled      *atomic.Int64 // when a getUpdates call last finished, unix ns
+	renamedBack time.Time     // the last rename back of the session for /new (under tabMu)
+	vimStuck    sync.Map      // pane id -> vimStuckMark: the vim label that showed no reaction to a key
+	newMu       sync.Mutex    // held while /new finds or makes a session, see startTab
+	botUser     string        // set before the workers start
 	scanQueue   atomic.Bool
 	ctl         controlStore // latest setting values per session, see controls.go
 
