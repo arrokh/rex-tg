@@ -6,8 +6,8 @@ class RexTg < Formula
   # tag with git (the user's own GitHub login) instead of downloading an
   # archive.
   url "https://github.com/arrokh/rex-tg.git",
-      tag:      "v0.1.14",
-      revision: "dbebe875e822e841e22c001daacd7f1975511fe3"
+      tag:      "v0.1.15",
+      revision: "cf585cd4d43a5048ce59e764fa8da8349c89bdcc"
   head "https://github.com/arrokh/rex-tg.git", branch: "main"
 
   depends_on "go" => :build
