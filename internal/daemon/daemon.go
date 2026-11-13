@@ -134,6 +134,7 @@ func Run(ctx context.Context, opt Options) error {
 		Now:           opt.Now,
 		Logger:        log,
 		CheckDelay:    timing.CheckDelay,
+		Markup:        fileOfferMarkup(st),
 	})
 	d := newDaemon(cfg, home, log, now, st, tg, rx, snd, opt.ProcStart, timing)
 	if opt.HasProgram != nil {

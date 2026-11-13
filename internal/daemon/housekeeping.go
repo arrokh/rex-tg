@@ -24,6 +24,7 @@ func (d *daemon) housekeeping(now time.Time) {
 	if n := removeOlder(d.cfg.UploadDir(), now.Add(-uploadMaxAge)); n > 0 {
 		d.log.Info("housekeeping: removed old uploads", "count", n)
 	}
+	d.pruneFileOffers(now)
 }
 
 // removeOlder deletes regular files under root that changed before cutoff,

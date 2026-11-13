@@ -112,8 +112,8 @@ type Config struct {
 		// topic, right after the answer. On by default.
 		SendImages bool `toml:"send_images"`
 		// SendFiles are the other file types (extensions, without the dot)
-		// that a final answer may send the same way, as documents. An empty
-		// list sends none.
+		// that a final answer offers: a button per file sends it, as a
+		// document. An empty list offers none.
 		SendFiles []string `toml:"send_files"`
 		// Stream shows the agent's text while it writes, as a Telegram draft
 		// (sendMessageDraft): word by word for pi, block by block for Claude

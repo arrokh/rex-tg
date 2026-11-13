@@ -294,7 +294,11 @@ func (s *Sender) sendPart(ctx context.Context, p store.Part) {
 	)
 	switch p.Format {
 	case store.FormatHTML, store.FormatPlain:
-		id, v, serr = s.sendText(ctx, p.ThreadID, p.ChatID, p.MessageThreadID, p.Content, p.Format == store.FormatHTML, silent, resendMarkup(p))
+		markup := resendMarkup(p)
+		if markup == nil && s.markup != nil {
+			markup = s.markup(p)
+		}
+		id, v, serr = s.sendText(ctx, p.ThreadID, p.ChatID, p.MessageThreadID, p.Content, p.Format == store.FormatHTML, silent, markup)
 	case store.FormatRich:
 		id, v, serr = s.sendRich(ctx, p, silent)
 	case store.FormatDocument:

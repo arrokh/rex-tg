@@ -108,6 +108,9 @@ type Options struct {
 	// CheckDelay is how long after a part's unknown outcome its arrival is
 	// checked (default 60 s; see checkPart).
 	CheckDelay time.Duration
+	// Markup gives the buttons of a text part that are not the sender's own,
+	// or nil (nil Markup: none). It is called when the part is sent.
+	Markup func(p store.Part) *telegram.InlineKeyboardMarkup
 }
 
 const (
@@ -128,6 +131,7 @@ type Sender struct {
 	sleep      func(ctx context.Context, d time.Duration) error
 	log        *slog.Logger
 	checkDelay time.Duration
+	markup     func(store.Part) *telegram.InlineKeyboardMarkup
 
 	events chan Event
 	wake   chan struct{}
@@ -173,7 +177,7 @@ func New(st *store.Store, tg *telegram.Client, opt Options) *Sender {
 		opt.CheckDelay = 60 * time.Second
 	}
 	return &Sender{
-		st: st, tg: tg, now: opt.Now, sleep: opt.Sleep, log: opt.Logger, checkDelay: opt.CheckDelay,
+		st: st, tg: tg, now: opt.Now, sleep: opt.Sleep, log: opt.Logger, checkDelay: opt.CheckDelay, markup: opt.Markup,
 		events:    make(chan Event, eventBufSize),
 		wake:      make(chan struct{}, 1),
 		bucket:    newBucket(opt.RatePerSecond, opt.Burst, opt.Now()),

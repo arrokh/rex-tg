@@ -92,7 +92,7 @@ To send an agent a command that has a bot command's name, use two slashes: `//he
 - **Progress:** one message updates while the agent works. When the turn ends, it becomes one summary line.
 - **Answer:** a new message. A long answer comes in numbered parts, such as `(1/3)`.
 - **Live text:** while the agent writes, the text shows as a draft at the bottom of the topic (word by word for pi, block by block for Claude Code and Codex).
-- **Files:** when an answer names an image, PDF, CSV, HTML, or Office file on your Mac, rex-tg sends it too.
+- **Files:** when an answer names an image on your Mac, rex-tg sends the picture too. A PDF, CSV, HTML, or Office file gets a 📎 button: tap it to get the file.
 - **Permission prompts:** the bot shows the bottom of the pane, with one button per answer.
 - **⏰ Still waiting for your answer:** a prompt has waited 10 minutes. Tap the reminder to jump to the prompt.
 - **💻 In use on the Mac:** you typed in the pane on the Mac. The replies stay on the Mac, and this one notice shows the latest prompt. `📄 Last answer` shows the newest answer. Write in the topic to go on in Telegram.

@@ -271,6 +271,11 @@ func (d *daemon) onCallback(u telegram.Update) {
 	case macAnswerData:
 		d.macAnswerButton(cb)
 		return
+	case fileOfferData:
+		if len(parts) == 3 {
+			d.fileOfferButton(cb, parts)
+			return
+		}
 	case "cf":
 		d.controlButton(u.UpdateID, cb, parts[1:])
 		return

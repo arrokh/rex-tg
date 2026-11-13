@@ -139,7 +139,8 @@ Doctor checks:
 - The progress message appears after 2 seconds without an answer. It shows the latest commentary and the recent tool calls. It never shows tool output, unless `/verbose full` is on.
 - At the end of the turn, the tool rows stay in a collapsed quote under the summary line.
 - While the agent writes, the text shows at the bottom of the topic as a draft, Telegram's preview of a message being written. pi's text grows word by word. Claude Code and Codex show each finished block, because they write nothing earlier. A draft never becomes a message: the answer replaces it. Final mode shows no drafts. Set `stream = false` to turn drafts off.
-- Files named in a final answer: images, and `pdf`, `csv`, `tsv`, `html`, `htm`, `xlsx`, `docx`, and `pptx` files, up to 10 per answer. Images come as photos, the other types as documents. Set `send_images = false` to turn images off, and change `send_files` for the other types (`[]` turns them off).
+- Images named in a final answer come by themselves, as photos, up to 10 per answer. Set `send_images = false` to turn this off.
+- Other files named in a final answer (`pdf`, `csv`, `tsv`, `html`, `htm`, `xlsx`, `docx`, `pptx`) come only when you ask: a silent `📎 Files in this answer` message lists them with a button each. A tap sends that file as a document, once. Change the types with `send_files` (`[]` turns the offers off).
 - Work on the Mac: when you type in the pane on the Mac, the topic gets one silent notice, `💻 In use on the Mac`, instead of the prompts and replies. The notice shows the latest prompt and whether the agent is working or done. `📄 Last answer` posts the newest answer. Write in the topic to go on in Telegram: from then on, replies come as usual. Permission prompts still come.
 - Set `mac_notice = false` to show Mac turns instead. `💻 You (on Mac)` then shows the prompts typed on the Mac. Prompts that no person typed, such as Claude Code's task notifications, are not shown. Set `show_mac_prompts = false` to hide all of them.
 
@@ -246,7 +247,7 @@ progress_delay = "2s"                   # Wait before the progress message appea
 progress_edit_interval = "2s"           # Least time between two edits of the progress message.
 rich_messages = false                   # Send final answers as Telegram rich messages.
 send_images = true                      # Send the image files that a final answer names.
-send_files = ["pdf", "csv", "tsv", "html", "htm", "xlsx", "docx", "pptx"]  # Other file types that a final answer sends, as documents.
+send_files = ["pdf", "csv", "tsv", "html", "htm", "xlsx", "docx", "pptx"]  # Other file types that a final answer offers, with a button to send each.
 stream = true                           # Show the agent's text while it writes, as a Telegram draft.
 
 [alerts]

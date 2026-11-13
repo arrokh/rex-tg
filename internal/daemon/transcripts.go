@@ -344,6 +344,9 @@ func (d *daemon) work(th store.Thread, acts []turn.Action) []store.OutboxItem {
 				if img, ok := d.imageItem(th, a); ok {
 					items = append(items, img)
 				}
+				if offer, ok := d.fileOfferItem(th, a); ok {
+					items = append(items, offer)
+				}
 			}
 		case turn.ShowProgress:
 			d.snd.Progress(th.ID, sender.ProgressOp{Kind: sender.Show, HTML: a.HTML})
@@ -380,12 +383,11 @@ func (d *daemon) work(th store.Thread, acts []turn.Action) []store.OutboxItem {
 	return items
 }
 
-// imageItem makes the outbox item that sends the images and other files
-// (display.send_files) a final answer names (design section 9.4a), or reports
-// that there are none. The sender sends an image as a photo when it can, and
-// every other file as a document.
+// imageItem makes the outbox item that sends the images a final answer names
+// (design section 9.4a), or reports that there are none. The other file types
+// get a button each instead (fileOfferItem).
 func (d *daemon) imageItem(th store.Thread, a turn.Post) (store.OutboxItem, bool) {
-	exts := sendExts(d.cfg.Display.SendImages, d.cfg.Display.SendFiles)
+	exts := sendExts(d.cfg.Display.SendImages, nil)
 	if len(exts) == 0 || th.CurrentConversationID == 0 {
 		return store.OutboxItem{}, false
 	}

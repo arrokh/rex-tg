@@ -1,6 +1,7 @@
 package daemon_test
 
 import (
+	"context"
 	"strings"
 	"testing"
 )
@@ -33,8 +34,22 @@ func TestReplyQuotesTheAnsweredMessage(t *testing.T) {
 		{"the topic's first message is no reply", func() int64 { return thread }, "",
 			"plain words", "plain words", "fine"},
 	}
+	st := e.peek()
+	th, ok, err := st.ThreadByTopic(context.Background(), chatID, thread)
+	if err != nil || !ok {
+		t.Fatalf("thread: %v %v", ok, err)
+	}
 	for i, s := range steps {
-		u := e.tg.PushReply(chatID, thread, ownerID, s.replyTo(), s.quote, s.text)
+		to := s.replyTo()
+		// A person replies seconds later; the test waits until the sender
+		// has recorded the replied message's number, as it has by then.
+		if m, _ := e.message(to); m.FromBot {
+			e.waitFor(s.name+": the replied message recorded", func() bool {
+				_, ok, _ := st.SentKind(context.Background(), th.ID, to)
+				return ok || !strings.Contains(s.want, "In reply to")
+			})
+		}
+		u := e.tg.PushReply(chatID, thread, ownerID, to, s.quote, s.text)
 		sent = append(sent, u.Message.MessageID)
 		e.waitFor(s.name+": the paste", func() bool { return len(e.pastes()) == i+1 })
 		if got := e.pastes()[i]; got != s.want {

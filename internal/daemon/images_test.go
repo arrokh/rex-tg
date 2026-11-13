@@ -128,3 +128,11 @@ func TestFindFiles(t *testing.T) {
 		})
 	}
 }
+
+func TestSizeText(t *testing.T) {
+	for n, want := range map[int64]string{812: "812 B", 14 << 10: "14 KB", 3355443: "3.2 MB"} {
+		if got := sizeText(n); got != want {
+			t.Errorf("sizeText(%d) = %q, want %q", n, got, want)
+		}
+	}
+}

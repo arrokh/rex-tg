@@ -679,7 +679,13 @@ Telegram counts the length of a message in UTF-16 code units, after it parses th
 
 ### 9.4a Images in answers
 
-When the final answer of an agent names image files that exist on the Mac, rex-tg sends them to the topic right after the answer. The same goes for the file types in `[display] send_files`: by default `pdf`, `csv`, `tsv`, `html`, `htm`, `xlsx`, `docx`, and `pptx`. This is a separate outbox item (kind `image`, key `<answer key>:images`), sent silently, because the answer already notified you. Only final answers count. Progress, tool output, and backfill do not.
+When the final answer of an agent names image files that exist on the Mac, rex-tg sends them to the topic right after the answer.
+
+Other files go only when you ask. When the answer names files of the types in `[display] send_files` (by default `pdf`, `csv`, `tsv`, `html`, `htm`, `xlsx`, `docx`, and `pptx`), the topic gets one silent message after the answer: `📎 Files in this answer`, with each path and size, and a button per file. A tap sends that file as a document. rex-tg reads it from the disk at that moment, so you see the path before anything leaves the Mac. A CSV may hold real data, and a bot chat is not end-to-end encrypted, so nothing of these types goes out on its own.
+
+- The offer is an outbox item (kind `files`, key `<answer key>:files`), so it arrives once and after the answer. Its paths are kept in the store (`files:<thread>:<key>`); its buttons carry the outbox id and the file's index (`fo:<id>:<i>`), because callback data holds at most 64 bytes. The sender asks for the buttons when it sends the offer.
+- A tap enqueues the file under the key `file:<offer id>:<index>`, so a second tap sends nothing ("sent already"). A file that is gone, empty, or over 50 MB by then is refused.
+- Offers older than 30 days lose their buttons' paths (housekeeping); a tap then says the offer is gone. This is a separate outbox item (kind `image`, key `<answer key>:images`), sent silently, because the answer already notified you. Only final answers count. Progress, tool output, and backfill do not.
 
 What counts as a name:
 
@@ -687,11 +693,11 @@ What counts as a name:
 - An inline code span whose whole text is a path. It may contain spaces.
 - A bare word that looks like a path, such as `~/Desktop/a.png`, `./a.png`, or `out/a.png`. Trailing `.`, `,`, `;`, `:`, and `)` are not part of it.
 
-The extension must be one of `.png .jpg .jpeg .gif .webp .heic .heif .bmp .tif .tiff` (when `send_images` is on), or one in `send_files`. `~` is the home folder. A relative path is resolved against the agent's folder. The file must exist, be a regular file (a symlink is followed), and be between 1 byte and 50 MB. Paths that repeat count once. At most 10 images go out per answer.
+The extension must be one of `.png .jpg .jpeg .gif .webp .heic .heif .bmp .tif .tiff` (when `send_images` is on), or one in `send_files` for an offer. `~` is the home folder. A relative path is resolved against the agent's folder. The file must exist, be a regular file (a symlink is followed), and be between 1 byte and 50 MB. Paths that repeat count once. At most 10 images go out per answer.
 
 The sender reads the file when it sends. A file that is gone or unreadable fails that part, and the usual notice says why. It goes out as a photo when it is a PNG or JPEG of at most 10 MB, with width plus height of at most 10000 and a longer side of at most 20 times the shorter. Every other file goes out as a document. The caption is the file name. An upload gets 4 s per MB on top of the usual 15 s timeout, so a large file on a slow link does not end with an unknown outcome. When Telegram refuses a photo with 400, nothing was posted, so the same file goes out as a document in the same attempt. Every other outcome follows the rules of 9.1.
 
-Privacy: rex-tg sends only files that the final answer names, only to the owner's chat. It never searches for files. Set `[display] send_images = false` to turn images off, and `send_files = []` to turn the other types off. An agent that names a file it edited, such as `src/index.html`, sends that file too; remove the type from `send_files` when that is noise.
+Privacy: rex-tg sends only files that the final answer names, only to the owner's chat, and the other types only on a tap. It never searches for files. Set `[display] send_images = false` to turn images off, and `send_files = []` to turn the offers off. An agent that names a file it edited, such as `src/index.html`, offers that file too; remove the type from `send_files` when that is noise.
 
 ### 9.5 Incoming messages
 
