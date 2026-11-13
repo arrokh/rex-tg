@@ -17,6 +17,7 @@ type group struct {
 	threadID int64
 	ids      []int64
 	texts    []string
+	quotes   []string // the quotes of replies (WithReply), typed after all texts
 	last     time.Time
 	long     bool
 	closed   bool // a later message started a new group for the thread
@@ -47,6 +48,13 @@ func (j *Joiner) windowFor(g *group) time.Duration {
 // Add records a message. It joins the open group of the thread when the gap
 // to the previous message is within the window that applies to that group.
 func (j *Joiner) Add(threadID, updateID int64, text string, at time.Time) {
+	j.AddReply(threadID, updateID, text, "", at)
+}
+
+// AddReply is Add for a reply: quoted is the message that it answers ("" for
+// none). The quotes of a group come after all its texts, so a long message
+// that Telegram split stays whole.
+func (j *Joiner) AddReply(threadID, updateID int64, text, quoted string, at time.Time) {
 	var open *group
 	for _, g := range j.groups {
 		if g.threadID == threadID && !g.closed {
@@ -63,6 +71,9 @@ func (j *Joiner) Add(threadID, updateID int64, text string, at time.Time) {
 	}
 	open.ids = append(open.ids, updateID)
 	open.texts = append(open.texts, text)
+	if quoted != "" {
+		open.quotes = append(open.quotes, quoted)
+	}
 	open.last = at
 	if utf8.RuneCountInString(text) >= j.longChars {
 		open.long = true
@@ -77,7 +88,13 @@ func (j *Joiner) Due(now time.Time) []Joined {
 	keep := j.groups[:0]
 	for _, g := range j.groups {
 		if g.closed || now.Sub(g.last) > j.windowFor(g) {
-			out = append(out, Joined{ThreadID: g.threadID, UpdateIDs: g.ids, Text: strings.Join(g.texts, "\n")})
+			text := strings.Join(g.texts, "\n")
+			for _, q := range g.quotes {
+				if TakesQuote(text) { // a command first takes none
+					text = WithReply(text, q)
+				}
+			}
+			out = append(out, Joined{ThreadID: g.threadID, UpdateIDs: g.ids, Text: text})
 		} else {
 			keep = append(keep, g)
 		}

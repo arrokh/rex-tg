@@ -179,6 +179,24 @@ func TestJoiner(t *testing.T) {
 			t.Fatalf("not removed: %+v", again)
 		}
 	})
+	t.Run("a reply's quote comes after all joined parts", func(t *testing.T) {
+		j := inbound.NewJoiner(300*time.Millisecond, 1500*time.Millisecond, 10)
+		j.AddReply(1, 10, "part one", "the answer", ms(0))
+		j.Add(1, 11, "part two", ms(200))
+		got := j.Due(ms(600))
+		want := []inbound.Joined{{ThreadID: 1, UpdateIDs: []int64{10, 11}, Text: "part one\npart two\n\nIn reply to:\n> the answer"}}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("got %+v", got)
+		}
+	})
+	t.Run("a command first takes no quote", func(t *testing.T) {
+		j := inbound.NewJoiner(300*time.Millisecond, 1500*time.Millisecond, 10)
+		j.Add(1, 10, "/compact", ms(0))
+		j.AddReply(1, 11, "and this", "the answer", ms(200))
+		if got := j.Due(ms(600)); len(got) != 1 || got[0].Text != "/compact\nand this" {
+			t.Fatalf("got %+v", got)
+		}
+	})
 	t.Run("gap beyond window splits", func(t *testing.T) {
 		j := inbound.NewJoiner(300*time.Millisecond, 1500*time.Millisecond, 10)
 		j.Add(1, 10, "a", ms(0))

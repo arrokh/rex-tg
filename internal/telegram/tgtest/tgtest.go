@@ -6,6 +6,7 @@ package tgtest
 import (
 	"encoding/json"
 	"fmt"
+	"html"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -269,6 +270,42 @@ func (s *Server) PushMessage(chatID, threadID, fromID int64, text string) telegr
 	m := s.addMsg(&Message{ChatID: chatID, ThreadID: threadID, FromID: fromID, Text: text})
 	tm := s.wire(m)
 	tm.Text = text
+	s.mu.Unlock()
+	return s.PushUpdate(telegram.Update{Message: &tm})
+}
+
+// PushReply queues a user's text that replies to message replyTo, as
+// Telegram sends it: reply_to_message holds that message with its text
+// without markup, and quote the part the user quoted ("" for none). A
+// replyTo equal to threadID is the topic's first message, which Telegram
+// may name in reply_to_message of any message in a topic.
+func (s *Server) PushReply(chatID, threadID, fromID, replyTo int64, quote, text string) telegram.Update {
+	s.mu.Lock()
+	var rm *telegram.Message
+	if replyTo == threadID && threadID != 0 {
+		rm = &telegram.Message{MessageID: threadID, MessageThreadID: threadID, Chat: telegram.Chat{ID: chatID, Type: "private"},
+			From: &telegram.User{ID: 1, IsBot: true, FirstName: "TestBot", Username: "test_bot"}, Text: "",
+			ForumTopicCreated: &telegram.ForumTopicCreated{Name: "topic"}}
+	} else if old := s.find(chatID, replyTo); old != nil {
+		w := s.wire(old)
+		if old.ParseMode == "HTML" {
+			if v, err := checkHTML(old.Text); err == nil {
+				v = html.UnescapeString(v)
+				if old.File != nil {
+					w.Caption = v
+				} else {
+					w.Text = v
+				}
+			}
+		}
+		rm = &w
+	}
+	m := s.addMsg(&Message{ChatID: chatID, ThreadID: threadID, FromID: fromID, Text: text})
+	tm := s.wire(m)
+	tm.ReplyToMessage = rm
+	if quote != "" {
+		tm.Quote = &telegram.TextQuote{Text: quote, IsManual: true}
+	}
 	s.mu.Unlock()
 	return s.PushUpdate(telegram.Update{Message: &tm})
 }
@@ -724,6 +761,17 @@ func (s *Server) handle(method string, p map[string]any, docName string, docData
 			if first, _ := list[0].(map[string]any); first != nil {
 				m.Reaction = str(first, "emoji")
 			}
+		}
+		return true, nil
+	case "sendMessageDraft":
+		if num(p, "draft_id") == 0 {
+			return nil, bad("draft_id must be non-zero")
+		}
+		if err := checkText(str(p, "text"), str(p, "parse_mode")); err != nil {
+			return nil, err
+		}
+		if s.threadGone(chat, num(p, "message_thread_id")) {
+			return nil, bad("message thread not found")
 		}
 		return true, nil
 	case "sendChatAction":

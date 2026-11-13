@@ -91,7 +91,8 @@ To send an agent a command that has a bot command's name, use two slashes: `//he
 - **Reactions on your message:** 👀 means typed into the pane. 👍 means the agent got it. 👎 means refused; a reply says why.
 - **Progress:** one message updates while the agent works. When the turn ends, it becomes one summary line.
 - **Answer:** a new message. A long answer comes in numbered parts, such as `(1/3)`.
-- **Images:** when an answer names an image file on your Mac, rex-tg sends the picture too.
+- **Live text:** while the agent writes, the text shows as a draft at the bottom of the topic (word by word for pi, block by block for Claude Code and Codex).
+- **Files:** when an answer names an image, PDF, CSV, HTML, or Office file on your Mac, rex-tg sends it too.
 - **Permission prompts:** the bot shows the bottom of the pane, with one button per answer.
 - **⏰ Still waiting for your answer:** a prompt has waited 10 minutes. Tap the reminder to jump to the prompt.
 - **💻 In use on the Mac:** you typed in the pane on the Mac. The replies stay on the Mac, and this one notice shows the latest prompt. `📄 Last answer` shows the newest answer. Write in the topic to go on in Telegram.
@@ -118,6 +119,7 @@ proxy = "socks5h://127.0.0.1:40000"  # when your network blocks or drops Telegra
 mode = "progress"         # progress, block, or final
 mac_notice = true         # one notice while you work on the Mac
 send_images = true        # send images that an answer names
+stream = true             # show the text while the agent writes
 ```
 
 ## Logs, stop, and uninstall

@@ -326,9 +326,10 @@ func (d *daemon) shownPath(dir string) string {
 	return "<code>" + esc(format.Truncate(d.tildePath(dir), maxShownPath)) + "</code>"
 }
 
-// newFolders returns the folders to offer: the folder of this topic's agent
-// first, then the folders of recent sessions. Only folders that still exist
-// count. It reads the disk, so it runs in a worker.
+// newFolders returns the folders to offer: the pinned ones (rex.new_folders)
+// first, then the folder of this topic's agent, then the folders of recent
+// sessions. Only folders that still exist count. It reads the disk, so it
+// runs in a worker.
 func (d *daemon) newFolders(chat, thread int64) []string {
 	var dirs []string
 	seen := map[string]bool{}
@@ -337,6 +338,9 @@ func (d *daemon) newFolders(chat, thread int64) []string {
 			seen[dir] = true
 			dirs = append(dirs, dir)
 		}
+	}
+	for _, dir := range d.cfg.Rex.NewFolders {
+		add(dir)
 	}
 	if thread != 0 {
 		if th, ok, err := d.st.ThreadByTopic(d.ctx, chat, thread); err == nil && ok && th.Status != store.ThreadClosed {

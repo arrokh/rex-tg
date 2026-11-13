@@ -35,6 +35,9 @@ type Paths struct {
 	LaunchAgent    string
 	Label          string
 	LogDir         string
+	// LiveDir is where the pi extension writes the text pi is writing
+	// (config.Config.LiveDir).
+	LiveDir string
 
 	// Runner runs launchctl. Nil means os/exec.
 	Runner Runner
@@ -69,6 +72,7 @@ func DefaultPaths(home, binary string) Paths {
 		LaunchAgent:    filepath.Join(home, "Library", "LaunchAgents", "local.rex-tg.plist"),
 		Label:          "local.rex-tg",
 		LogDir:         filepath.Join(home, ".local", "state", "rex-tg", "logs"),
+		LiveDir:        filepath.Join(home, ".local", "state", "rex-tg", "live"),
 	}
 }
 

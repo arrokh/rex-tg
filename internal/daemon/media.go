@@ -42,6 +42,7 @@ func (d *daemon) media(u telegram.Update, m *telegram.Message, th store.Thread) 
 		}
 		dir := filepath.Join(d.cfg.UploadDir(), fmt.Sprint(th.ID))
 		update, msg, caption := u.UpdateID, m.MessageID, strings.TrimSpace(m.Caption)
+		quoted := d.replyQuote(m, th)
 		d.spawn(func() {
 			path, err := d.download(fileID, dir, fmt.Sprintf("%d-%s", msg, name))
 			if err != nil {
@@ -55,6 +56,7 @@ func (d *daemon) media(u telegram.Update, m *telegram.Message, th store.Thread) 
 			if caption != "" {
 				text = caption + "\n" + path
 			}
+			text = inbound.WithReply(text, agentQuote(caption, quoted))
 			d.emit(evQueueText{threadID: th.ID, orig: update, tgMsg: msg, text: text, kind: "file", action: inbound.ActText})
 		})
 	case m.Voice != nil || m.Audio != nil:
@@ -73,6 +75,7 @@ func (d *daemon) media(u telegram.Update, m *telegram.Message, th store.Thread) 
 		}
 		dir := filepath.Join(d.cfg.UploadDir(), fmt.Sprint(th.ID))
 		update, msg := u.UpdateID, m.MessageID
+		quoted := d.replyQuote(m, th)
 		d.spawn(func() {
 			text, err := d.transcribe(fileID, dir, fmt.Sprintf("%d-voice", msg))
 			if err != nil || strings.TrimSpace(text) == "" {
@@ -84,6 +87,7 @@ func (d *daemon) media(u telegram.Update, m *telegram.Message, th store.Thread) 
 			}
 			text = strings.TrimSpace(text)
 			d.replyTopic(th, fmt.Sprintf("voice:%d", update), "🎤 "+esc(text))
+			text = inbound.WithReply(text, agentQuote(text, quoted))
 			d.emit(evQueueText{threadID: th.ID, orig: update, tgMsg: msg, text: text, kind: "voice", action: inbound.ActText})
 		})
 	default:

@@ -395,6 +395,20 @@ func (s *Store) OutboxRow(ctx context.Context, id int64) (OutboxRow, error) {
 	return r, nil
 }
 
+// SentKind returns the kind of the outbox row of a topic that Telegram
+// message msg is a part of. ok is false when rex-tg sent no such part there.
+func (s *Store) SentKind(ctx context.Context, threadID, msg int64) (kind string, ok bool, err error) {
+	err = s.db.QueryRowContext(ctx, `SELECT o.kind FROM outbox_part p JOIN outbox o ON o.id = p.outbox_id
+		WHERE o.thread_id=? AND p.tg_message_id=? LIMIT 1`, threadID, msg).Scan(&kind)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, fmt.Errorf("store: sent kind: %w", err)
+	}
+	return kind, true, nil
+}
+
 // ResendPart moves one unknown part back to pending. It reports false when
 // the part is not unknown any more (for example, /resend came first).
 func (s *Store) ResendPart(ctx context.Context, outboxID int64, part int) (bool, error) {

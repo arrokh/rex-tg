@@ -177,6 +177,10 @@ type daemon struct {
 	delivering           map[int64]*delivery
 	waitNoticed          map[int64]bool
 	macNotes             map[int64]*macNote  // the Mac hold's notice, by thread
+	drafts               map[int64]*draft    // the draft of a running turn, by thread
+	liveText             map[int64]liveText  // what pi's extension last wrote, by thread
+	draftsOff            bool                // Telegram refused drafts: none until the next start
+	draftRefused         int                 // drafts refused in a row
 	self                 *selfWatch          // the daemon's own binary, for the restart after an update
 	board                *board              // the live /agents message
 	boardLoaded          bool                // board was read from the store
@@ -221,6 +225,8 @@ func newDaemon(cfg config.Config, home string, log *slog.Logger, now func() time
 		delivering:  map[int64]*delivery{},
 		waitNoticed: map[int64]bool{},
 		macNotes:    map[int64]*macNote{},
+		drafts:      map[int64]*draft{},
+		liveText:    map[int64]liveText{},
 		reminders:   map[int64]*reminder{},
 		ctlPending:  map[int64]ctlSet{},
 		vimNoticed:  map[int64]bool{},
@@ -298,6 +304,9 @@ func (d *daemon) run(parent context.Context) error {
 	d.spawn(func() { d.rexEventLoop(ctx) })
 	d.spawn(func() { d.spoolLoop(ctx) })
 	d.spawn(func() { d.pollLoop(ctx) })
+	if d.cfg.Display.Stream {
+		d.spawn(func() { d.liveLoop(ctx) })
+	}
 	return d.loop(ctx)
 }
 
@@ -337,6 +346,10 @@ func (d *daemon) handle(ev any) {
 		d.onWaitNotice(e)
 	case evMacSent:
 		d.onMacSent(e)
+	case evDraftSent:
+		d.onDraftSent(e)
+	case evLive:
+		d.onLive(e)
 	case evBoard:
 		d.onBoard(e)
 	case evReminder:
@@ -400,10 +413,12 @@ func (d *daemon) tick() {
 	for tid, tr := range d.trackers {
 		th, err := d.st.Thread(d.ctx, tid)
 		if err != nil || th.Status == store.ThreadClosed {
+			d.closeDraft(tid)
 			continue
 		}
 		d.perform(th, tr.Tick(now))
 		d.saveSnapshot(tid, tr)
+		d.streamDraft(th, tr, now)
 	}
 	for _, g := range d.joiner.Due(now) {
 		d.joined(g)

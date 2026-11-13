@@ -95,3 +95,36 @@ func TestFindImages(t *testing.T) {
 		})
 	}
 }
+
+// Other file types count when display.send_files lists them; send_images
+// off leaves only those.
+func TestFindFiles(t *testing.T) {
+	root := t.TempDir()
+	write := func(name string) string {
+		t.Helper()
+		p := filepath.Join(root, name)
+		if err := os.WriteFile(p, []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	pdf, csv, html, png, env := write("report.PDF"), write("data.csv"), write("page.html"), write("a.png"), write("notes.env")
+	md := "Made `" + pdf + "`, [data](" + csv + "), " + html + ", " + png + " and " + env + "."
+	tests := []struct {
+		name   string
+		images bool
+		files  []string
+		want   []string
+	}{
+		{"defaults", true, []string{"pdf", "csv", "tsv", "html", "htm", "xlsx", "docx", "pptx"}, []string{pdf, csv, html, png}},
+		{"images off", false, []string{".PDF"}, []string{pdf}},
+		{"nothing", false, nil, nil},
+	}
+	for _, c := range tests {
+		t.Run(c.name, func(t *testing.T) {
+			if got := findFiles(md, root, root, sendExts(c.images, c.files)); !slices.Equal(got, c.want) {
+				t.Fatalf("findFiles = %q, want %q", got, c.want)
+			}
+		})
+	}
+}

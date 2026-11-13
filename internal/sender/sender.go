@@ -35,6 +35,9 @@ const (
 	PriorityEdit
 	// PriorityTyping is for "typing…" actions. They are dropped when the budget is short.
 	PriorityTyping
+	// PriorityDraft is for drafts of text that an agent is writing
+	// (sendMessageDraft). They go last; a newer draft makes an older one moot.
+	PriorityDraft
 )
 
 // EventKind says what an Event reports.

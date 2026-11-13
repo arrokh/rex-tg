@@ -99,7 +99,8 @@ Doctor checks:
 
 ### `/new`
 
-- Tap the agent, then tap a recent folder or send a path such as `~/work/app`. cux is one of the agents when it is installed.
+- Tap the agent, then tap a folder or send a path such as `~/work/app`. cux is one of the agents when it is installed.
+- The folder buttons, at most 6: the folders in `[rex] new_folders` first, in their order, then the folder of this topic's agent, then the folders where agents ran recently, newest first. A folder that no longer exists is left out.
 - Every tab goes into one Rex session, `rex-tg` (`[rex] new_session`). rex-tg makes the session when it is missing.
 - A tab is named after its folder and agent, such as `app · pi`. The tab always follows its topic name: at link time, and at the 30-second name check when its label differs. When the topic has only the folder name, the tab keeps the `<folder> · <agent>` form. Two tabs with one name get ` #2`, ` #3`. Tabs in other Rex sessions are never renamed.
 - The agent starts as if you typed its name in a terminal, so your `~/.zshrc` applies.
@@ -112,7 +113,8 @@ Doctor checks:
 - Waiting messages go in the order you sent them. Each one is its own turn.
 - `⚡ Send now` types the message while the agent works. All three agents steer: the message joins the current run.
 - Telegram splits long messages into parts. rex-tg joins parts that arrive close together into one prompt. The window is 300 ms, or 1500 ms for long messages.
-- A reply to a bot message sends only your new text.
+- A reply tells the agent what you reply to. Your text comes first, then `In reply to:` and the replied message as a quote (`> …`), cut at 600 characters. If you quote part of a message in Telegram, only that part is sent.
+- This works for replies to the agent's messages (answers, tool lines, prompts typed on the Mac) and to your own messages. A reply to one of rex-tg's own messages (notices, alerts, cards) sends only your text. So do an agent command such as `//compact` and a shell command such as `!ls`.
 
 ### `/model` and `/effort`
 
@@ -136,7 +138,8 @@ Doctor checks:
 - `typing…` shows while the agent works, in the topic you used last.
 - The progress message appears after 2 seconds without an answer. It shows the latest commentary and the recent tool calls. It never shows tool output, unless `/verbose full` is on.
 - At the end of the turn, the tool rows stay in a collapsed quote under the summary line.
-- Images named in a final answer: up to 10 per answer. Set `send_images = false` to turn this off.
+- While the agent writes, the text shows at the bottom of the topic as a draft, Telegram's preview of a message being written. pi's text grows word by word. Claude Code and Codex show each finished block, because they write nothing earlier. A draft never becomes a message: the answer replaces it. Final mode shows no drafts. Set `stream = false` to turn drafts off.
+- Files named in a final answer: images, and `pdf`, `csv`, `tsv`, `html`, `htm`, `xlsx`, `docx`, and `pptx` files, up to 10 per answer. Images come as photos, the other types as documents. Set `send_images = false` to turn images off, and change `send_files` for the other types (`[]` turns them off).
 - Work on the Mac: when you type in the pane on the Mac, the topic gets one silent notice, `💻 In use on the Mac`, instead of the prompts and replies. The notice shows the latest prompt and whether the agent is working or done. `📄 Last answer` posts the newest answer. Write in the topic to go on in Telegram: from then on, replies come as usual. Permission prompts still come.
 - Set `mac_notice = false` to show Mac turns instead. `💻 You (on Mac)` then shows the prompts typed on the Mac. Prompts that no person typed, such as Claude Code's task notifications, are not shown. Set `show_mac_prompts = false` to hide all of them.
 
@@ -160,7 +163,7 @@ rex-tg reads `~/.config/rex-tg/config.toml`. The file is optional.
 
 - You only need the lines you change.
 - An unknown key is an error. rex-tg names the key.
-- A leading `~` is expanded in `rex.cli`, `state.dir`, `voice.whisper_cli`, and `agents.claude_exec_glob`. Use an absolute path for `voice.model`.
+- A leading `~` is expanded in `rex.cli`, `rex.new_folders`, `state.dir`, `voice.whisper_cli`, and `agents.claude_exec_glob`. Use an absolute path for `voice.model`.
 - Restart the daemon after a change: `launchctl kickstart -k gui/$(id -u)/local.rex-tg`.
 
 Every key, with its default:
@@ -176,6 +179,7 @@ rate_burst = 5                          # Messages that may be sent at once abov
 cli = "/Applications/Rex Beta.app/Contents/Helpers/Rex Server.rex/Contents/MacOS/rex"  # Path to the rex CLI.
 scan_interval = "30s"                   # How often rex-tg scans the Rex panes, as a backup to Rex events.
 new_session = "rex-tg"                  # The Rex session where /new opens its tabs.
+new_folders = []                        # Folders that /new always offers first, such as ["~/work/app"].
 
 [agents]
 pi_argv0 = ["pi"]                       # Process names (argv0) that mean a pi pane.
@@ -242,6 +246,8 @@ progress_delay = "2s"                   # Wait before the progress message appea
 progress_edit_interval = "2s"           # Least time between two edits of the progress message.
 rich_messages = false                   # Send final answers as Telegram rich messages.
 send_images = true                      # Send the image files that a final answer names.
+send_files = ["pdf", "csv", "tsv", "html", "htm", "xlsx", "docx", "pptx"]  # Other file types that a final answer sends, as documents.
+stream = true                           # Show the agent's text while it writes, as a Telegram draft.
 
 [alerts]
 remind_after = "10m"                    # Remind of an unanswered prompt after this, and again each time it passes. "0s" turns reminders off.

@@ -354,7 +354,7 @@ The display follows two references:
 
 Section 14 lists the sources and their settings.
 
-There is one difference that rex-tg cannot remove. OpenClaw and Hermes run the model loop themselves, so they get the answer token by token. rex-tg reads the agent's JSONL file, which holds only complete blocks. So the answer arrives whole, not as a live stream of words. Tool calls, tool results, and commentary still arrive one by one, which is enough for a live progress message.
+OpenClaw and Hermes run the model loop themselves, so they get the answer token by token. rex-tg reads the agent's JSONL file, which holds only complete blocks. So it streams what each agent gives it, as a draft (section 8.1a): pi word by word, through its extension, and Claude Code and Codex block by block. Tool calls, tool results, and commentary arrive one by one, which is enough for a live progress message.
 
 ### 8.1 A turn in a topic
 
@@ -390,6 +390,19 @@ While the agent works, one progress message is edited in place:
 - When the turn ends without an answer, the summary line says so, for example `⏹ Interrupted · 1m 12s · 4 tools`, or `❌ Error: <first line>`.
 
 Emoji per tool kind: 📖 read, ✏️ edit or write, 💻 shell, 🔍 search, 🌐 web, 🤖 subagent, 📝 plan or to-do, 🧩 other.
+
+### 8.1a Drafts: the text while it is written
+
+While a turn runs, the topic shows the agent's text as a Telegram draft (`sendMessageDraft`, Bot API 9.3; all bots since 9.5), as Hermes does. A draft is a preview at the bottom of the topic. It lasts about 30 seconds, and a real message from the bot ends it. It never becomes a message. So a draft can never be a second copy of an answer, and drafts need none of the at-most-once rules of section 9.1. OpenClaw instead posts a preview message and edits it; under rex-tg's rules, that message would have to become the answer, which the outbox cannot do safely.
+
+- **Where the text comes from.**
+  - **pi:** its extension sees each token (`message_update`). It writes the text of the message that pi is writing to `<state>/live/<session id>.json`, at most every 300 ms, and removes the file when the message is complete (`message_end`, `agent_end`, `session_shutdown`). rex-tg makes the folder with mode 0700 and reads it every 400 ms. A file older than 30 seconds does not count, and rex-tg removes one older than 10 minutes (pi was killed). So a pi draft grows word by word. The last word waits until it is whole, so a key that is half written cannot slip past the secret removal.
+  - **Claude Code and Codex:** their transcripts hold only complete blocks, and Claude Code's screen shows no partial text either (checked live). Their draft shows the latest commentary block, so it changes block by block.
+- **What it shows.** The end of the text, at most 3000 characters from the start of a line, rendered like an answer and with secrets removed. Block mode shows only pi's text, because its blocks are posted as messages anyway.
+- **When.** Only while a turn runs that Telegram sees: not for a turn held for the Mac (8.4a), not in final mode (answers only), and not once its answer is out. A topic gets at most one draft every 1.5 seconds. A draft that did not change is sent again after 20 seconds, so it does not fade during a long tool call; after 2 minutes without a change it may fade.
+- **Order.** Drafts go last in the sender, after answers, alerts, and progress. The sender sends one request at a time. rex-tg closes a turn's draft before the answer's outbox row exists, and the draft request checks this when it is sent. So no draft comes after the answer.
+- **Errors.** A draft that fails is not sent again at once; the next change sends the newest text, at most one per 1.5 seconds. After 3 refusals (400) in a row, rex-tg sends no drafts until the next start, and logs it once.
+- `[display] stream = false` turns drafts off.
 
 ### 8.2 The answer
 
@@ -529,7 +542,7 @@ rex-tg registers the menu twice: for the default scope, and for the owner's chat
 Start an agent with `/new`:
 
 1. The bot asks for the agent: pi, Claude Code, or Codex, and cux when it is installed (on the PATH, or in `~/.local/bin`, `/opt/homebrew/bin`, or `/usr/local/bin`, because launchd gives the daemon a short PATH). cux starts Claude Code with one of several Claude accounts, so its pane is a Claude Code pane (section 6).
-2. The bot asks for the folder. Its buttons offer up to 6 folders where agent sessions ran, the most recently used first. In a linked topic, the folder of the topic's agent comes first. You can also send a path: `~/work/app`, an absolute path, or a path from your home folder (`work/app`).
+2. The bot asks for the folder. Its buttons offer up to 6 folders: the folders in `rex.new_folders` first, in their order; in a linked topic, the folder of the topic's agent next; then the folders where agent sessions ran, the most recently used first. Only folders that still exist count. You can also send a path: `~/work/app`, an absolute path, or a path from your home folder (`work/app`).
 3. Every agent that `/new` starts goes into one Rex session, `rex-tg` (`rex.new_session`, section 12). rex-tg finds it by name, ignoring case and the spaces around it, and adds a tab to it (`rex window new --focus=false`, so the tab that the Rex app shows stays the same). When no session has that name, it makes one (`rex new`). The tab is named after the folder and the agent, such as `rex-tg · pi`. The tab keeps following its topic's name (section 7). Rex takes at most 128 characters and no control characters in a name, and rex would read a name that starts with `-` as an option, so rex-tg leaves those out. Starts run one at a time, so two starts make one session.
 4. The tab runs the agent's `launch` command (section 12) through your login shell with its interactive startup files (`--interactive`), as when you type the command in a terminal. So the PATH and the shell functions from `~/.zshrc` apply. Rex passes each word of the command as it is: spaces and `$` are not read by the shell.
 5. When the agent reports its session (its hook at start), rex-tg opens its topic, as the Open button of `/agents` does. If the agent exits first, rex-tg shows the exit code and the end of the pane's screen. If no report comes within 90 seconds, rex-tg shows the screen and points to `/agents`.
@@ -561,8 +574,10 @@ Write here to type into the pane. /help lists the commands.
 | A voice note when voice notes are not set up (8.9) | "Voice notes need whisper.cpp; see the README." |
 | An edited message | "Edits are not sent to the agent." The edit is ignored. |
 | A message in a topic that rex-tg did not create, or in a `closed` topic | "This topic is not linked. Use /agents in the main chat." |
-| A reply to a bot message | Only your text is sent. The quoted message is not. |
+| A reply to one of rex-tg's own messages (a notice, an alert, a card) | Only your text is sent. |
 | A message from anyone but the owner | No answer. |
+
+**Replies.** A reply in a topic tells the agent what it answers. rex-tg types your text first, then a blank line, `In reply to:`, and the replied message as a Markdown quote, cut at 600 characters. Your text comes first, so the prompt starts with your own words: the echo check (section 9.5) and an agent command keep working. When you quote part of a message in Telegram (`quote`), only that part is sent. Only replies to the agent's words count: a message that rex-tg sent as an answer, a block, a tool line, an output, reasoning, an image, the backfill, or a prompt typed on the Mac (looked up by its message number in the outbox), and your own messages. In a topic, Telegram may give every message a `reply_to_message` that is the topic's first message; that is no reply. An agent command (text that starts with `/`, such as `//compact`) gets no quote, because the quote would become its argument. Neither does a shell command (`!ls` in Claude Code and pi), whose shell would run each quoted line, with `>` as a redirect. When joined parts start with a command, none of their quotes is added. Photos, files, and voice notes carry the quote too. When rex-tg joins the parts of a long message (section 9.5), the quotes come after all the parts.
 
 ### 8.9 Optional features (Phase 6)
 
@@ -664,7 +679,7 @@ Telegram counts the length of a message in UTF-16 code units, after it parses th
 
 ### 9.4a Images in answers
 
-When the final answer of an agent names image files that exist on the Mac, rex-tg sends them to the topic right after the answer. This is a separate outbox item (kind `image`, key `<answer key>:images`), sent silently, because the answer already notified you. Only final answers count. Progress, tool output, and backfill do not.
+When the final answer of an agent names image files that exist on the Mac, rex-tg sends them to the topic right after the answer. The same goes for the file types in `[display] send_files`: by default `pdf`, `csv`, `tsv`, `html`, `htm`, `xlsx`, `docx`, and `pptx`. This is a separate outbox item (kind `image`, key `<answer key>:images`), sent silently, because the answer already notified you. Only final answers count. Progress, tool output, and backfill do not.
 
 What counts as a name:
 
@@ -672,11 +687,11 @@ What counts as a name:
 - An inline code span whose whole text is a path. It may contain spaces.
 - A bare word that looks like a path, such as `~/Desktop/a.png`, `./a.png`, or `out/a.png`. Trailing `.`, `,`, `;`, `:`, and `)` are not part of it.
 
-The extension must be one of `.png .jpg .jpeg .gif .webp .heic .heif .bmp .tif .tiff`. `~` is the home folder. A relative path is resolved against the agent's folder. The file must exist, be a regular file (a symlink is followed), and be between 1 byte and 50 MB. Paths that repeat count once. At most 10 images go out per answer.
+The extension must be one of `.png .jpg .jpeg .gif .webp .heic .heif .bmp .tif .tiff` (when `send_images` is on), or one in `send_files`. `~` is the home folder. A relative path is resolved against the agent's folder. The file must exist, be a regular file (a symlink is followed), and be between 1 byte and 50 MB. Paths that repeat count once. At most 10 images go out per answer.
 
 The sender reads the file when it sends. A file that is gone or unreadable fails that part, and the usual notice says why. It goes out as a photo when it is a PNG or JPEG of at most 10 MB, with width plus height of at most 10000 and a longer side of at most 20 times the shorter. Every other file goes out as a document. The caption is the file name. An upload gets 4 s per MB on top of the usual 15 s timeout, so a large file on a slow link does not end with an unknown outcome. When Telegram refuses a photo with 400, nothing was posted, so the same file goes out as a document in the same attempt. Every other outcome follows the rules of 9.1.
 
-Privacy: rex-tg sends only files that the final answer names, only to the owner's chat. It never searches for files. Set `[display] send_images = false` to turn this off.
+Privacy: rex-tg sends only files that the final answer names, only to the owner's chat. It never searches for files. Set `[display] send_images = false` to turn images off, and `send_files = []` to turn the other types off. An agent that names a file it edited, such as `src/index.html`, sends that file too; remove the type from `send_files` when that is noise.
 
 ### 9.5 Incoming messages
 
@@ -946,6 +961,7 @@ rate_burst = 5
 cli = "/Applications/Rex Beta.app/Contents/Helpers/Rex Server.rex/Contents/MacOS/rex"
 scan_interval = "30s"
 new_session = "rex-tg"       # the Rex session where /new opens its tabs
+new_folders = []             # folders that /new offers first, such as ["~/work/app"]
 
 [agents]
 # Detection rules (section 5). Spike S2 confirms them.

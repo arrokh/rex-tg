@@ -897,3 +897,45 @@ func TestMacNoticeOffShowsMacTurns(t *testing.T) {
 		t.Errorf("answer: %s", types(as))
 	}
 }
+
+// A draft belongs to a running turn that Telegram sees, until its answer is
+// out. It shows the latest commentary, redacted; block mode has none, and
+// final mode no draft.
+func TestStreaming(t *testing.T) {
+	redact := func(s string) string { return strings.ReplaceAll(s, "SECRET", "‹redacted›") }
+	x := newH(t, turn.Config{Redact: redact}, progress)
+	if _, ok := x.k.Streaming(); ok {
+		t.Fatal("a draft before any turn")
+	}
+	x.ev(call("c1", "t1", "Read", agents.ToolRead, "a.go"), 0)
+	if s, ok := x.k.Streaming(); !ok || s != "" {
+		t.Fatalf("running turn without commentary: %q %v", s, ok)
+	}
+	x.ev(text("m1", agents.Commentary, "Reading SECRET first"), 1)
+	if s, ok := x.k.Streaming(); !ok || s != "Reading ‹redacted› first" {
+		t.Fatalf("commentary: %q %v", s, ok)
+	}
+	x.ev(text("a1", agents.Final, "Done."), 2)
+	if _, ok := x.k.Streaming(); ok {
+		t.Fatal("a draft after the answer")
+	}
+
+	b := newH(t, turn.Config{}, turn.Settings{Mode: "block"})
+	b.ev(text("m1", agents.Commentary, "a block"), 0)
+	if s, ok := b.k.Streaming(); !ok || s != "" {
+		t.Fatalf("block mode: %q %v", s, ok)
+	}
+
+	f := newH(t, turn.Config{}, turn.Settings{Mode: "final"})
+	f.ev(text("m1", agents.Commentary, "not in final mode"), 0)
+	if _, ok := f.k.Streaming(); ok {
+		t.Fatal("a draft in final mode")
+	}
+
+	m := newH(t, turn.Config{}, macHold)
+	m.ev(prompt("p1", "on the mac"), 0)
+	m.ev(text("m1", agents.Commentary, "held"), 1)
+	if _, ok := m.k.Streaming(); ok {
+		t.Fatal("a draft for a turn held for the Mac")
+	}
+}

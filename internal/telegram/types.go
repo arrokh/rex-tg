@@ -26,6 +26,21 @@ type Message struct {
 	Video           *Video          `json:"video,omitempty"`
 	Sticker         *Sticker        `json:"sticker,omitempty"`
 	ReplyToMessage  *Message        `json:"reply_to_message,omitempty"`
+	// Quote is the part of ReplyToMessage that the user quoted, if any.
+	Quote *TextQuote `json:"quote,omitempty"`
+	// ForumTopicCreated marks the service message that starts a topic.
+	ForumTopicCreated *ForumTopicCreated `json:"forum_topic_created,omitempty"`
+}
+
+// TextQuote is the quoted part of a replied message.
+type TextQuote struct {
+	Text     string `json:"text"`
+	IsManual bool   `json:"is_manual,omitempty"`
+}
+
+// ForumTopicCreated is the service content of a topic's first message.
+type ForumTopicCreated struct {
+	Name string `json:"name"`
 }
 
 // MessageEntity marks up a span of message text.

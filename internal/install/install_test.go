@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -470,7 +471,8 @@ func TestPi(t *testing.T) {
 	if strings.Contains(got, "__REX_TG_BIN__") || !strings.Contains(got, `const REX_TG_BIN: string = "/Users/a b/bin/rex-tg";`) {
 		t.Errorf("placeholder not replaced:\n%s", got)
 	}
-	if want := strings.ReplaceAll(string(extensions.PiExtension), "__REX_TG_BIN__", `"/Users/a b/bin/rex-tg"`); got != want {
+	want := strings.ReplaceAll(string(extensions.PiExtension), "__REX_TG_BIN__", `"/Users/a b/bin/rex-tg"`)
+	if want = strings.ReplaceAll(want, "__REX_TG_LIVE__", strconv.Quote(p.LiveDir)); got != want {
 		t.Error("content differs from template")
 	}
 	if fi, _ := os.Stat(p.PiExtension); fi.Mode().Perm() != 0o644 {
@@ -503,7 +505,7 @@ func TestPi(t *testing.T) {
 
 func TestPiExtensionSource(t *testing.T) {
 	src := string(extensions.PiExtension)
-	for _, want := range []string{"__REX_TG_BIN__", "REX_BLOCK", `"session_start"`, `"session_shutdown"`, `"agent_start"`, `"agent_end"`, "hook_event_name", "timeout: 3000"} {
+	for _, want := range []string{"__REX_TG_BIN__", "__REX_TG_LIVE__", "REX_BLOCK", `"session_start"`, `"session_shutdown"`, `"agent_start"`, `"agent_end"`, `"message_update"`, `"message_end"`, "hook_event_name", "timeout: 3000"} {
 		if !strings.Contains(src, want) {
 			t.Errorf("missing %q", want)
 		}

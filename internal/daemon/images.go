@@ -9,9 +9,9 @@ import (
 	"strings"
 )
 
-// Limits for images that a final answer names (design section 9.4a).
+// Limits for the files that a final answer names (design section 9.4a).
 const (
-	maxImageFiles = 10       // images sent per answer
+	maxImageFiles = 10       // files sent per answer
 	maxImageBytes = 50 << 20 // the Bot API upload limit
 )
 
@@ -83,19 +83,21 @@ func imageCandidates(md string) []string {
 func isSpace(c byte) bool { return c == ' ' || c == '\t' || c == '\n' || c == '\r' }
 
 // trimToken removes quotes, brackets, and trailing punctuation around a bare
-// word, and keeps it only when it has an image extension.
+// word, and keeps it only when it has a file extension (resolveImage checks
+// which).
 func trimToken(t string) string {
 	t = strings.TrimLeft(t, "\"'*_([{<")
 	t = strings.TrimRight(t, ".,;:!?)]}>\"'*_")
-	if t == "" || !imageExts[strings.ToLower(filepath.Ext(t))] {
+	if t == "" || filepath.Ext(t) == "" {
 		return ""
 	}
 	return t
 }
 
-// resolveImage turns a candidate into a clean absolute path, or "". A
-// relative path is resolved against cwd (an empty cwd skips it).
-func resolveImage(c, home, cwd string) string {
+// resolveImage turns a candidate into a clean absolute path, or "" when it
+// is no file with one of the extensions exts (".png"). A relative path is
+// resolved against cwd (an empty cwd skips it).
+func resolveImage(c, home, cwd string, exts map[string]bool) string {
 	c = strings.TrimSpace(c)
 	switch {
 	case strings.HasPrefix(c, "file://"):
@@ -112,7 +114,7 @@ func resolveImage(c, home, cwd string) string {
 		}
 	}
 	c = strings.TrimRight(c, ".,;:!?)")
-	if c == "" || !imageExts[strings.ToLower(filepath.Ext(c))] {
+	if c == "" || !exts[strings.ToLower(filepath.Ext(c))] {
 		return ""
 	}
 	switch {
@@ -136,11 +138,14 @@ func resolveImage(c, home, cwd string) string {
 
 // findImages returns the image files that a final answer names and that
 // exist: absolute paths, without repeats, in order, at most maxImageFiles.
-func findImages(md, home, cwd string) []string {
+func findImages(md, home, cwd string) []string { return findFiles(md, home, cwd, imageExts) }
+
+// findFiles is findImages for the files with the extensions exts.
+func findFiles(md, home, cwd string, exts map[string]bool) []string {
 	var out []string
 	seen := map[string]bool{}
 	for _, c := range imageCandidates(md) {
-		p := resolveImage(c, home, cwd)
+		p := resolveImage(c, home, cwd, exts)
 		if p == "" || seen[p] {
 			continue
 		}
@@ -155,4 +160,21 @@ func findImages(md, home, cwd string) []string {
 		}
 	}
 	return out
+}
+
+// sendExts returns the extensions of the files that a final answer sends:
+// the images when send_images is on, and the types in send_files.
+func sendExts(sendImages bool, files []string) map[string]bool {
+	exts := map[string]bool{}
+	if sendImages {
+		for x := range imageExts {
+			exts[x] = true
+		}
+	}
+	for _, x := range files {
+		if x = strings.ToLower(strings.TrimPrefix(strings.TrimSpace(x), ".")); x != "" {
+			exts["."+x] = true
+		}
+	}
+	return exts
 }

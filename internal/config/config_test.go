@@ -100,6 +100,7 @@ rate_burst = 9
 cli = "~/bin/rex"
 scan_interval = "10s"
 new_session = "agents"
+new_folders = ["~/work/app/", " /srv/site "]
 
 [agents]
 pi_argv0 = ["pi", "pi2"]
@@ -116,6 +117,8 @@ mode = "final"
 backfill = 5
 show_mac_prompts = false
 progress_delay = "3s"
+send_files = [".PDF", " csv "]
+stream = false
 
 [input]
 queue_expiry = "1h"
@@ -138,6 +141,9 @@ dir = "~/st"
 	if c.Rex.CLI != "/h/bin/rex" || c.Rex.ScanInterval.Duration != 10*time.Second || c.Rex.NewSession != "agents" {
 		t.Errorf("rex = %+v", c.Rex)
 	}
+	if strings.Join(c.Rex.NewFolders, ",") != "/h/work/app,/srv/site" {
+		t.Errorf("new folders = %q", c.Rex.NewFolders)
+	}
 	if len(c.Agents.PiArgv0) != 2 || c.Agents.ClaudeExecGlob[0] != "/h/vers/*" {
 		t.Errorf("agents = %+v", c.Agents)
 	}
@@ -156,6 +162,9 @@ dir = "~/st"
 	}
 	if c.Input(agents.Codex).Answers[0].Keys[0] != "y" {
 		t.Error("codex default lost")
+	}
+	if strings.Join(c.Display.SendFiles, ",") != "pdf,csv" || c.Display.Stream {
+		t.Errorf("send files %q, stream %v", c.Display.SendFiles, c.Display.Stream)
 	}
 	if c.Display.Mode != "final" || c.Display.Backfill != 5 || c.Display.ShowMacPrompts || c.Display.ProgressDelay.Duration != 3*time.Second {
 		t.Errorf("display = %+v", c.Display)
@@ -190,6 +199,10 @@ func TestLoadErrors(t *testing.T) {
 		{"empty new session", "[rex]\nnew_session = \" \"\n", "rex.new_session"},
 		{"new session read as an option", "[rex]\nnew_session = \"-x\"\n", "rex.new_session"},
 		{"new session with a newline", "[rex]\nnew_session = \"a\\nb\"\n", "rex.new_session"},
+		{"relative new folder", "[rex]\nnew_folders = [\"work/app\"]\n", "rex.new_folders"},
+		{"empty new folder", "[rex]\nnew_folders = [\"\"]\n", "rex.new_folders"},
+		{"a path as a file type", "[display]\nsend_files = [\"a/pdf\"]\n", "display.send_files"},
+		{"an empty file type", "[display]\nsend_files = [\"\"]\n", "display.send_files"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

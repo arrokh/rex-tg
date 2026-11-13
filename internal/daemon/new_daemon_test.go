@@ -44,9 +44,15 @@ func (e *env) countRex(prefix ...string) int {
 // /new with the buttons: there is no Rex session "rex-tg" yet, so rex-tg
 // makes it, with a tab named after the folder and the agent, and opens the
 // topic once the agent reports its session. A second tap on a button starts
-// nothing. When the topic takes the session's name, so does the tab.
+// nothing. When the topic takes the session's name, so does the tab. A pinned
+// folder (rex.new_folders) is the first button; one that is gone is left out.
 func TestNewStartsAnAgentAndOpensItsTopic(t *testing.T) {
 	e := newEnv(t)
+	pinned := filepath.Join(e.home, "pinned")
+	if err := os.MkdirAll(pinned, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	e.cfg.Rex.NewFolders = []string{filepath.Join(e.home, "gone"), pinned}
 	var skew atomic.Int64
 	opt := e.options()
 	opt.Now = func() time.Time { return time.Now().Add(time.Duration(skew.Load())) }
@@ -79,6 +85,9 @@ func TestNewStartsAnAgentAndOpensItsTopic(t *testing.T) {
 	folder := buttonData(q, "~/work/app")
 	if folder == "" {
 		t.Fatalf("no button for the folder: %+v", q.Markup)
+	}
+	if first := q.Markup.InlineKeyboard[0][0].Text; first != "~/pinned" || buttonData(q, "~/gone") != "" {
+		t.Fatalf("first folder %q, want ~/pinned and no ~/gone: %+v", first, q.Markup)
 	}
 	e.pressButton(q, folder)
 

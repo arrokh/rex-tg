@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 	"unicode"
@@ -80,6 +81,8 @@ type Config struct {
 		// NewSession is the Rex session where /new opens its tabs. rex-tg
 		// makes it when it does not exist.
 		NewSession string `toml:"new_session"`
+		// NewFolders are the folders that /new offers first, in this order.
+		NewFolders []string `toml:"new_folders"`
 	} `toml:"rex"`
 	Agents struct {
 		PiArgv0 []string `toml:"pi_argv0"`
@@ -108,6 +111,14 @@ type Config struct {
 		// SendImages sends the image files that a final answer names to the
 		// topic, right after the answer. On by default.
 		SendImages bool `toml:"send_images"`
+		// SendFiles are the other file types (extensions, without the dot)
+		// that a final answer may send the same way, as documents. An empty
+		// list sends none.
+		SendFiles []string `toml:"send_files"`
+		// Stream shows the agent's text while it writes, as a Telegram draft
+		// (sendMessageDraft): word by word for pi, block by block for Claude
+		// Code and Codex. On by default.
+		Stream bool `toml:"stream"`
 	} `toml:"display"`
 	// Alerts holds the [alerts] table: reminders of permission prompts and
 	// questions that wait for an answer.
@@ -184,6 +195,8 @@ func Default(home string) Config {
 	c.Alerts.RemindAfter = Duration{10 * time.Minute}
 	c.Alerts.Reminders = 3
 	c.Display.SendImages = true
+	c.Display.SendFiles = []string{"pdf", "csv", "tsv", "html", "htm", "xlsx", "docx", "pptx"}
+	c.Display.Stream = true
 	c.Display.ProgressDelay = secs(2)
 	c.Display.ProgressEditInterval = secs(2)
 
@@ -227,6 +240,9 @@ func Load(path, home string) (Config, error) {
 	return c, nil
 }
 
+// fileExtRe is a file extension in display.send_files, without the dot.
+var fileExtRe = regexp.MustCompile(`^[a-z0-9]{1,10}$`)
+
 func expandHome(p, home string) string {
 	if p == "~" {
 		return home
@@ -243,6 +259,15 @@ func (c *Config) expand(home string) {
 	c.Voice.WhisperCLI = expandHome(c.Voice.WhisperCLI, home)
 	for i, g := range c.Agents.ClaudeExecGlob {
 		c.Agents.ClaudeExecGlob[i] = expandHome(g, home)
+	}
+	for i, x := range c.Display.SendFiles {
+		c.Display.SendFiles[i] = strings.ToLower(strings.TrimPrefix(strings.TrimSpace(x), "."))
+	}
+	for i, f := range c.Rex.NewFolders {
+		if f = expandHome(strings.TrimSpace(f), home); filepath.IsAbs(f) {
+			f = filepath.Clean(f)
+		}
+		c.Rex.NewFolders[i] = f
 	}
 }
 
@@ -288,6 +313,16 @@ func (c Config) validate() error {
 	// relative folder would mean a different place for each of them.
 	if !filepath.IsAbs(c.State.Dir) {
 		return fmt.Errorf("state.dir %q must be an absolute path (or start with ~/)", c.State.Dir)
+	}
+	for _, f := range c.Rex.NewFolders {
+		if !filepath.IsAbs(f) {
+			return fmt.Errorf("rex.new_folders %q must be an absolute path (or start with ~/)", f)
+		}
+	}
+	for _, x := range c.Display.SendFiles {
+		if !fileExtRe.MatchString(x) {
+			return fmt.Errorf("display.send_files %q: want a file extension such as \"pdf\"", x)
+		}
 	}
 	// The token is part of every request URL, so it must never go out in
 	// clear text. Plain http is only for a local test server.
@@ -345,6 +380,10 @@ func (c Config) LogDir() string { return filepath.Join(c.State.Dir, "logs") }
 
 // UploadDir is the folder for files received from Telegram.
 func (c Config) UploadDir() string { return filepath.Join(c.State.Dir, "uploads") }
+
+// LiveDir is the folder where the pi extension writes the text that pi is
+// writing, for the drafts (display.stream).
+func (c Config) LiveDir() string { return filepath.Join(c.State.Dir, "live") }
 
 // LockPath is the single-instance lock file.
 func (c Config) LockPath() string { return filepath.Join(c.State.Dir, "daemon.lock") }

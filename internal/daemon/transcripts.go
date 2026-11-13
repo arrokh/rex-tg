@@ -327,6 +327,9 @@ func (d *daemon) work(th store.Thread, acts []turn.Action) []store.OutboxItem {
 	for _, a := range acts {
 		switch a := a.(type) {
 		case turn.Post:
+			if a.Kind == "answer" {
+				d.closeDraft(th.ID) // before the answer's row exists
+			}
 			var parts []store.PartContent
 			if a.HTML != "" {
 				parts = []store.PartContent{{Content: a.HTML, Format: store.FormatHTML}}
@@ -355,12 +358,14 @@ func (d *daemon) work(th store.Thread, acts []turn.Action) []store.OutboxItem {
 				d.snd.Typing(th.ChatID, th.MessageThreadID)
 			}
 		case turn.MacNotice:
+			d.closeDraft(th.ID)
 			d.showMacNotice(th, a.HTML)
 			d.boardDirty()
 		case turn.MacBack:
 			d.endMacNotice(th)
 			d.boardDirty()
 		case turn.HeldAnswer:
+			d.closeDraft(th.ID)
 			d.holdAnswer(th.ID, a)
 			if n := d.storedMacNote(th); n != nil {
 				if n.want == "" { // after a restart: the text the tracker kept
@@ -375,10 +380,13 @@ func (d *daemon) work(th store.Thread, acts []turn.Action) []store.OutboxItem {
 	return items
 }
 
-// imageItem makes the outbox item that sends the images a final answer names
-// (design section 9.4a), or reports that there are none.
+// imageItem makes the outbox item that sends the images and other files
+// (display.send_files) a final answer names (design section 9.4a), or reports
+// that there are none. The sender sends an image as a photo when it can, and
+// every other file as a document.
 func (d *daemon) imageItem(th store.Thread, a turn.Post) (store.OutboxItem, bool) {
-	if !d.cfg.Display.SendImages || th.CurrentConversationID == 0 {
+	exts := sendExts(d.cfg.Display.SendImages, d.cfg.Display.SendFiles)
+	if len(exts) == 0 || th.CurrentConversationID == 0 {
 		return store.OutboxItem{}, false
 	}
 	conv, err := d.st.Conversation(d.ctx, th.CurrentConversationID)
@@ -387,7 +395,7 @@ func (d *daemon) imageItem(th store.Thread, a turn.Post) (store.OutboxItem, bool
 	}
 	home, _ := os.UserHomeDir()
 	var parts []store.PartContent
-	for _, p := range findImages(a.Markdown, home, conv.CWD) {
+	for _, p := range findFiles(a.Markdown, home, conv.CWD, exts) {
 		parts = append(parts, store.PartContent{Content: p, Format: store.FormatImage, Filename: filepath.Base(p)})
 	}
 	if len(parts) == 0 {

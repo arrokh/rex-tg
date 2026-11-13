@@ -216,6 +216,21 @@ func New(cfg Config, s Settings) *Tracker {
 // turns runs (Settings.MacNotice).
 func (t *Tracker) OnMac() bool { return t.onMac && t.set.MacNotice }
 
+// Streaming tells whether a draft of the agent's text belongs to the topic
+// now (design section 8.1a): a turn runs, it is shown on Telegram (not held
+// for the Mac), its answer is not out yet, and the mode is not final (answers
+// only). text is the agent's latest commentary, redacted; it is "" in block
+// mode, where each block is posted as a message anyway.
+func (t *Tracker) Streaming() (text string, ok bool) {
+	if (t.ph != phActive && t.ph != phEnding) || t.quiet || t.answered || t.set.Mode == "final" {
+		return "", false
+	}
+	if t.set.Mode == "block" {
+		return "", true
+	}
+	return t.cfg.Redact(t.commentary), true
+}
+
 // MacNoticeHTML is the last notice of the Mac hold that the tracker asked
 // for, or "" (it is part of the Snapshot, so it survives a restart).
 func (t *Tracker) MacNoticeHTML() string { return t.macNote }

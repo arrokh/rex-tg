@@ -11,7 +11,10 @@ import (
 	"rex-tg/extensions"
 )
 
-const piPlaceholder = "__REX_TG_BIN__"
+const (
+	piPlaceholder     = "__REX_TG_BIN__"
+	piLivePlaceholder = "__REX_TG_LIVE__"
+)
 
 // piMarker starts every extension file that rex-tg writes. A file at the same
 // path without it belongs to the user: install backs it up first, and
@@ -21,14 +24,19 @@ const piMarker = "// Written by `rex-tg install`"
 // ErrNotOurs means a file at a rex-tg path was not written by rex-tg.
 var ErrNotOurs = errors.New("the file was not written by rex-tg")
 
-// piSource returns the extension source with the binary path filled in as a
-// JSON string literal, which is also a valid TypeScript string literal.
+// piSource returns the extension source with the binary path and the live
+// folder filled in as JSON string literals, which are also valid TypeScript
+// string literals.
 func (p Paths) piSource() []byte {
-	var lit bytes.Buffer
-	enc := json.NewEncoder(&lit)
-	enc.SetEscapeHTML(false)
-	_ = enc.Encode(p.Binary)
-	return bytes.ReplaceAll(extensions.PiExtension, []byte(piPlaceholder), bytes.TrimSpace(lit.Bytes()))
+	lit := func(s string) []byte {
+		var b bytes.Buffer
+		enc := json.NewEncoder(&b)
+		enc.SetEscapeHTML(false)
+		_ = enc.Encode(s)
+		return bytes.TrimSpace(b.Bytes())
+	}
+	src := bytes.ReplaceAll(extensions.PiExtension, []byte(piPlaceholder), lit(p.Binary))
+	return bytes.ReplaceAll(src, []byte(piLivePlaceholder), lit(p.LiveDir))
 }
 
 // InstallPi writes the pi extension file. A file of the user's at that path

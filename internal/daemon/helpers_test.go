@@ -153,6 +153,9 @@ var testTiming = daemon.Timing{
 	BoardEdit:    50 * time.Millisecond,
 	BoardRefresh: time.Hour, // tests trigger the board by state changes
 	RemindCheck:  50 * time.Millisecond,
+	Draft:        50 * time.Millisecond,
+	DraftKeep:    time.Hour, // a test of the refresh sets its own
+	LiveCheck:    30 * time.Millisecond,
 }
 
 // start runs the daemon in a goroutine.

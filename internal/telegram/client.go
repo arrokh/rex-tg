@@ -399,6 +399,21 @@ func (c *Client) EditMessageText(ctx context.Context, p EditMessageTextParams) (
 	return m, err
 }
 
+// SendMessageDraft shows a partial message in a private chat while it is
+// being written (Bot API 9.3). The draft is a temporary preview of about 30
+// seconds; drafts with the same draftID (non-zero) are animated, and a real
+// message from the bot ends it. It never becomes a message.
+func (c *Client) SendMessageDraft(ctx context.Context, chatID, threadID, draftID int64, text, parseMode string) error {
+	body := struct {
+		ChatID          int64  `json:"chat_id"`
+		MessageThreadID int64  `json:"message_thread_id,omitempty"`
+		DraftID         int64  `json:"draft_id"`
+		Text            string `json:"text"`
+		ParseMode       string `json:"parse_mode,omitempty"`
+	}{chatID, threadID, draftID, text, parseMode}
+	return c.callJSON(ctx, "sendMessageDraft", c.timeout, body, nil)
+}
+
 // EditMessageReplyMarkup replaces the keyboard of a message; nil removes it.
 func (c *Client) EditMessageReplyMarkup(ctx context.Context, chatID, messageID int64, markup *InlineKeyboardMarkup) error {
 	body := struct {

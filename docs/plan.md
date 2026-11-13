@@ -306,7 +306,7 @@ Stop or roll back:
 
 | Risk | Effect | Mitigation |
 | --- | --- | --- |
-| No word-by-word streaming | Answers arrive whole, not as they are written, because the JSONL file holds only complete blocks. | The live progress message shows that the agent is working, and which tools it runs. |
+| Word-by-word streaming only for pi | Claude Code and Codex write only complete blocks, so their draft changes block by block. pi's extension sees each token. | Drafts (design 8.1a) show pi's text as it grows, and the latest block of the others. The live progress message shows the tools. |
 | Claude Code or Codex do not report state to Rex | If Rex did not report, "wait until idle" would have no Rex signal for them. | Closed by spike S2: all three agents report state to Rex. Hooks and transcript lines are the backup (D3). |
 | Hooks may not see `REX_BLOCK` | Panes cannot be matched to sessions exactly. | Claude Code and pi hooks saw `REX_BLOCK` and `REX_SESSION` (spikes S2 and S3). Codex hooks did not run in the spikes, so that check is still open (S3). The scan-and-guess resolver still works. |
 | Transcript formats change | Replies go missing or look wrong after an agent update. | Ignore unknown types, keep fixtures per version, and let `rex-tg doctor` report unknown types. |

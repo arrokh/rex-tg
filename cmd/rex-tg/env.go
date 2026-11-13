@@ -130,7 +130,25 @@ func (e Env) telegram(cfg config.Config, token string) *telegram.Client {
 	return telegram.New(token, telegram.WithBaseURL(cfg.Telegram.APIBase), telegram.WithProxy(cfg.TelegramProxy()))
 }
 
+// paths returns the install locations, with the live folder of the config
+// that the daemon reads: the pi extension must write where the daemon looks.
+// A config that does not load is an error.
 func (e Env) paths() (install.Paths, error) {
+	p, err := e.basePaths()
+	if err != nil {
+		return p, err
+	}
+	cfg, err := e.loadConfig("")
+	if err != nil {
+		return install.Paths{}, err
+	}
+	p.LiveDir = cfg.LiveDir() // where the daemon looks for pi's live text
+	return p, nil
+}
+
+// basePaths is paths without the config, for uninstall, which must work
+// even when the config is broken.
+func (e Env) basePaths() (install.Paths, error) {
 	bin, err := e.Executable()
 	if err != nil {
 		return install.Paths{}, fmt.Errorf("find the rex-tg binary: %w", err)

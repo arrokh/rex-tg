@@ -170,11 +170,14 @@ func (d *daemon) topicMessage(u telegram.Update, m *telegram.Message) {
 			d.topicCommand(u, m, th, r)
 		}
 	case inbound.RouteAgentText:
-		if !d.recorded(u, m, "text", r.Text, th.ID, store.InboundQueued) {
+		// The row holds the text with its quote, as typed when it goes
+		// alone; the joiner puts the quotes of joined parts after them all.
+		quoted := agentQuote(r.Text, d.replyQuote(m, th))
+		if !d.recorded(u, m, "text", inbound.WithReply(r.Text, quoted), th.ID, store.InboundQueued) {
 			return
 		}
 		d.joining[u.UpdateID] = m.MessageID
-		d.joiner.Add(th.ID, u.UpdateID, r.Text, d.now())
+		d.joiner.AddReply(th.ID, u.UpdateID, r.Text, quoted, d.now())
 		d.dirty[th.ID] = true
 	}
 }

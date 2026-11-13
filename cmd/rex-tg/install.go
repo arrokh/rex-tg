@@ -91,7 +91,7 @@ func uninstallCmd(ctx context.Context, args []string, env Env) int {
 	if !validOnly(env, *only) {
 		return 2
 	}
-	p, err := env.paths()
+	p, err := env.basePaths()
 	if err != nil {
 		fmt.Fprintf(env.Stderr, "rex-tg: %v\n", err)
 		return 1
