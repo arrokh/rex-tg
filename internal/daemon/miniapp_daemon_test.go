@@ -204,6 +204,10 @@ func TestQuickReplyTypesItsText(t *testing.T) {
 	if data == "" {
 		t.Fatalf("the answer has no quick replies: %+v", answer.Markup)
 	}
+	// Two to a row, so a phone shows the labels whole.
+	if rows := buttonTexts(answer); len(rows) != 2 || strings.Join(rows[0], "|") != "Continue|Yes" || strings.Join(rows[1], "|") != "Run tests|Commit" {
+		t.Errorf("rows = %v, want two of two", rows)
+	}
 	e.pressButton(answer, data)
 	e.waitFor("the quick reply typed", func() bool { return len(e.pastes()) == 1 })
 	if got := e.pastes()[0]; got != "Continue" {

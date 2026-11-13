@@ -174,7 +174,7 @@ Text that starts with `/` goes to the agent, except the commands below and the m
 ### Progress and answers
 
 - Only two kinds of message make a sound: the agent's answer (its first message) and a prompt that waits for you (an alert or its reminder). Progress, notices, the waiting notice, and replies to commands come silently. `/mute` makes a topic's answers and reminders silent too. An alert still makes a sound.
-- Under each answer, quick replies send their text to the agent with one tap, as if you typed it. The defaults are `Continue`, `Yes`, `Run tests`, and `Commit`. Set your own with `[display] quick_replies`: at most 8, each 1 to 64 characters, or `[]` for none. A quick reply waits like any typed message, for example while a prompt is open. An answer that comes as a `.md` file has no buttons.
+- Under each answer, quick replies send their text to the agent with one tap, as if you typed it. They sit two to a row, so a phone shows their labels whole. The defaults are `Continue`, `Yes`, `Run tests`, and `Commit`. Set your own with `[display] quick_replies`: at most 8, each 1 to 64 characters, or `[]` for none. A quick reply waits like any typed message, for example while a prompt is open. An answer that comes as a `.md` file has no buttons.
 - `typing…` shows while the agent works, in the topic you used last.
 - The progress message appears after 2 seconds without an answer. It shows the latest commentary and the recent tool calls. It never shows tool output, unless `/verbose full` is on.
 - The progress message stays the last message of a running turn. When an alert, a notice, or your own message comes below it, it moves down. While a prompt waits for your answer, the alert stays last.
