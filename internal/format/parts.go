@@ -1,48 +1,19 @@
 package format
 
-import (
-	"strconv"
-	"strings"
-)
+import "strings"
 
 // Part is one Telegram message: its HTML and the plain-text fallback.
 type Part struct{ HTML, Plain string }
 
-// Parts renders markdown and splits it into parts whose visible length
-// (including the " (i/n)" suffix when there is more than one part) is at most
-// limit. It returns nil for empty input.
+// Parts renders markdown and splits it into parts whose visible length is
+// at most limit, with no " (1/2)" counters: Messages with the soft length at
+// the limit, so it splits only where it must. It returns nil for empty
+// input.
 //
 // The Markdown source is split at blank lines first, then at line ends, then
 // at rune boundaries. A fenced code block is split only when it alone is too
 // long; each piece is then fenced again with the same info string.
-func Parts(markdown string, limit int) []Part {
-	if strings.TrimSpace(markdown) == "" {
-		return nil
-	}
-	if h := RenderHTML(markdown); VisibleLen(h) <= limit {
-		return []Part{{HTML: h, Plain: Plain(markdown)}}
-	}
-	var chunks []string
-	for digits := 1; ; digits++ {
-		w := strings.Repeat("9", digits)
-		reserve := len(" (" + w + "/" + w + ")")
-		budget := max(limit-reserve, 1)
-		chunks = split(markdown, budget)
-		if len(strconv.Itoa(len(chunks))) <= digits || digits >= 6 {
-			break
-		}
-	}
-	n := len(chunks)
-	parts := make([]Part, 0, n)
-	for i, c := range chunks {
-		suffix := " (" + strconv.Itoa(i+1) + "/" + strconv.Itoa(n) + ")"
-		parts = append(parts, Part{
-			HTML:  RenderHTML(c) + suffix,
-			Plain: Plain(c) + suffix,
-		})
-	}
-	return parts
-}
+func Parts(markdown string, limit int) []Part { return Messages(markdown, limit, limit) }
 
 func fits(md string, budget int) bool { return VisibleLen(RenderHTML(md)) <= budget }
 
@@ -50,36 +21,6 @@ func fits(md string, budget int) bool { return VisibleLen(RenderHTML(md)) <= bud
 type unit struct {
 	text  string
 	fence bool
-}
-
-func split(markdown string, budget int) []string {
-	var out []string
-	cur := ""
-	flush := func() {
-		if cur != "" {
-			out = append(out, cur)
-			cur = ""
-		}
-	}
-	for _, u := range units(markdown) {
-		if fits(u.text, budget) {
-			if cur != "" && fits(cur+"\n\n"+u.text, budget) {
-				cur += "\n\n" + u.text
-				continue
-			}
-			flush()
-			cur = u.text
-			continue
-		}
-		flush()
-		if u.fence {
-			out = append(out, splitFence(u.text, budget)...)
-		} else {
-			out = append(out, splitText(u.text, budget)...)
-		}
-	}
-	flush()
-	return out
 }
 
 func fenceOpen(line string) (marker string, ok bool) {

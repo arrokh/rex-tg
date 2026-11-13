@@ -119,6 +119,10 @@ type Config struct {
 		// (sendMessageDraft): word by word for pi, block by block for Claude
 		// Code and Codex. Off by default.
 		Stream bool `toml:"stream"`
+		// MessageLength is about how long one message of a reply is: a
+		// longer reply comes as several messages, split at paragraphs and
+		// headings like a person would split it. At most MaxMessageLength.
+		MessageLength int `toml:"message_length"`
 		// StreamInterval is the least time between two drafts of a topic.
 		// MinStreamInterval is the fastest: Telegram allows about one
 		// message a second in a chat, and drafts share that budget.
@@ -204,6 +208,7 @@ func Default(home string) Config {
 	c.Display.SendFiles = []string{"pdf", "csv", "tsv", "html", "htm", "xlsx", "docx", "pptx"}
 	c.Display.Stream = false // off: at its fastest it changes once a second
 	c.Display.StreamInterval = Duration{MinStreamInterval}
+	c.Display.MessageLength = 1500
 	c.Display.ProgressDelay = secs(2)
 	c.Display.ProgressEditInterval = secs(2)
 
@@ -246,6 +251,14 @@ func Load(path, home string) (Config, error) {
 	}
 	return c, nil
 }
+
+// MinMessageLength and MaxMessageLength bound display.message_length. 4000
+// keeps to Telegram's limit of 4096 characters, so a reply is split only
+// when it must be.
+const (
+	MinMessageLength = 300
+	MaxMessageLength = 4000
+)
 
 // MinStreamInterval is the fastest display.stream_interval.
 const MinStreamInterval = time.Second
@@ -328,6 +341,9 @@ func (c Config) validate() error {
 		if !filepath.IsAbs(f) {
 			return fmt.Errorf("rex.new_folders %q must be an absolute path (or start with ~/)", f)
 		}
+	}
+	if c.Display.MessageLength < MinMessageLength || c.Display.MessageLength > MaxMessageLength {
+		return fmt.Errorf("display.message_length %d: want %d to %d characters", c.Display.MessageLength, MinMessageLength, MaxMessageLength)
 	}
 	if c.Display.StreamInterval.Duration < MinStreamInterval {
 		return fmt.Errorf("display.stream_interval %v: at least %v (Telegram allows about one message a second in a chat)", c.Display.StreamInterval.Duration, MinStreamInterval)

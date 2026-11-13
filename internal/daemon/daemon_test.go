@@ -1109,10 +1109,28 @@ func TestLongAnswers(t *testing.T) {
 		huge = append(huge, fmt.Sprintf("H%d %s", i, para))
 	}
 	p.User("long")
-	p.Final(strings.Join(three, "\n\n")) // about 9000 characters: 3 parts
-	e.waitText(thread, "(3/3)")
-	if n := e.countText(thread, "(1/3)"); n != 1 {
-		t.Errorf("part 1/3 posted %d times", n)
+	// About 9000 characters: 12 chat-sized messages would be too many, so it
+	// comes as 3 fuller ones, split at paragraphs, without numbers.
+	p.Final(strings.Join(three, "\n\n"))
+	e.waitText(thread, "P11 word")
+	var parts []string
+	for _, m := range e.botMessages(thread) {
+		if strings.HasPrefix(m.Text, "P") {
+			parts = append(parts, m.Text)
+		}
+	}
+	if len(parts) != 3 {
+		t.Fatalf("the answer came in %d messages, want 3", len(parts))
+	}
+	for i, m := range parts {
+		if strings.Contains(m, "/3)") {
+			t.Errorf("message %d has a number: …%q", i+1, m[len(m)-10:])
+		}
+	}
+	for i := range 12 {
+		if n := e.countText(thread, fmt.Sprintf("P%d word", i)); n != 1 {
+			t.Errorf("paragraph %d posted %d times", i, n)
+		}
 	}
 	p.User("huge")
 	p.Final(strings.Join(huge, "\n\n")) // about 60000 characters: a document

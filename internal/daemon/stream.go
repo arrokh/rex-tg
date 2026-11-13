@@ -158,7 +158,7 @@ func draftHTML(md string) string {
 		}
 		md = "…\n" + cut
 	}
-	parts := format.Parts(md, partLimit)
+	parts := format.Messages(md, partLimit, partLimit)
 	if len(parts) == 0 {
 		return ""
 	}

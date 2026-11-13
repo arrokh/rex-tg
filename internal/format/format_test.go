@@ -300,13 +300,9 @@ func checkParts(t *testing.T, parts []Part, limit int) {
 		if v := VisibleLen(p.HTML); v > limit {
 			t.Errorf("part %d visible length %d > limit %d", i+1, v, limit)
 		}
-		if n > 1 {
-			suffix := " (" + itoa(i+1) + "/" + itoa(n) + ")"
-			if !strings.HasSuffix(p.HTML, suffix) || !strings.HasSuffix(p.Plain, suffix) {
-				t.Errorf("part %d lacks suffix %q: html=%q plain=%q", i+1, suffix, p.HTML, p.Plain)
-			}
-		} else if strings.Contains(p.HTML, "(1/1)") {
-			t.Errorf("single part has suffix: %q", p.HTML)
+		// No "(1/2)" counters: a reply reads like a chat.
+		if suffix := " (" + itoa(i+1) + "/" + itoa(n) + ")"; strings.HasSuffix(p.HTML, suffix) || strings.HasSuffix(p.Plain, suffix) {
+			t.Errorf("part %d has the counter %q: %q", i+1, suffix, p.HTML)
 		}
 		if strings.TrimSpace(p.Plain) == "" {
 			t.Errorf("part %d has empty plain text", i+1)
@@ -350,9 +346,9 @@ func TestPartsSplitsAtBlankLines(t *testing.T) {
 	in := "aaaa aaaa\n\nbbbb bbbb\n\ncccc cccc"
 	got := Parts(in, 18)
 	want := []Part{
-		{"aaaa aaaa (1/3)", "aaaa aaaa (1/3)"},
-		{"bbbb bbbb (2/3)", "bbbb bbbb (2/3)"},
-		{"cccc cccc (3/3)", "cccc cccc (3/3)"},
+		{"aaaa aaaa", "aaaa aaaa"},
+		{"bbbb bbbb", "bbbb bbbb"},
+		{"cccc cccc", "cccc cccc"},
 	}
 	if len(got) != len(want) {
 		t.Fatalf("got %d parts: %#v", len(got), got)
@@ -368,7 +364,7 @@ func TestPartsSplitsAtBlankLines(t *testing.T) {
 func TestPartsPacksParagraphs(t *testing.T) {
 	in := "aaa\n\nbbb\n\nccc\n\nddd"
 	got := Parts(in, 16)
-	want := []string{"aaa\n\nbbb (1/2)", "ccc\n\nddd (2/2)"}
+	want := []string{"aaa\n\nbbb\n\nccc", "ddd"}
 	if len(got) != 2 || got[0].HTML != want[0] || got[1].HTML != want[1] {
 		t.Errorf("got %#v, want %q", got, want)
 	}

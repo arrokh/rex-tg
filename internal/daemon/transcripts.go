@@ -21,7 +21,10 @@ import (
 const (
 	partLimit    = 4000
 	maxTextParts = 4
-	maxRichRunes = 32768
+	// maxChatMessages is the most messages of message_length for one text;
+	// a longer one uses messages of up to partLimit.
+	maxChatMessages = 6
+	maxRichRunes    = 32768
 )
 
 // tailer follows the transcript of one session that belongs to a topic.
@@ -294,19 +297,30 @@ func (d *daemon) saveSnapshot(threadID int64, t *turn.Tracker) {
 	d.snaps[threadID] = s
 }
 
-// markdownParts turns Markdown into outbox parts: redacted, split at 4000
-// characters, one document when more than four parts are needed, or one rich
-// part for a final answer when rich messages are on.
+// markdownParts turns Markdown into outbox parts: redacted and split like
+// chat messages (format.Messages: about [display] message_length characters
+// each, at paragraphs and headings, no "(1/2)" counters), one document when
+// the text is longer than four full messages, or one rich part for a final
+// answer when rich messages are on.
 func (d *daemon) markdownParts(md, kind string, allowRich bool) []store.PartContent {
 	md = format.Redact(md)
 	if allowRich && d.cfg.Display.RichMessages && format.UTF16Len(md) <= maxRichRunes && md != "" {
 		return []store.PartContent{{Content: md, Format: store.FormatRich}}
 	}
-	parts := format.Parts(md, partLimit)
+	parts := format.Messages(md, d.cfg.Display.MessageLength, partLimit)
+	if len(parts) > maxChatMessages {
+		// Too many to read on a phone: fuller messages, still split at
+		// paragraphs.
+		parts = format.Messages(md, partLimit, partLimit)
+	}
+	total := 0
+	for _, p := range parts {
+		total += format.VisibleLen(p.HTML)
+	}
 	switch {
 	case len(parts) == 0:
 		return nil
-	case len(parts) > maxTextParts:
+	case total > maxTextParts*partLimit:
 		name := "message.md"
 		if kind == "answer" || kind == "backfill" {
 			name = "answer.md"

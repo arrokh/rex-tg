@@ -407,10 +407,16 @@ While a turn runs, the topic shows the agent's text as a Telegram draft (`sendMe
 ### 8.2 The answer
 
 - The final answer is a normal message, with Markdown turned into Telegram HTML.
-- Long answers are split into parts of at most 4000 characters, as in OpenClaw. Splits happen at blank lines first, and never inside a code block. Each part ends with its number, such as `(1/3)`, as in Hermes.
+- A long answer comes as several chat messages, split where a person would split it, not one transcript entry per message (`format.Messages`):
+  - Each message aims at `[display] message_length` characters (1500 by default, 300 to 4000), and none is longer than 4000.
+  - Splits fall between paragraphs, and a heading starts a new message. A message never ends with a heading or with a line that leads into the next block ("Here is the fix:").
+  - A code block is never cut, unless it alone is longer than 4000 characters; then it is cut at its lines, and each piece is a code block again.
+  - A short last message joins the one before.
+  - An answer that would take more than 6 such messages comes in fuller ones, of up to 4000 characters, still split at paragraphs: more messages are too many to read on a phone, and each one costs a second of the chat's budget.
+  - There are no `(1/3)` counters. Only the first message makes a sound; the others come silently, as when a person sends a long reply in a few messages.
 - Tables become monospace blocks.
 - Link previews are off, because agent answers often hold URLs from logs and code.
-- An answer that needs more than 4 parts is sent as a short preview plus the full text as a `.md` file.
+- An answer longer than four full messages (16000 characters) is sent as a `.md` file.
 
 ### 8.3 Modes
 
@@ -1131,7 +1137,7 @@ From the Hermes Agent docs (hermes-agent.nousresearch.com, read 2026-11-11; the 
 - Busy input: `display.busy_input_mode` is `interrupt` (the default), `queue`, or `steer`. In `queue` mode, each follow-up runs as its own next turn, in the order it arrived. A short reply (⚡, ⏳, or ⏩) tells you what happened.
 - Approvals: native buttons, `/approve` and `/deny`, or text replies such as "yes" and "no". Questions offer "Other (type answer)" (summary).
 - Private-chat topics need BotFather's Threaded Mode (summary).
-- Reactions 👀 (processing), 👍 (delivered), and 👎 (error). Tool progress is sent silently. `cleanup_progress` defaults to `false`. Long messages are split into numbered parts such as `(1/3)`. Link previews are off. (All summary.)
+- Reactions 👀 (processing), 👍 (delivered), and 👎 (error). Tool progress is sent silently. `cleanup_progress` defaults to `false`. Long messages are split into numbered parts such as `(1/3)`; rex-tg splits like a chat instead, without numbers (8.2). Link previews are off. (All summary.)
 
 Assumptions that the spikes in [plan.md](plan.md) must check. These are still open:
 

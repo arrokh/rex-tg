@@ -27,6 +27,9 @@ func TestDefaults(t *testing.T) {
 	if c.Rex.ScanInterval.Duration != 30*time.Second || c.Rex.NewSession != "rex-tg" {
 		t.Errorf("rex = %+v", c.Rex)
 	}
+	if c.Display.MessageLength != 1500 {
+		t.Errorf("message_length = %d, want 1500", c.Display.MessageLength)
+	}
 	// Drafts are off; turned on, they go at the fastest speed.
 	if c.Display.Stream || c.Display.StreamInterval.Duration != MinStreamInterval {
 		t.Errorf("stream %v every %v, want off, every %v", c.Display.Stream, c.Display.StreamInterval.Duration, MinStreamInterval)
@@ -125,6 +128,7 @@ progress_delay = "3s"
 send_files = [".PDF", " csv "]
 stream = true
 stream_interval = "2s"
+message_length = 2000
 
 [input]
 queue_expiry = "1h"
@@ -169,7 +173,7 @@ dir = "~/st"
 	if c.Input(agents.Codex).Answers[0].Keys[0] != "y" {
 		t.Error("codex default lost")
 	}
-	if strings.Join(c.Display.SendFiles, ",") != "pdf,csv" || !c.Display.Stream || c.Display.StreamInterval.Duration != 2*time.Second {
+	if strings.Join(c.Display.SendFiles, ",") != "pdf,csv" || !c.Display.Stream || c.Display.StreamInterval.Duration != 2*time.Second || c.Display.MessageLength != 2000 {
 		t.Errorf("send files %q, stream %v", c.Display.SendFiles, c.Display.Stream)
 	}
 	if c.Display.Mode != "final" || c.Display.Backfill != 5 || c.Display.ShowMacPrompts || c.Display.ProgressDelay.Duration != 3*time.Second {
@@ -210,6 +214,8 @@ func TestLoadErrors(t *testing.T) {
 		{"a path as a file type", "[display]\nsend_files = [\"a/pdf\"]\n", "display.send_files"},
 		{"an empty file type", "[display]\nsend_files = [\"\"]\n", "display.send_files"},
 		{"drafts too fast", "[display]\nstream_interval = \"500ms\"\n", "display.stream_interval"},
+		{"messages too long", "[display]\nmessage_length = 5000\n", "display.message_length"},
+		{"messages too short", "[display]\nmessage_length = 10\n", "display.message_length"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

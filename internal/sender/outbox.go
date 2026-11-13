@@ -282,7 +282,9 @@ func (s *Sender) sendPart(ctx context.Context, p store.Part) {
 	if !ok {
 		return
 	}
-	silent := p.Silent
+	// The messages after the first of one reply come without sound, as when
+	// a person sends a long reply in a few messages.
+	silent := p.Silent || p.Part > 0
 	if th, err := s.st.Thread(ctx, p.ThreadID); err == nil {
 		silent = silent || th.Muted
 	}

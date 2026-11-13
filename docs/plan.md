@@ -149,7 +149,7 @@ Tasks:
 5. Rex gateway: CLI wrapper with JSON parsing and timeouts, and the event stream with restart and backoff. Pane registry with Rex scans, pi detection, and the guess resolver. `tr3x` panes are never listed.
 6. pi adapter as a pure parser, with synthetic fixtures in `testdata/pi/`.
 7. Tailer: byte offsets, half lines, replaced files, and a 1-second size check as a backup for file watching. Cursor rules from design section 6.
-8. Outbox and sender: claims, parts with numbers such as `(1/3)`, Markdown to Telegram HTML, UTF-16 length counting, secret removal, the chat's token bucket, and the error table in design section 9.1.
+8. Outbox and sender: claims, parts split like chat messages (no `(1/3)` numbers; design 8.2), Markdown to Telegram HTML, UTF-16 length counting, secret removal, the chat's token bucket, and the error table in design section 9.1.
 9. Housekeeping: spool cleanup, row cleanup, and retention.
 10. Poller and router: `/agents`, the link button, `createForumTopic`, the intro card, the last 3 final answers, dividers, and the answers in design section 8.8.
 11. pi hook: `rex-tg hook pi`, the pi extension, and `rex-tg install --only pi`, which writes the extension and the launchd agent. Without the extension, rex-tg cannot see `/new` inside a running pi process.

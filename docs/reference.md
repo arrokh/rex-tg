@@ -138,6 +138,7 @@ Doctor checks:
 - `typing…` shows while the agent works, in the topic you used last.
 - The progress message appears after 2 seconds without an answer. It shows the latest commentary and the recent tool calls. It never shows tool output, unless `/verbose full` is on.
 - At the end of the turn, the tool rows stay in a collapsed quote under the summary line.
+- A long answer comes as several messages of about 1500 characters, split at paragraphs and headings like a chat, never inside a code block, and without `(1/2)` numbers. Only the first one makes a sound. `message_length` sets the size (300 to 4000; 4000 splits only when Telegram's limit needs it). An answer that would take more than 6 messages comes in fuller ones, up to 4000 characters each. An answer longer than 16000 characters comes as a `.md` file.
 - While the agent writes, the text shows at the bottom of the topic as a draft, Telegram's preview of a message being written. pi's text grows word by word. Claude Code and Codex show each finished block, because they write nothing earlier. A draft never becomes a message: the answer replaces it. Final mode shows no drafts. Drafts are off by default; set `stream = true` to turn them on. `stream_interval` sets how often the draft changes: `1s` is the default and the fastest, because drafts share Telegram's budget of about one message a second in a chat; a larger value such as `"3s"` leaves more of it to answers.
 - Images named in a final answer come by themselves, as photos, up to 10 per answer. Set `send_images = false` to turn this off.
 - Other files named in a final answer (`pdf`, `csv`, `tsv`, `html`, `htm`, `xlsx`, `docx`, `pptx`) come only when you ask: a silent `📎 Files in this answer` message lists them with a button each. A tap sends that file as a document, once. Change the types with `send_files` (`[]` turns the offers off).
@@ -255,6 +256,7 @@ progress_edit_interval = "2s"           # Least time between two edits of the pr
 rich_messages = false                   # Send final answers as Telegram rich messages.
 send_images = true                      # Send the image files that a final answer names.
 send_files = ["pdf", "csv", "tsv", "html", "htm", "xlsx", "docx", "pptx"]  # Other file types that a final answer offers, with a button to send each.
+message_length = 1500                   # About how long one message of a long answer is (300 to 4000).
 stream = false                          # Show the agent's text while it writes, as a Telegram draft.
 stream_interval = "1s"                  # Least time between two drafts of a topic. 1s is the fastest: Telegram allows about one message a second in a chat.
 

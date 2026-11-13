@@ -90,7 +90,7 @@ To send an agent a command that has a bot command's name, use two slashes: `//he
 - **⏳ Waiting:** the agent is busy, so your message waits. It is typed when the agent is idle. `⚡ Send now` types it at once. `✖ Cancel` drops it. A waiting message expires after 30 minutes.
 - **Reactions on your message:** 👀 means typed into the pane. 👍 means the agent got it. 👎 means refused; a reply says why.
 - **Progress:** one message updates while the agent works. When the turn ends, it becomes one summary line.
-- **Answer:** a new message. A long answer comes in numbered parts, such as `(1/3)`.
+- **Answer:** a new message. A long answer comes as a few chat-sized messages, split at paragraphs, without numbers.
 - **Live text (optional):** with `stream = true`, the text shows as a draft at the bottom of the topic while the agent writes (word by word for pi, block by block for Claude Code and Codex). Off by default.
 - **Files:** when an answer names an image on your Mac, rex-tg sends the picture too. A PDF, CSV, HTML, or Office file gets a 📎 button: tap it to get the file.
 - **Permission prompts:** the bot shows the bottom of the pane, with one button per answer.
