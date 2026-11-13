@@ -59,6 +59,7 @@ type promptView struct {
 	next     bool         // a "Next" or "Submit" row under answers to tick
 	review   bool         // the "Review your answers" page of several questions
 	answers  []reviewItem // that page's questions and the answers given
+	chat     bool         // a "Chat about this" row without a number (a question with previews)
 	ok       bool         // the screen holds a prompt this view understands
 }
 
@@ -217,8 +218,9 @@ func parsePromptView(lines []string, shortcuts bool) promptView {
 		case t == "" || isBorder(l) || ruleRe.MatchString(t) || footerLine(t):
 			continue
 		case t == "Chat about this":
-			// Without a number (a question with previews): the arrows reach
-			// it, no digit does, so it gets no button.
+			// Without a number (a question with previews): no digit reaches
+			// it, so its button walks the cursor there (chatKey).
+			v.chat = true
 			continue
 		case optionRe.MatchString(clean[i]):
 			m := optionRe.FindStringSubmatch(clean[i])
@@ -390,11 +392,18 @@ func (v promptView) alertOptions() []store.AlertOption {
 	if v.next && v.multi() {
 		out = append(out, store.AlertOption{Label: "Next ➡", Keys: []string{nextKey}})
 	}
+	if v.chat {
+		out = append(out, store.AlertOption{Label: "💬 Chat about this", Keys: []string{chatKey}})
+	}
 	return withEsc(out)
 }
 
+// chatKey is the pseudo key of an unnumbered "Chat about this": move the
+// cursor to that row and press Enter (pressRow).
+const chatKey = "rex-tg:chat"
+
 // nextKey is the pseudo key of "Next ➡": move the cursor to the Next row and
-// press Enter (pressNext).
+// press Enter (pressRow).
 const nextKey = "rex-tg:next"
 
 // toggleOption tells an answer that ticks a box: the alert stays open.
@@ -527,6 +536,7 @@ func alertHead(v promptView, agent, kind string) string {
 // top to bottom, and the one with the cursor (-1: none).
 func promptRows(lines []string) (rows []string, cursor int) {
 	cursor = -1
+	lines = cutPreview(lines) // a preview box beside the answers is no row
 	// Only the prompt's list: from its last row numbered 1.
 	start := 0
 	for i, l := range lines {
@@ -544,6 +554,8 @@ func promptRows(lines []string) (rows []string, cursor int) {
 			rows = append(rows, m[1])
 		case t == "Next" || t == "Submit":
 			rows = append(rows, "next")
+		case t == "Chat about this":
+			rows = append(rows, "chat")
 		default:
 			continue
 		}

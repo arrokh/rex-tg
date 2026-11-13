@@ -430,12 +430,20 @@ func (d *daemon) answerAlertAs(alertID int64, idx int, tapped int64, outcome str
 	opt := al.Options[idx]
 	switch {
 	case len(opt.Keys) == 1 && opt.Keys[0] == nextKey:
-		if err := d.pressNext(ctx, th, pane, al); err != nil {
+		if err := d.pressRow(ctx, th, pane, al, "next"); err != nil {
 			respond("Not sent: "+err.Error()+".", true)
 			return false
 		}
 		if outcome == "" {
 			outcome = "➡ " + tickedText(lines)
+		}
+	case len(opt.Keys) == 1 && opt.Keys[0] == chatKey:
+		if err := d.pressRow(ctx, th, pane, al, "chat"); err != nil {
+			respond("Not sent: "+err.Error()+".", true)
+			return false
+		}
+		if outcome == "" {
+			outcome = "💬 Chat about this"
 		}
 	case toggleOption(opt):
 		// A box: the question stays, and so does the alert, with the box
@@ -572,10 +580,11 @@ func (d *daemon) refreshAlert(ctx context.Context, th store.Thread, pane store.P
 	return false
 }
 
-// pressNext moves the cursor of a question to its "Next" row, one key at a
-// time with the screen read after each, and presses Enter there (a worker).
+// pressRow moves the cursor of a question to its "Next" row (want "next")
+// or its unnumbered "Chat about this" row (want "chat"), one key at a time
+// with the screen read after each, and presses Enter there (a worker).
 // Every key passes the safety checks first.
-func (d *daemon) pressNext(ctx context.Context, th store.Thread, pane store.Pane, al store.Alert) error {
+func (d *daemon) pressRow(ctx context.Context, th store.Thread, pane store.Pane, al store.Alert, want string) error {
 	for range 2 * maxQuestionLines {
 		screen, err := d.rx.Capture(ctx, pane.Session, pane.Block)
 		if err != nil {
@@ -588,12 +597,12 @@ func (d *daemon) pressNext(ctx context.Context, th store.Thread, pane store.Pane
 		rows, cur := promptRows(lines)
 		target := -1
 		for i, r := range rows {
-			if r == "next" {
+			if r == want {
 				target = i
 			}
 		}
 		if target < 0 || cur < 0 {
-			return errors.New("no Next on the screen")
+			return errors.New("no " + rowName(want) + " on the screen")
 		}
 		f, p, err := d.facts(ctx, th)
 		if err != nil {
@@ -631,7 +640,14 @@ func (d *daemon) pressNext(ctx context.Context, th store.Thread, pane store.Pane
 			return errors.New("the cursor did not move")
 		}
 	}
-	return errors.New("the Next row was not reached")
+	return errors.New("the " + rowName(want) + " row was not reached")
+}
+
+func rowName(row string) string {
+	if row == "chat" {
+		return "Chat about this"
+	}
+	return "Next"
 }
 
 // tickedText lists the ticked answers of a question, for the shrunk alert.

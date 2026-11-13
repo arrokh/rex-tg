@@ -323,7 +323,7 @@ func TestQuestionWithPreviews(t *testing.T) {
 	if want := "Which layout should the report use? The table one is wider, the list one reads better on a phone."; v.question != want {
 		t.Errorf("question = %q", v.question)
 	}
-	if got := labels(v.alertOptions()); got != "1 Table=1 | 2 List=2 | Esc=escape" {
+	if got := labels(v.alertOptions()); got != "1 Table=1 | 2 List=2 | 💬 Chat about this=rex-tg:chat | Esc=escape" {
 		t.Errorf("buttons %s", got)
 	}
 	if h := alertHead(v, "Claude Code", store.AlertPermission); !strings.HasPrefix(h, "❓ Claude Code: Which layout") {
