@@ -157,3 +157,24 @@ func TestMacNoticeOffAfterARestartClearsTheHold(t *testing.T) {
 	})
 	e.never("the old answer posted", 400*time.Millisecond, func() bool { return e.hasText(thread, "fixed the login page") })
 }
+
+// After a restart, /agents still marks an agent in use on the Mac: the
+// trackers are restored before the board is drawn.
+func TestBoardKeepsMacMarksAfterARestart(t *testing.T) {
+	e, p, thread := macHoldTopic(t, "pi-board-restart")
+	p.User("fix the login page")
+	n := e.waitText(thread, "In use on the Mac")
+	p.Final("Fixed it.")
+	waitHeldTurnSaved(e, n.ID)
+	e.stop()
+	e.start()
+	e.say(0, "/agents")
+	e.waitFor("the board with the Mac mark", func() bool {
+		for _, m := range e.botMessages(0) {
+			if strings.Contains(m.Text, "Active agents") && strings.Contains(m.Text, "on the Mac") {
+				return true
+			}
+		}
+		return false
+	})
+}

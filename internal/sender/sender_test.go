@@ -110,6 +110,18 @@ func (e *env) start() func() {
 	return stop
 }
 
+// waitShown waits for the stored progress row to be "shown". Wait for this,
+// not for the fake server's message, before stopping the sender: a stop while
+// the reply is still in flight makes the send "unknown", and that is never
+// retried.
+func (e *env) waitShown(threadID int64) {
+	e.t.Helper()
+	waitFor(e.t, "progress shown", func() bool {
+		p, ok, _ := e.st.Progress(ctx, threadID)
+		return ok && p.State == store.ProgressShown
+	})
+}
+
 func waitFor(t *testing.T, what string, cond func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
@@ -537,7 +549,7 @@ func TestEditTargetGoneShowsAgain(t *testing.T) {
 	th := e.topic(1)
 	e.s.Progress(th.ID, sender.ProgressOp{Kind: sender.Show, HTML: "one"})
 	stop := e.start()
-	waitFor(t, "shown", func() bool { return len(e.srv.Messages(chat)) == 1 })
+	e.waitShown(th.ID)
 	stop()
 	old := e.srv.Messages(chat)[0].ID
 	e.srv.DeleteMessageOutside(chat, old)
@@ -584,7 +596,7 @@ func TestEditRetriesWithBackoff(t *testing.T) {
 	th := e.topic(1)
 	e.s.Progress(th.ID, sender.ProgressOp{Kind: sender.Show, HTML: "one"})
 	stop := e.start()
-	waitFor(t, "shown", func() bool { return len(e.srv.Messages(chat)) == 1 })
+	e.waitShown(th.ID)
 	stop()
 	e.srv.FailNext("editMessageText", 2, 500, "boom", 0)
 	e.s.Progress(th.ID, sender.ProgressOp{Kind: sender.Edit, HTML: "two"})
@@ -604,7 +616,7 @@ func TestEditNotModifiedIsSuccess(t *testing.T) {
 	th := e.topic(1)
 	e.s.Progress(th.ID, sender.ProgressOp{Kind: sender.Show, HTML: "same"})
 	stop := e.start()
-	waitFor(t, "shown", func() bool { return len(e.srv.Messages(chat)) == 1 })
+	e.waitShown(th.ID)
 	stop()
 	e.s.Progress(th.ID, sender.ProgressOp{Kind: sender.Edit, HTML: "same"})
 	e.start()
@@ -640,6 +652,28 @@ func TestPrioritiesWhenBudgetIsShort(t *testing.T) {
 	waitFor(t, "progress", func() bool { return len(e.srv.Messages(chat)) == 4 })
 	if got := strings.Join(texts(e.srv.Messages(chat)), ","); got != "answer1,answer2,alert,progress2" {
 		t.Fatalf("messages = %s", got)
+	}
+}
+
+// A turn that ends before its progress message went out (the Show was starved
+// behind answers) posts no progress message at all.
+func TestShortTurnFinishedBeforeShowPostsNothing(t *testing.T) {
+	e := newEnv(t, sender.Options{Burst: 1})
+	th := e.topic(1)
+	e.s.Progress(th.ID, sender.ProgressOp{Kind: sender.Show, HTML: "working"})
+	e.enqueue(th, "a1", store.FormatPlain, "answer1")
+	last := e.enqueue(th, "a2", store.FormatPlain, "answer2")
+	e.s.Progress(th.ID, sender.ProgressOp{Kind: sender.Finish, HTML: "done"})
+	e.start()
+	e.waitState(last, store.OutboxSent)
+	// A later turn still works, which also proves the queue was fully drained.
+	e.s.Progress(th.ID, sender.ProgressOp{Kind: sender.Show, HTML: "next"})
+	waitFor(t, "next turn", func() bool { return len(e.srv.Messages(chat)) == 3 })
+	if got := strings.Join(texts(e.srv.Messages(chat)), ","); got != "answer1,answer2,next" {
+		t.Fatalf("messages = %s", got)
+	}
+	if n := len(e.srv.Calls("editMessageText")); n != 0 {
+		t.Fatalf("edit calls = %d, want 0", n)
 	}
 }
 
@@ -859,8 +893,9 @@ func TestSecondFinishCorrectsSummary(t *testing.T) {
 	e := newEnv(t, sender.Options{})
 	th := e.topic(1)
 	e.s.Progress(th.ID, sender.ProgressOp{Kind: sender.Show, HTML: "one"})
-	e.s.Progress(th.ID, sender.ProgressOp{Kind: sender.Finish, HTML: "interrupted"})
 	e.start()
+	e.waitShown(th.ID) // a Finish queued before the Show went out would drop both
+	e.s.Progress(th.ID, sender.ProgressOp{Kind: sender.Finish, HTML: "interrupted"})
 	waitFor(t, "first finish", func() bool { return len(e.srv.Messages(chat)) == 1 && e.srv.Messages(chat)[0].Text == "interrupted" })
 	e.s.Progress(th.ID, sender.ProgressOp{Kind: sender.Finish, HTML: "done"})
 	waitFor(t, "second finish", func() bool { return e.srv.Messages(chat)[0].Text == "done" })
@@ -879,8 +914,9 @@ func TestFinishedSummaryIsKeptAcrossRestart(t *testing.T) {
 	e := newEnv(t, sender.Options{})
 	th := e.topic(1)
 	e.s.Progress(th.ID, sender.ProgressOp{Kind: sender.Show, HTML: "one"})
-	e.s.Progress(th.ID, sender.ProgressOp{Kind: sender.Finish, HTML: "summary"})
 	stop := e.start()
+	e.waitShown(th.ID) // a Finish queued before the Show went out would drop both
+	e.s.Progress(th.ID, sender.ProgressOp{Kind: sender.Finish, HTML: "summary"})
 	waitFor(t, "finish", func() bool {
 		p, ok, _ := e.st.Progress(ctx, th.ID)
 		return len(e.srv.Messages(chat)) == 1 && e.srv.Messages(chat)[0].Text == "summary" && ok && p.TurnKey != ""

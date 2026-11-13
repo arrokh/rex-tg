@@ -61,6 +61,9 @@ type Options struct {
 // error when the daemon had to stop (another poller, a blocked bot, a failed
 // start).
 func Run(ctx context.Context, opt Options) error {
+	// The binary as it is now, first of all: an upgrade that lands while the
+	// daemon opens its store must still count as a change.
+	self := newSelfWatch(opt.SelfPath)
 	home := opt.Home
 	if home == "" {
 		h, err := os.UserHomeDir()
@@ -140,7 +143,7 @@ func Run(ctx context.Context, opt Options) error {
 	if opt.HasProgram != nil {
 		d.hasProgram = opt.HasProgram
 	}
-	switch d.self = newSelfWatch(opt.SelfPath); {
+	switch d.self = self; {
 	case d.self != nil:
 		log.Info("restarts itself when its binary is replaced", "path", opt.SelfPath)
 	case opt.SelfPath != "":

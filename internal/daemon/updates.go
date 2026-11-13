@@ -328,6 +328,7 @@ func (d *daemon) cancelButton(cb *telegram.CallbackQuery, id int64) {
 	if err := d.st.SetInboundState(d.ctx, id, store.InboundDone, reasonCancelled, d.now()); err != nil {
 		d.log.Warn("cancel: state", "err", err)
 	}
+	d.controlTyped(id, false)
 	d.keepWaitNotice(id) // the tapped notice becomes "✖ Cancelled" below
 	d.forget(id)
 	delete(d.extra, id)

@@ -79,6 +79,7 @@ func (d *daemon) startup(ctx context.Context) error {
 		d.paused.Store(true)
 	}
 	d.pruneKnownTypes(ctx) // an update may have taught the adapters a type
+	d.loadPending(ctx)     // control commands queued before the stop
 
 	if err := d.snd.Recover(ctx); err != nil {
 		return fmt.Errorf("daemon: recover sender: %w", err)

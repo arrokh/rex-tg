@@ -190,6 +190,10 @@ func (d *daemon) pump(now time.Time) {
 			d.expire(th, in)
 			continue
 		}
+		if d.controlStale(th, in.UpdateID) {
+			d.refuse(th, in, "the session in this pane changed after the command was sent (/clear, a resume, or another agent); send it again")
+			continue
+		}
 		d.busy[tid] = true
 		d.nextPrep[tid] = now.Add(d.timing.Prep)
 		d.spawn(func() {
@@ -315,6 +319,7 @@ func (d *daemon) refuse(th store.Thread, in store.Inbound, reason string) {
 	if err := d.st.SetInboundState(d.ctx, in.UpdateID, store.InboundRefused, reason, d.now()); err != nil {
 		d.log.Warn("refuse: state", "err", err)
 	}
+	d.controlTyped(in.UpdateID, false)
 	d.forget(in.UpdateID)
 	d.react(in, "👎")
 	delete(d.extra, in.UpdateID) // 👎 is its last reaction
@@ -325,6 +330,7 @@ func (d *daemon) expire(th store.Thread, in store.Inbound) {
 	if err := d.st.SetInboundState(d.ctx, in.UpdateID, store.InboundExpired, "waited too long", d.now()); err != nil {
 		d.log.Warn("expire: state", "err", err)
 	}
+	d.controlTyped(in.UpdateID, false)
 	d.forget(in.UpdateID)
 	d.react(in, "👎")
 	delete(d.extra, in.UpdateID) // 👎 is its last reaction

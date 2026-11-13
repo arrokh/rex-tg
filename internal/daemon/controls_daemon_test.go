@@ -141,3 +141,34 @@ func TestEveryControlIsABotCommand(t *testing.T) {
 		}
 	}
 }
+
+// A control command that waits for a busy agent survives a restart of the
+// daemon: once typed, its value counts, and its record goes.
+func TestQueuedControlSurvivesARestart(t *testing.T) {
+	e, p, thread := controlsTopic(t, "pi-ctl-restart")
+	p.User("busy work")
+	p.ToolCall("c1", "sleep 5")
+	e.waitFor("the progress message", func() bool { return e.hasText(thread, "⏱") })
+	cmd := e.say(thread, "/effort high")
+	e.waitText(thread, "Waiting until the agent is idle")
+	e.waitFor("the pending command kept", func() bool {
+		keys, _ := e.peek().KeysWithPrefix(context.Background(), "ctl_pending:")
+		return len(keys) == 1
+	})
+	e.stop()
+	e.start()
+	p.ToolResult("c1")
+	p.Final("done with the work")
+	e.waitFor("the command typed", func() bool { return len(e.pastes()) == 1 })
+	if got := e.pastes()[0]; got != "/thinking high" {
+		t.Fatalf("pasted %q", got)
+	}
+	// Its 👍 comes once it is typed and its value is kept.
+	e.waitFor("the 👍", func() bool { m, _ := e.message(cmd); return m.Reaction == "👍" })
+	e.say(thread, "/info")
+	e.waitText(thread, "Thinking level: <code>high</code>")
+	keys, _ := e.peek().KeysWithPrefix(context.Background(), "ctl_pending:")
+	if len(keys) != 0 {
+		t.Errorf("pending records left: %v", keys)
+	}
+}
