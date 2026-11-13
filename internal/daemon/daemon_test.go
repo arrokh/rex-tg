@@ -997,12 +997,13 @@ func TestOneWaitNoticeForAllWaitingMessages(t *testing.T) {
 	}
 	m, _ := e.message(notice.ID)
 	e.pressButton(m, buttonData(m, "Send all now"))
-	e.waitFor("both messages typed", func() bool { return len(e.pastes()) == 2 })
-	if got := e.pastes(); got[0] != "first thing" || got[1] != "second thing" {
-		t.Errorf("pasted %q, want both in order", got)
+	e.waitFor("the first message typed", func() bool { return len(e.pastes()) == 1 })
+	if got := e.pastes(); got[0] != "first thing" {
+		t.Errorf("pasted %q, want the first message", got)
 	}
-	// The agent command still waits until the agent is idle.
-	e.never("the agent command typed into the run", 500*time.Millisecond, func() bool { return len(e.pastes()) > 2 })
+	// The agent command waits until the agent is idle, and the text behind
+	// it waits with it, so the order stays.
+	e.never("the command, or the text behind it, typed into the run", 500*time.Millisecond, func() bool { return len(e.pastes()) > 1 })
 }
 
 // An approved command can run for minutes and write no transcript line

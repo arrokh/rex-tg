@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"testing"
+	"time"
 
 	"rex-tg/internal/agents"
 	"rex-tg/internal/config"
@@ -112,5 +113,32 @@ func TestPromptHintsOnlyAtTheBottom(t *testing.T) {
 	}
 	if screenHasPrompt(quoted, nil) {
 		t.Error("hints quoted in the agent's output count as a prompt")
+	}
+}
+
+// A prompt is gone only after two reads in a row without one, for the same
+// blocked state, close together: one read may come before the prompt is
+// drawn, or in the middle of a redraw.
+func TestGoneConfirmNeedsTwoReads(t *testing.T) {
+	g := goneConfirm{}
+	t0 := time.Unix(1000, 0)
+	state := t0.Add(-time.Minute)
+	read := func(sec float64, gone bool, st time.Time) bool {
+		return g.observe(evPromptRead{conv: 1, at: t0.Add(time.Duration(sec * float64(time.Second))), stateAt: st, gone: gone}, goneWithin)
+	}
+	if read(0, true, state) {
+		t.Fatal("one read without a prompt was enough")
+	}
+	if read(1, false, state) || read(2, true, state) {
+		t.Fatal("a read with the prompt between them did not start over")
+	}
+	if !read(3, true, state) {
+		t.Fatal("two reads in a row without a prompt did not count")
+	}
+	if read(4, true, state) || read(30, true, state) {
+		t.Fatal("two reads far apart counted")
+	}
+	if read(31, true, state.Add(time.Second)) {
+		t.Fatal("reads of two blocked states counted together")
 	}
 }

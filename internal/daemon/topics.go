@@ -227,7 +227,9 @@ func (d *daemon) rename(th store.Thread, conv store.Conversation) {
 			if err := d.st.SetThreadName(d.ctx, th.ID, name); err != nil {
 				d.log.Warn("rename topic", "err", err)
 			}
-			// "not_modified": Telegram says the topic has the name already.
+			// The evidence of a rename: Telegram sends the bot no notice of
+			// its own renames in a private chat (seen live). "not_modified":
+			// Telegram says the topic has the name already.
 			d.log.Info("topic renamed", "thread", th.ID, "telegram", c.String())
 			d.syncTab(th, conv)
 		case telegram.ClassThreadNotFound:
@@ -458,12 +460,9 @@ func (d *daemon) onState(c registry.Change) {
 	delete(d.nextPrep, th.ID)
 
 	if c.State == "blocked" {
-		if _, ok := d.blockedSince[c.ConversationID]; !ok {
-			d.blockedSince[c.ConversationID] = now
-		}
+		d.noteBlocked(c.ConversationID, now)
 	} else {
-		delete(d.blockedSince, c.ConversationID)
-		delete(d.recheckAt, c.ConversationID)
+		d.forgetBlocked(c.ConversationID)
 	}
 	if c.State == "blocked" && (c.StateKind == store.AlertPermission || c.StateKind == store.AlertQuestion) {
 		d.openAlert(th, c.StateKind)
