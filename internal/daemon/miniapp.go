@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -32,9 +33,19 @@ import (
 // that open them sit under the answer, with the quick replies
 // ([display] quick_replies), which send their text to the agent.
 
-const pageMaxAge = 30 * 24 * time.Hour
+// Pages are kept this long; changes pages less long. At most maxPages are
+// kept; the oldest go first.
+const (
+	pageMaxAge = 30 * 24 * time.Hour
+	diffMaxAge = 14 * 24 * time.Hour
+	maxPages   = 500
+)
 
 func pageKey(id string) string { return "page:" + id }
+
+// pageAtKey indexes a page by its time and kind ("<unix>|<kind>"), so the
+// cleanup reads no page.
+func pageAtKey(id string) string { return "page_at:" + id }
 
 func pageForKey(thread int64, kind, key string) string {
 	return fmt.Sprintf("page_for:%d:%s:%s", thread, kind, key)
@@ -42,6 +53,10 @@ func pageForKey(thread int64, kind, key string) string {
 
 // miniAppOn tells whether the Mini App is set up.
 func (d *daemon) miniAppOn() bool { return strings.TrimSpace(d.cfg.MiniApp.URL) != "" }
+
+// miniAppReady tells whether the Mini App's server listens: only then do
+// answers send their readers to it.
+func (d *daemon) miniAppReady() bool { return d.miniAppOn() && d.miniUp.Load() }
 
 // miniAppURL is the address of a page in the Mini App.
 func miniAppURL(base, id string) string { return strings.TrimRight(base, "/") + "/app?p=" + id }
@@ -58,6 +73,10 @@ func (d *daemon) savePage(kind, title, text string) (string, error) {
 		return "", err
 	}
 	if err := d.st.Set(d.ctx, pageKey(id), string(v)); err != nil {
+		return "", err
+	}
+	if err := d.st.Set(d.ctx, pageAtKey(id), fmt.Sprintf("%d|%s", d.now().Unix(), kind)); err != nil {
+		_ = d.st.Delete(d.ctx, pageKey(id))
 		return "", err
 	}
 	return id, nil
@@ -90,11 +109,20 @@ func (d *daemon) serveMiniApp(ctx context.Context) {
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      60 * time.Second,
 	}
-	ln, err := net.Listen("tcp", d.cfg.MiniApp.Listen)
-	if err != nil {
-		d.log.Warn("mini app: listen", "addr", d.cfg.MiniApp.Listen, "err", err)
-		return
+	var ln net.Listener
+	for wait := time.Second; ; wait = min(2*wait, time.Minute) {
+		var err error
+		if ln, err = net.Listen("tcp", d.cfg.MiniApp.Listen); err == nil {
+			break
+		}
+		// The old daemon may still hold the port for a moment.
+		d.log.Warn("mini app: listen; trying again", "addr", d.cfg.MiniApp.Listen, "err", err, "in", wait)
+		if !sleepCtx(ctx, wait) {
+			return
+		}
 	}
+	d.miniUp.Store(true)
+	defer d.miniUp.Store(false)
 	d.log.Info("mini app: serving", "addr", ln.Addr().String())
 	go func() {
 		<-ctx.Done()
@@ -107,10 +135,19 @@ func (d *daemon) serveMiniApp(ctx context.Context) {
 	}
 }
 
+// longAnswerIf is longAnswer for an answer (isAnswer), with its text
+// redacted first.
+func (d *daemon) longAnswerIf(isAnswer bool, th store.Thread, key, markdown string) ([]store.PartContent, bool) {
+	if !isAnswer {
+		return nil, false
+	}
+	return d.longAnswer(th, key, format.Redact(markdown))
+}
+
 // longAnswer makes a long answer short in the chat (core): its start, and a
 // page with all of it. ok is false when the answer stays as it is.
 func (d *daemon) longAnswer(th store.Thread, key, md string) ([]store.PartContent, bool) {
-	if !d.miniAppOn() || len([]rune(md)) <= d.cfg.MiniApp.AnswerPreview {
+	if !d.miniAppReady() || len([]rune(md)) <= max(d.cfg.MiniApp.AnswerPreview, 2*answerPreviewChars) {
 		return nil, false
 	}
 	title := format.Truncate(firstLine(format.Plain(md)), 80)
@@ -260,15 +297,18 @@ type evTurnChanges struct {
 }
 
 // changesOn tells whether turn changes are shown.
-func (d *daemon) changesOn() bool { return d.miniAppOn() && d.cfg.Display.ShowChanges }
+func (d *daemon) changesOn() bool { return d.miniAppReady() && d.cfg.Display.ShowChanges }
 
-// turnStarted takes the snapshot of a turn's start (core).
-func (d *daemon) turnStarted(conv int64, cwd string) {
+// turnStarted takes the snapshot of a turn's start (core). joins is true
+// for a prompt that joins a running turn (a steered message): that turn
+// keeps the snapshot of its start. A new turn always takes a fresh one, so
+// a turn that ended without an answer leaves nothing behind.
+func (d *daemon) turnStarted(conv int64, cwd string, joins bool) {
 	if !d.changesOn() || cwd == "" {
 		return
 	}
-	if _, ok := d.turnTrees[conv]; ok {
-		return // the turn already has one (a message that joined it)
+	if _, ok := d.turnTrees[conv]; ok && joins {
+		return
 	}
 	d.turnTrees[conv] = turnTree{} // taken; filled when the snapshot is done
 	d.spawn(func() {
@@ -345,8 +385,8 @@ func (d *daemon) refreshAnswerButtons(thread int64, key string, try int) {
 		return
 	}
 	if last.TGMessageID == 0 || last.State != store.OutboxSent {
-		if try < 5 {
-			d.later(3*time.Second, func() { d.refreshAnswerButtons(thread, key, try+1) })
+		if try < 12 { // about 4 minutes, for an answer held back by the rate limit or a network outage
+			d.later(time.Duration(min(try+1, 6))*5*time.Second, func() { d.refreshAnswerButtons(thread, key, try+1) })
 		}
 		return
 	}
@@ -391,7 +431,8 @@ const maxDiffBytes = 2 << 20
 func git(ctx context.Context, dir string, env []string, args ...string) (string, error) {
 	c, cancel := context.WithTimeout(ctx, gitTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(c, "git", append([]string{"-C", dir}, args...)...)
+	// No file system monitor: it can run a program of the repository's.
+	cmd := exec.CommandContext(c, "git", append([]string{"-C", dir, "-c", "core.fsmonitor=false"}, args...)...)
 	cmd.Env = append(append(os.Environ(), "GIT_OPTIONAL_LOCKS=0", "GIT_TERMINAL_PROMPT=0"), env...)
 	out, err := cmd.Output()
 	return string(out), err
@@ -406,21 +447,28 @@ func gitTree(ctx context.Context, dir string) (top, tree string, err error) {
 	if err != nil {
 		return "", "", err
 	}
-	f := strings.Fields(out)
-	if len(f) != 2 {
+	f := strings.Split(strings.TrimRight(out, "\n"), "\n") // a path may hold spaces
+	if len(f) != 2 || f[0] == "" || f[1] == "" {
 		return "", "", errors.New("git: no repository")
 	}
 	top, gitDir := f[0], f[1]
+	if err := checkUntracked(ctx, top); err != nil {
+		return "", "", err
+	}
 	tmp, err := os.CreateTemp("", "rex-tg-index-*")
 	if err != nil {
 		return "", "", err
 	}
 	name := tmp.Name()
 	defer os.Remove(name)
-	if b, err := os.ReadFile(filepath.Join(gitDir, "index")); err == nil {
+	b, rerr := os.ReadFile(filepath.Join(gitDir, "index"))
+	if rerr == nil {
 		_, _ = tmp.Write(b) // a copy keeps git's file stat cache: only changed files are read
 	}
 	tmp.Close()
+	if rerr != nil {
+		_ = os.Remove(name) // no index yet: git starts a new one (an empty file is no index)
+	}
 	env := []string{"GIT_INDEX_FILE=" + name}
 	if _, err := git(ctx, top, env, "add", "-A", "--", "."); err != nil {
 		return "", "", err
@@ -430,6 +478,39 @@ func gitTree(ctx context.Context, dir string) (top, tree string, err error) {
 		return "", "", err
 	}
 	return top, strings.TrimSpace(out), nil
+}
+
+// Limits of the new files that a snapshot takes in: a repository with more
+// (build output that is not ignored, a home folder) gets no changes, rather
+// than a slow turn and a .git full of copies.
+const (
+	maxUntrackedFiles = 300
+	maxUntrackedBytes = 20 << 20
+)
+
+// checkUntracked refuses a repository whose new, not ignored files are too
+// many or too big for a snapshot.
+func checkUntracked(ctx context.Context, top string) error {
+	out, err := git(ctx, top, nil, "ls-files", "--others", "--exclude-standard", "-z")
+	if err != nil {
+		return err
+	}
+	var n int
+	var size int64
+	for _, name := range strings.Split(out, "\x00") {
+		if name == "" {
+			continue
+		}
+		if n++; n > maxUntrackedFiles {
+			return errors.New("git: too many new files for a snapshot")
+		}
+		if fi, err := os.Lstat(filepath.Join(top, name)); err == nil {
+			if size += fi.Size(); size > maxUntrackedBytes {
+				return errors.New("git: new files too big for a snapshot")
+			}
+		}
+	}
+	return nil
 }
 
 // gitChanges sums and shows the difference of two trees.
@@ -460,17 +541,45 @@ func gitChanges(ctx context.Context, top, from, to string) (changeStat, string, 
 	return st, diff, nil
 }
 
-// prunePages drops the pages older than pageMaxAge and the names of pages
-// that are gone (housekeeping, a worker).
+// prunePages drops the pages that are too old, the oldest beyond maxPages,
+// and the names of pages that are gone (housekeeping, a worker). It reads
+// the small index (page_at:), not the pages.
 func (d *daemon) prunePages(now time.Time) {
-	keys, err := d.st.KeysWithPrefix(d.ctx, "page:")
+	keys, err := d.st.KeysWithPrefix(d.ctx, "page_at:")
 	if err != nil {
 		return
 	}
+	type entry struct {
+		id string
+		at int64
+	}
+	var keep []entry
+	drop := func(id string) {
+		_ = d.st.Delete(d.ctx, pageKey(id))
+		_ = d.st.Delete(d.ctx, pageAtKey(id))
+	}
 	for _, k := range keys {
-		p, ok := loadPage(d.st, strings.TrimPrefix(k, "page:"))
-		if !ok || now.Sub(p.At) > pageMaxAge {
-			_ = d.st.Delete(d.ctx, k)
+		id := strings.TrimPrefix(k, "page_at:")
+		v, ok, err := d.st.Get(d.ctx, k)
+		if err != nil || !ok {
+			continue
+		}
+		atText, kind, _ := strings.Cut(v, "|")
+		at, perr := strconv.ParseInt(atText, 10, 64)
+		age := pageMaxAge
+		if kind == miniapp.KindDiff {
+			age = diffMaxAge
+		}
+		if perr != nil || now.Sub(time.Unix(at, 0)) > age {
+			drop(id)
+			continue
+		}
+		keep = append(keep, entry{id, at})
+	}
+	if len(keep) > maxPages {
+		sort.Slice(keep, func(i, j int) bool { return keep[i].at < keep[j].at })
+		for _, e := range keep[:len(keep)-maxPages] {
+			drop(e.id)
 		}
 	}
 	names, err := d.st.KeysWithPrefix(d.ctx, "page_for:")

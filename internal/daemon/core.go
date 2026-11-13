@@ -175,6 +175,7 @@ type daemon struct {
 	goneReads     goneConfirm        // the first read without a prompt, until a second confirms it
 	turnTrees     map[int64]turnTree // the repository at each running turn's start, by session
 	miniSecret    []byte             // the key that checks the Mini App's signed requests
+	miniUp        atomic.Bool        // the Mini App's server listens
 	blockedScanAt time.Time
 	renamedBack   time.Time  // the last rename back of the session for /new (under tabMu)
 	vimStuck      sync.Map   // pane id -> vimStuckMark: the vim label that showed no reaction to a key
@@ -672,11 +673,21 @@ func (d *daemon) say(chatID, threadID int64, html string, markup *telegram.Inlin
 }
 
 func (d *daemon) sendNow(chatID, threadID int64, html string, markup *telegram.InlineKeyboardMarkup) (telegram.Message, error) {
+	return d.sendMsg(chatID, threadID, html, markup, true)
+}
+
+// sendPrompt is sendNow for a prompt that waits for the user: it makes a
+// sound.
+func (d *daemon) sendPrompt(chatID, threadID int64, html string, markup *telegram.InlineKeyboardMarkup) (telegram.Message, error) {
+	return d.sendMsg(chatID, threadID, html, markup, false)
+}
+
+func (d *daemon) sendMsg(chatID, threadID int64, html string, markup *telegram.InlineKeyboardMarkup, silent bool) (telegram.Message, error) {
 	var msg telegram.Message
 	err := d.snd.Call(sender.PriorityAnswer, func(ctx context.Context, tg *telegram.Client) error {
 		m, err := tg.SendMessage(ctx, telegram.SendMessageParams{
 			ChatID: chatID, MessageThreadID: threadID, Text: html, ParseMode: "HTML", ReplyMarkup: markup,
-			DisableNotification: true, // only answers and prompts make a sound
+			DisableNotification: silent, // only answers and prompts make a sound
 		})
 		msg = m
 		return err

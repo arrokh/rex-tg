@@ -404,8 +404,8 @@ func (c Config) validate() error {
 	if u := c.MiniApp.URL; u != "" && !strings.HasPrefix(u, "https://") {
 		return fmt.Errorf("miniapp.url %q: Telegram opens a Mini App only from an https:// address", u)
 	}
-	if c.MiniApp.AnswerPreview < 500 {
-		return fmt.Errorf("miniapp.answer_preview %d: at least 500", c.MiniApp.AnswerPreview)
+	if c.MiniApp.AnswerPreview < 2000 {
+		return fmt.Errorf("miniapp.answer_preview %d: at least 2000 (the chat shows about 1200 characters of a longer answer)", c.MiniApp.AnswerPreview)
 	}
 	if len(c.Display.QuickReplies) > 8 {
 		return fmt.Errorf("display.quick_replies: at most 8 buttons")

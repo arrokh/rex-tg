@@ -46,7 +46,7 @@ func TestQuickReplyTypesItsText(t *testing.T) {
 func TestLongAnswerOpensInTheMiniApp(t *testing.T) {
 	e, p, thread := piTopicCfg(t, "pi-long-app", func(e *env) {
 		e.cfg.MiniApp.URL = "https://mac.example.ts.net:8443"
-		e.cfg.MiniApp.AnswerPreview = 500
+		e.cfg.MiniApp.AnswerPreview = 2000
 	})
 	long := "# Report\n\n" + strings.Repeat("A long paragraph of the report. ", 30) + "\n\n" + strings.Repeat("More text. ", 200) + "\n\nTHE END"
 	p.User("write the report")

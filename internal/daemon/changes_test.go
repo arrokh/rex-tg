@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -66,5 +67,27 @@ func TestTurnChangesLeaveTheIndexAlone(t *testing.T) {
 	}
 	if _, _, err := gitTree(ctx, t.TempDir()); err == nil {
 		t.Error("a folder that is no repository gave a snapshot")
+	}
+}
+
+// A repository with many new files that are not ignored (build output) gets
+// no snapshot, and so does one with big new files.
+func TestSnapshotSkipsRepositoriesFullOfNewFiles(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("no git")
+	}
+	dir := filepath.Join(t.TempDir(), "a repo with spaces")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, dir, "init", "-q")
+	if _, _, err := gitTree(context.Background(), dir); err != nil {
+		t.Fatalf("a path with spaces: %v", err)
+	}
+	for i := 0; i <= maxUntrackedFiles; i++ {
+		_ = os.WriteFile(filepath.Join(dir, "out"+strconv.Itoa(i)+".o"), []byte("x"), 0o644)
+	}
+	if _, _, err := gitTree(context.Background(), dir); err == nil {
+		t.Error("a snapshot of a repository full of new files")
 	}
 }

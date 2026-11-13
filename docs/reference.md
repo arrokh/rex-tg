@@ -329,7 +329,7 @@ dir = "~/.local/state/rex-tg"           # Database, spool, logs, and uploads.
 The Mini App shows what does not fit a chat message, in Telegram, only for you. It opens from buttons under an answer:
 
 - `📄 Whole answer`: an answer longer than 3000 characters (`[miniapp] answer_preview`) shows its start in the chat, and the whole answer, with its tables and code, in the Mini App.
-- `📝 2 files · +40 −12`: what the turn changed in the agent's git repository, file by file. rex-tg takes a snapshot of the working files (tracked and new, not ignored) when a turn starts and when it ends with its answer, through a copy of git's index, so your own index stays as it is. Other agents that work in the same repository at the same time show up in it too. Set `[display] show_changes = false` to turn it off.
+- `📝 2 files · +40 −12`: what the turn changed in the agent's git repository, file by file. rex-tg takes a snapshot of the working files (tracked and new, not ignored) when a turn starts and when it ends with its answer, through a copy of git's index, so your own index stays as it is. Other agents that work in the same repository at the same time show up in it too. A repository with more than 300 new files that are not ignored, or more than 20 MB of them, gets no button: the snapshot would be slow. Set `[display] show_changes = false` to turn it off.
 
 The Mini App needs a public HTTPS address that reaches this Mac. With Tailscale:
 
@@ -343,7 +343,7 @@ listen = "127.0.0.1:8770"                           # the local address that the
 answer_preview = 3000                               # longer answers open in the Mini App
 ```
 
-Only you can open a page: every request carries Telegram's signature of who opened it, and rex-tg checks it with the bot's key. Pages are kept for 30 days.
+Only you can open a page: every request carries Telegram's signature of who opened it, and rex-tg checks it with the bot's key. Answers are kept for 30 days, changes for 14, and at most 500 pages in all. While the Mini App's server is not running, answers come whole in the chat.
 
 ### Tables and rich messages
 

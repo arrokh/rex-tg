@@ -239,6 +239,9 @@ func New(cfg Config, s Settings) *Tracker {
 // turns runs (Settings.MacNotice).
 func (t *Tracker) OnMac() bool { return t.onMac && t.set.MacNotice }
 
+// Running tells whether a turn is running: a prompt now joins it.
+func (t *Tracker) Running() bool { return t.ph == phActive }
+
 // Streaming tells whether a draft of the agent's text belongs to the topic
 // now (design section 8.1a): a turn runs, it is shown on Telegram (not held
 // for the Mac), its answer is not out yet, and the mode is not final (answers

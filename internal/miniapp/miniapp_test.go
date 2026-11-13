@@ -65,6 +65,10 @@ func TestCheckInitData(t *testing.T) {
 	if _, err := CheckInitData(old, Secret(fakeToken), now, MaxAge); err != ErrTooOld {
 		t.Errorf("old data: %v", err)
 	}
+	future := sign(t, fakeToken, fields(42, now.Add(time.Hour)))
+	if _, err := CheckInitData(future, Secret(fakeToken), now, MaxAge); err != ErrTooOld {
+		t.Errorf("data from the future: %v", err)
+	}
 	if _, err := CheckInitData("", Secret(fakeToken), now, MaxAge); err != ErrNoSignature {
 		t.Errorf("no data: %v", err)
 	}

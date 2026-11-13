@@ -367,7 +367,7 @@ func (d *daemon) work(th store.Thread, acts []turn.Action) []store.OutboxItem {
 			var parts []store.PartContent
 			if a.HTML != "" {
 				parts = []store.PartContent{{Content: a.HTML, Format: store.FormatHTML}}
-			} else if long, ok := d.longAnswer(th, a.Key, format.Redact(a.Markdown)); ok && a.Kind == "answer" {
+			} else if long, ok := d.longAnswerIf(a.Kind == "answer", th, a.Key, a.Markdown); ok {
 				parts = long // its start; the whole answer is a Mini App page
 			} else {
 				parts = d.markdownParts(a.Markdown, a.Kind, a.Kind == "answer")
@@ -524,7 +524,7 @@ func (d *daemon) onBatch(ev evBatch) {
 			echo := false
 			switch e.Kind {
 			case agents.UserPrompt:
-				d.turnStarted(conv.ID, conv.CWD)
+				d.turnStarted(conv.ID, conv.CWD, tr.Running())
 				if !e.Auto { // no person typed it, so it is no Telegram message
 					echo = d.echo(th, e, now)
 					if !echo && d.cfg.Display.MacNotice && d.typedRecently(th.ID, now) {

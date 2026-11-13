@@ -43,6 +43,9 @@ const (
 	KindDiff   = "diff"
 )
 
+// maxSkew is how far in the future a signature's time may be (clocks differ).
+const maxSkew = 5 * time.Minute
+
 // MaxAge is how old a signed request may be. Telegram signs the init data
 // when the Mini App opens; a page that stays open longer asks again.
 const MaxAge = 24 * time.Hour
@@ -113,7 +116,7 @@ func CheckInitData(raw string, secret []byte, now time.Time, maxAge time.Duratio
 		return 0, ErrBadSignature
 	}
 	at, err := strconv.ParseInt(vals.Get("auth_date"), 10, 64)
-	if err != nil || now.Sub(time.Unix(at, 0)) > maxAge {
+	if err != nil || now.Sub(time.Unix(at, 0)) > maxAge || time.Unix(at, 0).Sub(now) > maxSkew {
 		return 0, ErrTooOld
 	}
 	var u struct {
