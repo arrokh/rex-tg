@@ -572,7 +572,9 @@ The first line is the topic name (section 7), the state, and how long the agent 
 
 Commands in the main chat: `/agents`, `/new` (start an agent, see below), `/topics` (topics and their states), `/status` (daemon health), `/help`.
 
-Commands in a topic: `/info`, `/screen [lines]`, `/approve`, `/deny`, `/esc`, `/interrupt`, `/key <keys>`, `/force <text>`, `/model [value]`, `/effort [level]`, `/mode progress|block|final`, `/verbose on|full|off`, `/reasoning on|off`, `/resend [id]`, `/unlink`, `/help`.
+Commands in a topic: `/info`, `/screen [lines]` (a picture; `/screen text` sends text, see below), `/approve`, `/deny`, `/esc`, `/interrupt`, `/key <keys>`, `/force <text>`, `/model [value]`, `/effort [level]`, `/mode progress|block|final`, `/verbose on|full|off`, `/reasoning on|off`, `/resend [id]`, `/unlink`, `/help`.
+
+**`/screen`.** It reads the pane (`rex capture --trim`), redacts the whole text, keeps the last `[lines]` lines (30 by default), and renders them to a PNG (`internal/termimg`): Menlo at 2x, light text on a dark background, a wide character in two cells, at most 60 lines and 200 columns, and within Telegram's photo limits (each side and the sum of both at most 10000 px). Redaction comes first, so the picture never holds an unredacted secret. The picture goes out with `sendPhoto`, silently, in one call from a worker, with the topic name and the time as caption. It does not use the outbox, so it is never sent again: a failure with an unknown outcome sends nothing more. When Telegram answers 400, or the request never left, or the picture cannot be made, the text goes out instead, as `<pre>`. `/screen text` always sends text. Without Menlo, the picture uses a small built-in font.
 
 How a topic routes text that starts with `/` (D15):
 

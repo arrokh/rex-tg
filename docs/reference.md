@@ -175,6 +175,15 @@ Doctor checks:
 | Codex | `Yes, proceed` (y), `don't ask again` (p), `No …` (Esc) | No (Esc) + your note |
 | pi | pi asks nothing before it acts | — |
 
+### `/screen`
+
+- `/screen [lines]` in a topic sends the pane's screen as a picture, without sound. Light text on a dark background is easy to read on a phone. The caption has the topic name and the time.
+- `[lines]` is how many of the bottom lines to show (30 by default). A picture holds at most 60 lines and 200 columns; rex-tg keeps the bottom lines.
+- The text is redacted first, as for every screen, so no secret is drawn.
+- The font is Menlo (macOS). Characters that Menlo lacks, such as many emoji, show as an empty box.
+- `/screen text [lines]` sends monospace text, up to 80 lines. rex-tg also sends text when it cannot make the picture or Telegram refuses it.
+- If the send fails and the outcome is unknown, rex-tg does not send it again. Ask `/screen` again.
+
 ### Files and photos
 
 - Photos and files are downloaded up to `max_upload_mb` (20 MB). They are saved under the state folder, and their path is typed into the pane with your caption.
