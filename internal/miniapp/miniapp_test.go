@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -122,5 +124,74 @@ func TestRenderDiff(t *testing.T) {
 		if !strings.Contains(h, want) {
 			t.Errorf("diff lacks %q:\n%s", want, h)
 		}
+	}
+}
+
+// The live screen and the file browser answer only the owner, only for a
+// page of their kind, and the browser only while it is on.
+func TestLiveScreenAndFilesOnlyForTheOwner(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "a.txt"), []byte("hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	pages := map[string]Page{
+		"s1": {Kind: KindScreen, Title: "pi", Thread: 7},
+		"f1": {Kind: KindFiles, Title: "📂 repo", Thread: 7, Dir: root},
+		"a1": {Kind: KindAnswer, Title: "Answer", Text: "x"},
+	}
+	var asked []int64
+	filesOn := true
+	s := New(fakeToken, func() int64 { return 42 }, func(id string) (Page, bool) { p, ok := pages[id]; return p, ok }, nil).
+		WithScreen(func(p Page) Screen { asked = append(asked, p.Thread); return Screen{Text: "$ ls", At: "12:00:00"} }).
+		WithFiles(func() bool { return filesOn }, nil)
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+	get := func(path, initData string) (int, map[string]any) {
+		req, _ := http.NewRequest("GET", srv.URL+path, nil)
+		req.Header.Set("X-Telegram-Init-Data", initData)
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer res.Body.Close()
+		var body map[string]any
+		_ = json.NewDecoder(res.Body).Decode(&body)
+		return res.StatusCode, body
+	}
+	owner, other := sign(t, fakeToken, fields(42, time.Now())), sign(t, fakeToken, fields(7, time.Now()))
+
+	for _, p := range []string{"/api/screen?id=s1", "/api/files?id=f1"} {
+		if code, _ := get(p, other); code != http.StatusForbidden {
+			t.Errorf("%s for another user: %d", p, code)
+		}
+	}
+	if len(asked) != 0 {
+		t.Fatal("the screen was read for a refused request")
+	}
+	if code, body := get("/api/screen?id=s1", owner); code != http.StatusOK || body["text"] != "$ ls" || len(asked) != 1 || asked[0] != 7 {
+		t.Errorf("screen: %d %v %v", code, body, asked)
+	}
+	if code, body := get("/api/page?id=s1", owner); code != http.StatusOK || body["kind"] != KindScreen || body["html"] != "" {
+		t.Errorf("screen page: %d %v", code, body)
+	}
+	// A page of another kind does not open as a screen or a folder.
+	for _, p := range []string{"/api/screen?id=a1", "/api/screen?id=f1", "/api/files?id=a1", "/api/files?id=s1"} {
+		if code, _ := get(p, owner); code != http.StatusNotFound {
+			t.Errorf("%s: %d, want 404", p, code)
+		}
+	}
+	code, body := get("/api/files?id=f1&path=", owner)
+	if code != http.StatusOK || body["dir"] != true {
+		t.Fatalf("files: %d %v", code, body)
+	}
+	if code, body := get("/api/files?id=f1&path=a.txt", owner); code != http.StatusOK || !strings.Contains(body["html"].(string), "hello") {
+		t.Errorf("a.txt: %d %v", code, body)
+	}
+	if code, _ := get("/api/files?id=f1&path=../../etc/passwd", owner); code != http.StatusNotFound {
+		t.Errorf("a path out of the folder: %d", code)
+	}
+	filesOn = false
+	if code, _ := get("/api/files?id=f1&path=a.txt", owner); code != http.StatusNotFound {
+		t.Errorf("the browser is off, yet: %d", code)
 	}
 }

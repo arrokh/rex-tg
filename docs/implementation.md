@@ -36,7 +36,7 @@ This guide is the contract between the packages of rex-tg. [design.md](design.md
 | `internal/inbound` | Safety checks, waiting queue policy, echo matching | `agents` |
 | `internal/sender` | The only writer to Telegram: outbox, parts, rate limits, progress messages | `format`, `store`, `telegram` |
 | `internal/keychain` | The bot token in the macOS Keychain, through `security` | stdlib |
-| `internal/miniapp` | Mini App server: page signature check and page rendering | goldmark |
+| `internal/miniapp` | Mini App server: page signature check, page rendering, live screen, read-only file browser | goldmark |
 | `internal/termimg` | The `/screen` picture (PNG), from terminal lines | `golang.org/x/image` |
 | `internal/daemon` | Wiring: core loop, sender, router, alerts, housekeeping | everything |
 | `cmd/rex-tg` | CLI: `daemon`, `hook`, `login`, `install`, `uninstall`, `status`, `doctor` | everything |
@@ -360,7 +360,7 @@ type Config struct {
 		Pi, Claude, Codex                                RuntimeInput
 	}
 	Display struct{ Mode string; Backfill int; ShowMacPrompts, MacNotice, ShowChanges bool; ProgressDelay, ProgressEditInterval Duration; QuickReplies []string }
-	MiniApp struct{ URL, Listen string; AnswerPreview int } // URL empty turns the Mini App off
+	MiniApp struct{ URL, Listen string; AnswerPreview int; Files bool } // URL empty turns the Mini App off
 	Alerts  struct{ RemindAfter Duration; Reminders int } // 10m, 3; 0 turns reminders off
 	Input   struct{ QueueExpiry, JoinWindow, JoinWindowLong, BusyAfterTyping Duration; MaxUploadMB int }
 	Voice   struct{ WhisperCLI, Model, Language string } // optional; empty WhisperCLI turns voice notes off
@@ -372,7 +372,7 @@ func (c Config) DBPath() string; func (c Config) SpoolDir() string; func (c Conf
 func (c Config) Input(rt agents.Runtime) RuntimeInput
 ```
 
-Defaults come from design section 12 and the spikes: `ClaudeArgv0 ["claude", "cux"]` (cux runs claude as its child, so cux is the pane's foreground process); `Rex.NewSession "rex-tg"`, which must be a name that Rex takes (not empty, no leading `-`, no control characters, at most 128 characters); pi answers `[]`; Claude answers `1 Yes → ["1"]`, `2 Always → ["2"]`, `4 No → ["4"]`, `Esc → ["escape"]`; Codex answers `Yes → ["y"]`, `No → ["escape"]` (no "always" answer, since a key like `p` could make a lasting rule); every runtime `PasteEnterDelay 300ms`, `InterruptKeys ["escape"]`; `WhileWorking` steer for all three; `Telegram.Fallback` true; `Display.ShowChanges` true; `Display.QuickReplies` `Continue`, `Yes`, `Run tests`, `Commit`; `MiniApp.Listen "127.0.0.1:8770"`, `MiniApp.AnswerPreview` 3000.
+Defaults come from design section 12 and the spikes: `ClaudeArgv0 ["claude", "cux"]` (cux runs claude as its child, so cux is the pane's foreground process); `Rex.NewSession "rex-tg"`, which must be a name that Rex takes (not empty, no leading `-`, no control characters, at most 128 characters); pi answers `[]`; Claude answers `1 Yes → ["1"]`, `2 Always → ["2"]`, `4 No → ["4"]`, `Esc → ["escape"]`; Codex answers `Yes → ["y"]`, `No → ["escape"]` (no "always" answer, since a key like `p` could make a lasting rule); every runtime `PasteEnterDelay 300ms`, `InterruptKeys ["escape"]`; `WhileWorking` steer for all three; `Telegram.Fallback` true; `Display.ShowChanges` true; `Display.QuickReplies` `Continue`, `Yes`, `Run tests`, `Commit`; `MiniApp.Listen "127.0.0.1:8770"`, `MiniApp.AnswerPreview` 3000, `MiniApp.Files` true.
 
 ### internal/registry
 

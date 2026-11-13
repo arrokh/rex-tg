@@ -216,9 +216,15 @@ Text that starts with `/` goes to the agent, except the commands below and the m
 - `/screen [lines]` in a topic sends the pane's screen as a picture, without sound. Light text on a dark background is easy to read on a phone. The caption has the topic name and the time.
 - `[lines]` is how many of the bottom lines to show: 30 by default, at most 80. A picture holds at most 60 lines and 200 columns; rex-tg keeps the bottom lines.
 - The text is redacted first, as for every screen, so no secret is drawn.
-- The font is Menlo (macOS). Characters that Menlo lacks, such as many emoji, show as an empty box. Without Menlo, a small built-in font is used.
+- The font is Menlo (macOS). For characters that Menlo lacks, it falls back to Apple Symbols, Arial Unicode, and Hiragino Sans GB. Emoji use Apple Color Emoji. A character that no font has shows as an empty box. Without Menlo, a small built-in font is used.
 - `/screen text [lines]` sends monospace text of up to 80 lines; longer text keeps its last 3800 characters. `text` and the number can come in either order. rex-tg also sends text when it cannot make the picture or Telegram refuses it.
 - If the send fails and the outcome is unknown, rex-tg does not send it again. Ask `/screen` again.
+- With the Mini App set up, the picture has a `🖥 Live screen` button. It opens the pane's screen in the Mini App and reads it again every 2 seconds while the page is open (see [Mini App](#mini-app)).
+
+### `/files`
+
+- `/files` in a topic answers with a `📂 Browse files` button. It opens the agent's folder in the Mini App: the top folder of its git repository, or its working folder when that is not in a repository.
+- It needs the Mini App. Set `[miniapp] files = false` to turn it off.
 
 ### Files and photos
 
@@ -338,6 +344,7 @@ max_upload_mb = 20                      # Largest photo or file to download from
 url = ""                                # The Mini App's public https:// address (see Mini App). Empty turns it off.
 listen = "127.0.0.1:8770"               # Its local address.
 answer_preview = 3000                   # Longer answers show their start and open whole in the Mini App. At least 2000.
+files = true                            # /files opens a read-only browser of the agent's folder in the Mini App.
 
 [voice]
 whisper_cli = ""                        # Path to whisper-cli. Empty turns voice notes off.
@@ -350,10 +357,14 @@ dir = "~/.local/state/rex-tg"           # Database, spool, logs, and uploads.
 
 ### Mini App
 
-The Mini App shows what does not fit a chat message. Its pages open from buttons under an answer, and only for you:
+The Mini App shows what does not fit a chat message. Its pages open from buttons, and only for you:
 
 - `📄 Whole answer`: an answer longer than `[miniapp] answer_preview` (3000 characters by default) shows its start in the chat. The whole answer, with its tables and code, is in the Mini App. Such an answer is not sent as one rich message.
 - `📝 2 files · +40 −12`: what the turn changed in the agent's git repository, file by file. rex-tg takes a snapshot of the working files (tracked and new, not ignored) when a turn starts and when it ends with its answer. The snapshots use a copy of git's index, so your own index stays as it is. They write objects into the repository, which git cleans up later. Other agents that work in the same repository at the same time show up in it too. Secrets are removed from the diff. A folder that is not a git repository gets no button. Set `[display] show_changes = false` to turn it off. A repository with more than 300 new files that are not ignored, or more than 20 MB of them, gets no button: the snapshot would be slow.
+- `🖥 Live screen`, under a `/screen` picture: the pane's screen as text, read again every 2 seconds while the page is open, and not while it is hidden. Secrets are removed, as on every screen. `Fit width` makes the font smaller, so a wide screen fits the phone. The page only shows the screen; it types nothing. A topic has one live screen page, so all its buttons open the same page.
+- `📂 Browse files`, from `/files`: the agent's folder, read-only. Tap a folder to open it, a file to read it. Markdown files are rendered, other text is shown as it is, with secrets removed, and pictures (PNG, JPEG, GIF, WebP up to 4 MB) are shown. Of a long text file, the first 512 KB are shown; a binary file shows only its size. The browser never leaves the folder: a path with `..` stays inside it, and a link that points out of it does not open. It hides `.git`, files that git ignores (such as `.env` and `node_modules`), and files with names of keys and credentials (`.env*`, `*.pem`, `*.key`, `id_rsa*`, `credentials.json`, and the like, in any case; `.env.example` is shown). In a folder that is not a git repository, it also hides every name that starts with a dot. A link to a hidden file does not open either. Folders with more than 2000 entries show the first 2000.
+
+Every page has a bar at the top. `A−`, `A`, and `A+` make the text smaller, normal, or bigger. ☀/🌙 switches between light and dark; tapping back to Telegram's own scheme follows Telegram again. The page keeps your choices on the phone.
 
 The Mini App needs a public HTTPS address that reaches this Mac. It is off until `url` is set. With Tailscale:
 
@@ -365,6 +376,7 @@ The Mini App needs a public HTTPS address that reaches this Mac. It is off until
 url = "https://<your-mac>.<tailnet>.ts.net:8443"   # https:// only. Empty turns the Mini App off.
 listen = "127.0.0.1:8770"                           # the local target of the Funnel; keep it on 127.0.0.1
 answer_preview = 3000                               # longer answers open in the Mini App
+files = true                                        # /files: browse the agent's folder
 ```
 
 Restart rex-tg with `launchctl kickstart -k gui/$(id -u)/local.rex-tg`. Then check the log: `mini app: serving` means the server runs. Send a long answer and tap `📄 Whole answer` to test it.
@@ -373,7 +385,7 @@ Pages are reachable only through Telegram's signed requests, and only for the ow
 
 Funnel makes the server reachable from the internet, so keep `listen` on `127.0.0.1`. To turn the Mini App off, set `url = ""` and restart rex-tg. `tailscale funnel reset` removes every Funnel setting of this Mac.
 
-Answers are kept for 30 days, changes for 14, and at most 500 pages in all. While the Mini App's server is not running, answers come whole in the chat.
+Answers are kept for 30 days, changes for 14, live screens and file browsers for 7 days after the last `/screen` or `/files` that sent their button, and at most 500 pages in all. While the Mini App's server is not running, answers come whole in the chat.
 
 ### Tables and rich messages
 

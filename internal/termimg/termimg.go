@@ -195,14 +195,50 @@ func Render(lines []string) ([]byte, error) {
 	d := &font.Drawer{Dst: img, Src: image.NewUniform(fg), Face: face}
 	m := face.Metrics()
 	top := (l.CellH - m.Height.Ceil()) / 2 // center the glyphs in the line height
+	fb := &faceSet{scale: l.Scale}
+	defer fb.close()
+	cache := map[emojiKey]*image.RGBA{}
+	colorGlyph := func(r rune, side int) *image.RGBA {
+		k := emojiKey{r, side}
+		if bm, ok := cache[k]; ok {
+			return bm
+		}
+		var bm *image.RGBA
+		if e := loadEmoji(); e != nil {
+			if src := e.bitmap(&buf, r, side); src != nil {
+				bm = scaleSquare(src, side)
+			}
+		}
+		cache[k] = bm
+		return bm
+	}
 	for row, line := range lines {
 		col := 0
-		for _, r := range line {
+		rs := []rune(line)
+		for i, r := range rs {
 			w := RuneWidth(r)
+			if w == 0 {
+				continue
+			}
 			x := pad*l.Scale + col*l.CellW
 			y := pad*l.Scale + row*l.CellH
 			col += w
 			if r == ' ' {
+				continue
+			}
+			drawColor := func() bool {
+				side := min(w*l.CellW, l.CellH)
+				bm := colorGlyph(r, side)
+				if bm == nil {
+					return false
+				}
+				ox, oy := x+(w*l.CellW-side)/2, y+(l.CellH-side)/2
+				draw.Draw(img, image.Rect(ox, oy, ox+side, oy+side), bm, image.Point{}, draw.Over)
+				return true
+			}
+			// A symbol followed by a variation selector 16 asks for the emoji.
+			wantColor := emojiPresentation(r, w) || w == 1 && r >= 0x2000 && i+1 < len(rs) && rs[i+1] == 0xFE0F
+			if wantColor && drawColor() {
 				continue
 			}
 			have := true
@@ -212,12 +248,23 @@ func Render(lines []string) ([]byte, error) {
 			} else {
 				_, have = face.GlyphAdvance(r)
 			}
-			if !have {
-				box(img, x, y, w*l.CellW, l.CellH, l.Scale)
+			baseline := fixed.P(x, y+top+m.Ascent.Ceil())
+			if have {
+				d.Face, d.Dot = face, baseline
+				d.DrawString(string(r))
 				continue
 			}
-			d.Dot = fixed.P(x, y+top+m.Ascent.Ceil())
-			d.DrawString(string(r))
+			if sf != nil {
+				if ff := fb.find(&buf, r); ff != nil {
+					d.Face, d.Dot = ff, baseline
+					d.DrawString(string(r))
+					continue
+				}
+			}
+			if !wantColor && drawColor() {
+				continue
+			}
+			box(img, x, y, w*l.CellW, l.CellH, l.Scale)
 		}
 	}
 	if c, ok := face.(interface{ Close() error }); ok {
@@ -228,6 +275,17 @@ func Render(lines []string) ([]byte, error) {
 		return nil, err
 	}
 	return out.Bytes(), nil
+}
+
+type emojiKey struct {
+	r    rune
+	side int
+}
+
+// emojiPresentation reports whether a character of the given width is drawn
+// as a color emoji by default: wide, and not CJK.
+func emojiPresentation(r rune, w int) bool {
+	return w == 2 && (r >= 0x2000 && r < 0x2E80 || r >= 0x1F000 && r <= 0x1FAFF)
 }
 
 // box draws a hollow rectangle in the cells of a character that the font

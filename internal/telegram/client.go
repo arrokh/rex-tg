@@ -566,14 +566,19 @@ func (c *Client) GetMyCommands(ctx context.Context, scope *BotCommandScope) ([]B
 
 // SendDocument uploads data as a document (multipart/form-data).
 func (c *Client) SendDocument(ctx context.Context, chatID, threadID int64, filename string, data []byte, caption string, silent bool) (Message, error) {
-	return c.upload(ctx, "sendDocument", "document", chatID, threadID, filename, data, caption, silent)
+	return c.upload(ctx, "sendDocument", "document", chatID, threadID, filename, data, caption, silent, nil)
 }
 
 // SendPhoto uploads data as a photo (multipart/form-data). Telegram checks
 // the size and the shape of the picture and may answer 400 (for example
 // PHOTO_INVALID_DIMENSIONS); then nothing was posted.
 func (c *Client) SendPhoto(ctx context.Context, chatID, threadID int64, filename string, data []byte, caption string, silent bool) (Message, error) {
-	return c.upload(ctx, "sendPhoto", "photo", chatID, threadID, filename, data, caption, silent)
+	return c.upload(ctx, "sendPhoto", "photo", chatID, threadID, filename, data, caption, silent, nil)
+}
+
+// SendPhotoMarkup is SendPhoto with buttons under the photo.
+func (c *Client) SendPhotoMarkup(ctx context.Context, chatID, threadID int64, filename string, data []byte, caption string, silent bool, markup *InlineKeyboardMarkup) (Message, error) {
+	return c.upload(ctx, "sendPhoto", "photo", chatID, threadID, filename, data, caption, silent, markup)
 }
 
 // uploadRate is the slowest upload speed that an upload is given time for:
@@ -588,7 +593,7 @@ func uploadTimeout(base time.Duration, n int) time.Duration {
 }
 
 // upload sends a multipart request with one file in the given form field.
-func (c *Client) upload(ctx context.Context, method, fileField string, chatID, threadID int64, filename string, data []byte, caption string, silent bool) (Message, error) {
+func (c *Client) upload(ctx context.Context, method, fileField string, chatID, threadID int64, filename string, data []byte, caption string, silent bool, markup *InlineKeyboardMarkup) (Message, error) {
 	var buf bytes.Buffer
 	mw := multipart.NewWriter(&buf)
 	field := func(k, v string) { _ = mw.WriteField(k, v) }
@@ -601,6 +606,13 @@ func (c *Client) upload(ctx context.Context, method, fileField string, chatID, t
 	}
 	if silent {
 		field("disable_notification", "true")
+	}
+	if markup != nil {
+		mk, err := json.Marshal(markup)
+		if err != nil {
+			return Message{}, fmt.Errorf("telegram %s: build request: %w", method, err)
+		}
+		field("reply_markup", string(mk))
 	}
 	h := textproto.MIMEHeader{}
 	h.Set("Content-Disposition", fmt.Sprintf(`form-data; name="%s"; filename="%s"`, fileField,

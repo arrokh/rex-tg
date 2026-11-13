@@ -1,7 +1,14 @@
 package termimg
 
 // RuneWidth is the number of terminal columns a character takes.
+//
+// Joiners, variation selectors, combining marks, and skin-tone modifiers
+// take no column.
 func RuneWidth(r rune) int {
+	if r >= 0x0300 && (r <= 0x036F || r >= 0x200B && r <= 0x200F || r >= 0x20D0 && r <= 0x20FF ||
+		r >= 0xFE00 && r <= 0xFE0F || r >= 0x1F3FB && r <= 0x1F3FF || r >= 0xE0100 && r <= 0xE01EF) {
+		return 0
+	}
 	switch {
 	case r < 0x1100:
 		return 1

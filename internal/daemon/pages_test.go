@@ -36,10 +36,12 @@ func TestPrunePages(t *testing.T) {
 	oldAnswer := save(miniapp.KindAnswer, 31*24*time.Hour)
 	youngAnswer := save(miniapp.KindAnswer, 20*24*time.Hour)
 	oldDiff := save(miniapp.KindDiff, 15*24*time.Hour)
+	oldScreen := save(miniapp.KindScreen, 8*24*time.Hour) // since its last use
+	youngFiles := save(miniapp.KindFiles, 6*24*time.Hour)
 	_ = st.Set(d.ctx, pageForKey(1, miniapp.KindDiff, "k"), oldDiff+"|1 file · +1 −0")
 	clock = time.Unix(1_800_000_000, 0)
 	d.prunePages(clock)
-	for id, want := range map[string]bool{oldAnswer: false, youngAnswer: true, oldDiff: false} {
+	for id, want := range map[string]bool{oldAnswer: false, youngAnswer: true, oldDiff: false, oldScreen: false, youngFiles: true} {
 		if _, ok := loadPage(st, id); ok != want {
 			t.Errorf("page %s kept = %v, want %v", id, ok, want)
 		}

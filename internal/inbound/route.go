@@ -35,7 +35,7 @@ type Route struct {
 	Text    string // text to type for RouteAgentText
 }
 
-var topicCommands = setOf("info", "screen", "approve", "deny", "esc", "interrupt",
+var topicCommands = setOf("info", "screen", "files", "approve", "deny", "esc", "interrupt",
 	"key", "force", "model", "effort", "mode", "verbose", "reasoning", "resend", "unlink", "mute", "unmute", "rename", "at", "help")
 
 var mainCommands = setOf("start", "agents", "new", "topics", "status", "pause", "unpause", "help")
