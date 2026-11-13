@@ -157,3 +157,50 @@ func TestReplyToAQuestionIsTheAnswer(t *testing.T) {
 	})
 	e.never("the answer typed twice", 400*time.Millisecond, func() bool { return len(e.pastes()) > 1 })
 }
+
+// A question with previews (made-up text, Claude Code's layout): its "Chat
+// about this" has no number, so its button walks the cursor down to it, one
+// key at a time with the screen read after each, and presses Enter there.
+const qPreview = `────────────────────────────────────────────────────────────────────────────────────────────
+ ☐ Layout
+
+│ Which layout should the report use?
+
+❯ 1. Table                        ┌──────────────────────────────────────────────────┐
+  2. List                         │ | Name | Qty |                                   │
+                                  │ 1. Table of contents                             │
+                                  └──────────────────────────────────────────────────┘
+
+                                  Notes: press n to add notes
+
+────────────────────────────────────────────────────────────────────────────────────────────
+  Chat about this
+
+Enter to select · ↑/↓ to navigate · n to add notes · Esc to cancel`
+
+func TestChatAboutThisWithPreviewsFromTelegram(t *testing.T) {
+	e, _, thread := piTopic(t, "pi-ask-preview")
+	e.setScreen(qPreview)
+	e.setStatus("blocked", "permission")
+	q := e.waitText(thread, "Which layout should the report use?")
+	data := buttonData(q, "Chat about this")
+	if data == "" {
+		t.Fatalf("no Chat about this button: %+v", q.Markup)
+	}
+	e.pressButton(q, data)
+	moves := []string{
+		strings.Replace(strings.Replace(qPreview, "❯ 1. Table", "  1. Table", 1), "  2. List", "❯ 2. List", 1),
+		strings.Replace(strings.Replace(qPreview, "❯ 1. Table", "  1. Table", 1), "  Chat about this", "❯ Chat about this", 1),
+	}
+	for i, s := range moves {
+		e.waitFor("a down key", func() bool { return len(e.keys()) == 1+i })
+		if got := e.keys()[i]; got != "down" {
+			t.Fatalf("key %d = %q, want down (keys %v)", 1+i, got, e.keys())
+		}
+		e.setScreen(s)
+	}
+	e.waitFor("Enter on Chat about this", func() bool { return len(e.keys()) == 3 })
+	if got := e.keys()[2]; got != "enter" {
+		t.Fatalf("keys %v, want Enter last", e.keys())
+	}
+}
