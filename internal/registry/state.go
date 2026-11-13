@@ -103,6 +103,17 @@ func (r *Registry) TranscriptSignal(ctx context.Context, convID int64, sig Signa
 // not, the reason says why. Ready needs an idle or done signal newer than the
 // last working signal. Silence never counts as idle. A blocked pane or a pane
 // that was typed into a moment ago is not ready.
+// Reasons of Ready that the daemon tells apart.
+const (
+	// ReasonWorking: the agent works and nothing else stops typing, so a
+	// message may steer the run (input.while_busy).
+	ReasonWorking = "the agent is working"
+	// ReasonBlocked: the agent waits for an answer to a prompt.
+	ReasonBlocked = "the agent is waiting for an answer to a prompt"
+	// ReasonJustTyped: a message was typed and the agent has not taken it.
+	ReasonJustTyped = "a message was just typed; waiting for the agent to take it"
+)
+
 func (r *Registry) Ready(ctx context.Context, paneID int64, now time.Time) (bool, string, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -119,11 +130,11 @@ func (r *Registry) Ready(ctx context.Context, paneID int64, now time.Time) (bool
 	mem := r.memFor(ctx, pane)
 	switch {
 	case mem.state == "blocked":
-		return false, "the agent is waiting for an answer to a prompt", nil
+		return false, ReasonBlocked, nil
 	case pane.BusyUntil.After(now):
-		return false, "a message was just typed; waiting for the agent to take it", nil
+		return false, ReasonJustTyped, nil
 	case mem.state == "working":
-		return false, "the agent is working", nil
+		return false, ReasonWorking, nil
 	case mem.lastIdle.IsZero() || !mem.lastIdle.After(mem.lastWorking):
 		return false, "no idle signal yet", nil
 	case mem.state == "error":

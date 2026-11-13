@@ -80,6 +80,9 @@ func newEnvSerial(t *testing.T) *env {
 	// count as typed on the Mac. They test how turns are shown, so the hold
 	// of Mac turns is off; macHoldTopic turns it on.
 	cfg.Display.MacNotice = false
+	// Most tests check the queue of messages sent while the agent works;
+	// TestMessageSteersAWorkingAgent checks the default, steer.
+	cfg.InputSettings.WhileBusy = "wait"
 	for _, in := range []*config.RuntimeInput{&cfg.Agents.Pi, &cfg.Agents.Claude, &cfg.Agents.Codex} {
 		in.PasteEnterDelay = config.Duration{Duration: 20 * time.Millisecond}
 	}
@@ -137,6 +140,7 @@ func (e *env) options() daemon.Options {
 var testTiming = daemon.Timing{
 	Tick:         20 * time.Millisecond,
 	Prep:         50 * time.Millisecond,
+	WaitNotice:   50 * time.Millisecond,
 	TailPoll:     50 * time.Millisecond,
 	TailerGrace:  300 * time.Millisecond,
 	TailRestart:  300 * time.Millisecond,

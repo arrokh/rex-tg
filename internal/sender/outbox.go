@@ -427,13 +427,17 @@ func (s *Sender) checkPart(ctx context.Context, j *job, c *partCheck, outboxID i
 		return jobResult{retry: true, delay: time.Second} // the store failed: look again
 	}
 	if c.noteID == 0 {
-		c.load(bg, s.st, outboxID, part) // a note posted before a restart
+		// A note posted before a restart: its wait for a poll starts again
+		// now, so a long stop does not use it up before Telegram answers.
+		if c.load(bg, s.st, outboxID, part) {
+			c.waitFrom = s.now()
+		}
+	}
+	if err == nil {
+		c.place(p)
 	}
 	if err != nil || p.State != store.OutboxUnknown || p.Checked {
-		if c.noteID != 0 && err == nil {
-			s.deleteMessage(store.Thread{ID: p.ThreadID, ChatID: p.ChatID, MessageThreadID: p.MessageThreadID}, c.noteID)
-		}
-		c.forget(bg, s.st, outboxID, part)
+		c.drop(bg, s, outboxID, part)
 		return jobResult{} // gone, sent again by /resend, or checked already
 	}
 	if c.noteID != 0 {
@@ -450,7 +454,8 @@ func (s *Sender) checkPart(ctx context.Context, j *job, c *partCheck, outboxID i
 		// The time after the answer: a poll that started before it may not
 		// have fetched every message older than the note (sendText can wait
 		// for the rate budget first).
-		c.noteID, c.noteAt = id, s.now()
+		c.noteID, c.noteAt, c.chat, c.thread = id, s.now(), p.ChatID, p.ThreadID
+		c.waitFrom = c.noteAt
 		if err := c.save(bg, s.st, outboxID, part); err != nil {
 			s.log.Warn("part check: note not saved", "outbox", outboxID, "part", part, "err", err)
 		}
@@ -483,8 +488,10 @@ func (s *Sender) checkPart(ctx context.Context, j *job, c *partCheck, outboxID i
 // "check_note:<outbox>:<part>"), so a check cut by a stop goes on with the
 // same note after the start, instead of leaving it and posting another.
 type partCheck struct {
-	noteID int64
-	noteAt time.Time
+	noteID       int64
+	noteAt       time.Time // when the note was posted: the poll must start later
+	chat, thread int64     // where the note is, to delete it when the part is gone
+	waitFrom     time.Time // the start of the wait for that poll (maxPollWait)
 }
 
 func checkNoteKey(outboxID int64, part int) string {
@@ -492,7 +499,24 @@ func checkNoteKey(outboxID int64, part int) string {
 }
 
 func (c *partCheck) save(ctx context.Context, st *store.Store, outboxID int64, part int) error {
-	return st.Set(ctx, checkNoteKey(outboxID, part), fmt.Sprintf("%d:%d", c.noteID, c.noteAt.UnixNano()))
+	return st.Set(ctx, checkNoteKey(outboxID, part), fmt.Sprintf("%d:%d:%d:%d", c.noteID, c.noteAt.UnixNano(), c.chat, c.thread))
+}
+
+// place fills in where the note is from its part, for a row that does not
+// hold it.
+func (c *partCheck) place(p store.Part) {
+	if c.chat == 0 {
+		c.chat, c.thread = p.ChatID, p.ThreadID
+	}
+}
+
+// drop deletes the note, by the number and chat kept with it, and forgets
+// the check.
+func (c *partCheck) drop(ctx context.Context, s *Sender, outboxID int64, part int) {
+	if c.noteID != 0 && c.chat != 0 {
+		s.deleteMessage(store.Thread{ID: c.thread, ChatID: c.chat}, c.noteID)
+	}
+	c.forget(ctx, s.st, outboxID, part)
 }
 
 // sweepCheckNotes deletes the notes of checks that cannot go on: their part
@@ -523,24 +547,28 @@ func (s *Sender) sweepCheckNotes(ctx context.Context, check []store.Part) {
 		c.load(ctx, s.st, outboxID, part)
 		p, err := s.st.Part(ctx, outboxID, part)
 		switch {
-		case err == nil && c.noteID != 0:
-			s.deleteMessage(store.Thread{ID: p.ThreadID, ChatID: p.ChatID, MessageThreadID: p.MessageThreadID}, c.noteID)
-		case err != nil && !errors.Is(err, store.ErrNotFound):
+		case err == nil:
+			c.place(p)
+		case !errors.Is(err, store.ErrNotFound):
 			continue // the store failed: look again at the next start
 		}
-		c.forget(ctx, s.st, outboxID, part)
+		c.drop(ctx, s, outboxID, part)
 	}
 }
 
-func (c *partCheck) load(ctx context.Context, st *store.Store, outboxID int64, part int) {
+func (c *partCheck) load(ctx context.Context, st *store.Store, outboxID int64, part int) bool {
 	v, ok, err := st.Get(ctx, checkNoteKey(outboxID, part))
 	if err != nil || !ok {
-		return
+		return false
 	}
-	var id, at int64
-	if _, err := fmt.Sscanf(v, "%d:%d", &id, &at); err == nil && id != 0 {
-		c.noteID, c.noteAt = id, time.Unix(0, at)
+	var id, at, chat, thread int64
+	// "id:at:chat:thread"; a row of v0.1.11 has only "id:at".
+	if n, _ := fmt.Sscanf(v, "%d:%d:%d:%d", &id, &at, &chat, &thread); n >= 2 && id != 0 {
+		c.noteID, c.noteAt, c.chat, c.thread = id, time.Unix(0, at), chat, thread
+		c.waitFrom = c.noteAt
+		return true
 	}
+	return false
 }
 
 func (c *partCheck) forget(ctx context.Context, st *store.Store, outboxID int64, part int) {
@@ -560,7 +588,7 @@ func (s *Sender) judgePart(ctx, bg context.Context, p store.Part, c *partCheck) 
 		if ctx.Err() != nil {
 			return jobResult{} // stopping: the next start goes on with this note
 		}
-		if s.now().Sub(c.noteAt) < maxPollWait {
+		if s.now().Sub(c.waitFrom) < maxPollWait {
 			return jobResult{retry: true, delay: 500 * time.Millisecond}
 		}
 		c.forget(bg, s.st, p.OutboxID, p.Part)

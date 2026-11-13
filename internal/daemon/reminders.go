@@ -223,26 +223,20 @@ func (d *daemon) dropReminder(alert int64, r *reminder) {
 	}
 }
 
-// deleteMessage deletes a bot message (worker). A message that is gone
-// already is fine.
+// deleteMessage deletes a reminder (worker). A message that is gone already
+// is fine. When the delete fails, the reminder keeps its "✓ Dismiss"
+// button, so the user can still remove it.
 func (d *daemon) deleteMessage(chat, msg int64) {
-	if err := d.tryDelete(chat, msg); err != nil && d.ctx.Err() == nil {
-		d.log.Debug("delete message", "chat", chat, "message", msg, "err", err)
-		d.removeButtons(chat, msg)
-	}
-}
-
-// tryDelete deletes a message; it returns nil also when the message is gone
-// already (a worker).
-func (d *daemon) tryDelete(chat, msg int64) error {
 	err := d.snd.Call(sender.PriorityEdit, func(ctx context.Context, tg *telegram.Client) error {
 		return tg.DeleteMessage(ctx, chat, msg)
 	})
 	switch telegram.Classify(err) {
 	case telegram.ClassNone, telegram.ClassDeleteTargetGone, telegram.ClassThreadNotFound:
-		return nil
+		return
 	}
-	return err
+	if d.ctx.Err() == nil {
+		d.log.Debug("delete reminder failed; its Dismiss button stays", "chat", chat, "message", msg, "err", err)
+	}
 }
 
 // dismissData is the callback data of a reminder's "✓ Dismiss" button. A
@@ -267,11 +261,5 @@ func (d *daemon) dismissButton(cb *telegram.CallbackQuery) {
 		}
 	}
 	d.answerCallback(cb.ID, "", false)
-	d.spawn(func() {
-		// When the delete fails, the button stays, so a second tap can try
-		// again (deleteMessage would take the buttons away).
-		if err := d.tryDelete(chat, msg); err != nil && d.ctx.Err() == nil {
-			d.log.Debug("dismiss: delete failed", "chat", chat, "message", msg, "err", err)
-		}
-	})
+	d.spawn(func() { d.deleteMessage(chat, msg) }) // on a failure, a second tap tries again
 }

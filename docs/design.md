@@ -14,7 +14,7 @@ rex-tg connects coding agents that run in Rex panes to Telegram.
 - **Main chat.** You list the coding agents that are active in Rex panes. You pick one. The bot creates a Telegram topic for the agent session in that pane.
 - **A topic follows the agent session.** When you start a new session in the same pane (`/clear`, `/new`), the new session takes over the topic. After a Rex restart, the topic follows the session to the pane that continues it. So in practice, one pane keeps one topic.
 - **Agent to Telegram.** When the agent writes new lines to its session JSONL file, the bot shows them in the topic. The display follows OpenClaw and Hermes Agent: one live progress message while the agent works, then the answer as a normal message.
-- **Telegram to agent.** When you write in the topic, rex-tg waits until the agent is idle, then types your text into the pane.
+- **Telegram to agent.** When you write in the topic, rex-tg types your text into the pane. While the agent works, the text joins the current run, as typing on the Mac does (`[input] while_busy`, D11).
 - **No duplicates.** SQLite records what was sent. A transcript entry goes to a topic at most once.
 
 Supported agents: pi, Claude Code, and Codex, as CLIs that run in Rex panes on this Mac.
@@ -37,7 +37,7 @@ Not in the first version: photos, files, voice notes, group chats, and more than
 | D8 | Language | Go | Decided (Q7) |
 | D9 | Process model | One daemon, which only one copy may run, owns the database. Hooks only write small JSON files to a spool folder. | Proposed |
 | D10 | Display style | Like OpenClaw's `progress` mode and Hermes's grouped tool progress: one edited progress message per turn, then the answer as a new message | Decided (Q2) |
-| D11 | Text sent while the agent works | Wait until the agent is idle | Decided (Q3) |
+| D11 | Text sent while the agent works | Steer: it joins the current run at once (`[input] while_busy = "steer"`). `while_busy = "wait"` waits until the agent is idle. | Decided (Q3; changed to steer on 2026-11-13) |
 | D12 | History when a topic opens | The last 3 final answers | Decided (Q4) |
 | D13 | Progress message at the end of a turn | It becomes one summary line, with the tool rows in a collapsed quote | Decided (Q9) |
 | D14 | Label of a shell row | The agent's own description when it gives one. Otherwise the start of the command, after secret removal. | Decided (Q10) |
@@ -83,7 +83,7 @@ rex-tg makes only outgoing connections. It opens no port, so it needs no webhook
 | Turn tracker | Groups events into turns. Drives the live progress message and decides when a turn ends. |
 | Outbox and sender | Removes duplicates, keeps order, splits long text, formats it, respects rate limits, and sends or edits messages. |
 | Telegram poller and router | Reads updates with `getUpdates` long polling. Routes commands, button presses, and topic messages. |
-| Input deliverer | Checks that typing is safe, waits until the agent is idle, types the text, and adds delivery receipts. |
+| Input deliverer | Checks that typing is safe, steers a working agent or waits until it is idle, types the text, and adds delivery receipts. |
 
 The Rex gateway uses the CLI, not the server socket. The Rex skill guide asks tools to use the CLI's commands instead of the socket. The CLI path is set in the config, because `rex` is not on `PATH` in every shell.
 
@@ -148,10 +148,11 @@ sequenceDiagram
   T->>B: update (getUpdates)
   B->>B: store it (update_id is unique), then move the poll offset
   B->>R: safety check: pane exists, agent process in front, no permission prompt
-  alt agent is working
-    B->>T: "⏳ waiting until the agent is idle"
-    R-->>B: state becomes idle or done
+  alt a prompt is open, or the text must wait until idle
+    B->>T: "⏳ waiting …" (after 3 s)
+    R-->>B: the prompt ends, or the state becomes idle or done
   end
+  B->>R: while the agent works: read the screen, no prompt on it
   B->>R: paste event with the text, then Enter
   B->>B: mark the pane busy until the prompt is recorded (or 15 s pass)
   B->>T: react 👀 on your message
@@ -459,7 +460,7 @@ The user may write in the pane on the Mac for a while, then go on from the phone
 | 👀 on your message | rex-tg typed it into the pane |
 | 👍 on your message | the agent's transcript recorded it |
 | 👎 on your message | it was refused or failed; a reply says why |
-| `⏳ Waiting until the agent is idle` | your message is queued (D11), with buttons `⚡ Send now` and `✖ Cancel`. The notice is deleted when the message leaves the queue: it was typed (👀, then 👍), refused or expired (👎 and a reply that says why), or typing failed. `✖ Cancel` turns it into `✖ Cancelled`. |
+| `⏳ Waiting until the prompt is answered` (or `… the agent is idle`, `… for the agent to take your last message`) | your message is queued (D11) for 3 seconds or more, with buttons `⚡ Send now` and `✖ Cancel`. The text says what it waits for. The notice is deleted when the message leaves the queue: it was typed (👀, then 👍), refused or expired (👎 and a reply that says why), or typing failed. `✖ Cancel` turns it into `✖ Cancelled`. |
 | `⛔ Not sent: the pane now runs zsh, not pi.` | the safety check refused it |
 | "typing…" | the agent is working; refreshed about every 5 seconds, only in the topic you used last |
 | `💻 In use on the Mac` | you work in the pane on the Mac; the replies stay there until you write in the topic (8.4a) |
@@ -502,7 +503,7 @@ When the prompt ends, by a button or on the Mac, rex-tg removes the buttons from
 - The next reminder comes `remind_after` after the one before, up to `[alerts] reminders` (3) times. So reminders never come in a burst, also not after the daemon was stopped. Each one deletes the one before, so the topic keeps one reminder.
 - The reminder is deleted when the alert closes, by a button or on the Mac. A reminder of an alert that closed while the daemon was stopped is deleted at the next start.
 - At most once: a reminder's number is stored before it is sent (kv `remind:<alert>`). A send whose outcome is unknown is not repeated, also not after a restart.
-- A reminder whose send got no answer may still have arrived, with a number that rex-tg never learns. rex-tg does not guess that number to delete it: in a private chat a bot may delete the user's messages too, and Telegram makes numbers rex-tg never sees (service messages of topics). Every reminder has a `✓ Dismiss` button, which deletes the message that holds it: the tap reports that message's number. When that delete fails, the button stays for another tap. Such a reminder stays under its alert, which says how the prompt ended.
+- A reminder whose send got no answer may still have arrived, with a number that rex-tg never learns. rex-tg does not guess that number to delete it: in a private chat a bot may delete the user's messages too, and Telegram makes numbers rex-tg never sees (service messages of topics). Every reminder has a `✓ Dismiss` button, which deletes the message that holds it: the tap reports that message's number. When a delete fails (the tap's, or the one when the prompt ends), the reminder keeps its button, so it can still be removed. Such a reminder stays under its alert, which says how the prompt ended.
 
 **Prompts with a time limit.** Claude Code's safety checks deny a request by themselves after a while: `⚠ Claude Code will automatically block this request in 2:00, to avoid holding up an unattended session` (or `in about 2 minutes`; seen in Claude Code 2.1.323). rex-tg reads the limit from the screen when it posts the alert. The prompt counts down on the screen, so the time it shows is the time left from that read. The line counts only inside the prompt, at most 4 lines above its question or answers, so an agent's output that quotes it does not. The "about 2 minutes" form is rounded, so rex-tg allows it up to a quarter (at most 30 seconds) earlier.
 
@@ -600,7 +601,7 @@ Intro card when a topic opens:
 Session: Plan Rex annotation plugin
 Pane: Personal › shell
 Folder: ~/work/personal/dotfiles
-Mode: progress · Input: waits until idle
+Mode: progress · Input: joins the running turn
 Write here to type into the pane. /help lists the commands.
 ```
 
@@ -666,7 +667,7 @@ stateDiagram-v2
 - **Not sent.** When the connection, the TLS handshake, or writing the request fails before the whole request was written, Telegram cannot have acted on it. The part goes back to `pending`, and sending pauses for 1 second, then 2, 4, up to 30 seconds while this goes on (`httptrace` tells whether the request was written).
 - **Unknown.** When the request was written but no answer came (a timeout, a dropped connection, a 5xx), rex-tg marks the part `unknown`. It may be in the chat already, so it is never simply sent again. Instead rex-tg checks whether it arrived:
   - Telegram numbers the messages of a private chat in order, both ways (seen live: each gap in the numbers of the bot's chat was a message that rex-tg did not record). rex-tg records the number of every message it sends and of every message in an update (`seen_message`), and keeps with each part the newest number known right before its send (`floor_id`). Had the part arrived, its number would be higher.
-  - 60 seconds after the outcome, and once Telegram answers again, rex-tg posts a silent note in the topic: `⏳ Telegram did not confirm part 1 of reply #42. Checking whether it arrived…`. If every number between the part's floor and the note's number is a message that rex-tg knows, the part never arrived: it is sent again, and the note is deleted. The numbers are compared only once a getUpdates call that started after the note was posted has finished and its updates are stored, so a message of the user's sent just before the note is counted, not taken for the part; when no call finishes within 3 minutes, the notice comes. The note's number is kept in the store (kv `check_note:<outbox>:<part>`), so a check cut by a stop goes on with the same note after the start. A note whose part was settled while rex-tg was down (`/resend`) is deleted at the start. Otherwise the note becomes the notice `⚠️ Part 1 of reply #42 may not have arrived.` `[🔁 Send again]`, and the part waits for you.
+  - 60 seconds after the outcome, and once Telegram answers again, rex-tg posts a silent note in the topic: `⏳ Telegram did not confirm part 1 of reply #42. Checking whether it arrived…`. If every number between the part's floor and the note's number is a message that rex-tg knows, the part never arrived: it is sent again, and the note is deleted. The numbers are compared only once a getUpdates call that started after the note was posted has finished and its updates are stored, so a message of the user's sent just before the note is counted, not taken for the part; when no call finishes within 3 minutes, the notice comes. The note's number and chat are kept in the store (kv `check_note:<outbox>:<part>`), so a check cut by a stop goes on with the same note after the start, and its 3 minutes start again then. A note whose part was settled while rex-tg was down (`/resend`), or is gone, is deleted at the start. Otherwise the note becomes the notice `⚠️ Part 1 of reply #42 may not have arrived.` `[🔁 Send again]`, and the part waits for you.
   - A request that timed out cannot arrive late and spoil the check: the client uses HTTP/1.1 and closes a timed-out connection at once, dropping the data it has not sent (`SO_LINGER` 0). With HTTP/2, the request could still be on its way in a shared connection. The 60 seconds cover data that was already on the network.
   - A note that may not have arrived is posted again later; after three tries, or after a part was sent 5 times, the classic notice comes instead. A part that was claimed before this check existed has no floor and gets the notice at once.
   - The button, or `/resend 42`, sends only the parts of #42 that are `unknown`. `/resend` without an id takes the newest such reply of the topic (tapping a command in a message drops its argument, seen live), and the id of a notice stands for the reply it is about.
@@ -762,9 +763,12 @@ Checks 1 and 3 can never be skipped. Only `/force` skips check 4.
 
 `/new` types nothing into an existing pane, so only check 1 applies. It starts a new program, so it starts nothing while typing is paused. A button of a startup question (8.7) presses keys in the new pane, so it needs check 1, typing not paused, the agent that `/new` started in front (check 3), and the same question still on the screen (like "alert still matches").
 
-Waiting (D11):
+Steering and waiting (D11):
 
-- When the agent is working, the message waits in SQLite. rex-tg delivers it when the pane's state becomes `idle` or `done`.
+- `[input] while_busy = "steer"` (the default): when the agent is working, the message is typed at once and joins the current run, as `⚡ Send now` does. This is what typing on the Mac does, and it lets a late "do not open a PR yet" reach the run in time. It applies only when the agent takes Enter while it works in a known way (`agents.<name>.while_working` is `steer` or `queue`). These still wait: an open prompt, a message typed just before (until the agent takes it, see below), and an agent whose state is not known yet. An agent command (`//compact`, a `/model` button), a shell command (`!ls`), and the note of a prompt answer wait until the agent is idle: they belong between turns.
+- A prompt can open at any moment while the agent works, before its hook or alert arrives. So when the agent works (a steered message or `⚡ Send now`), rex-tg reads the screen right before the paste and again before Enter. A prompt on the screen (a numbered list with a cursor at the bottom) stops it: before the paste, the message goes back to the queue and is tried again a second later; after the paste, Enter is not pressed, and you are told the text may be in the input box.
+- The waiting notice comes only after a message has waited 3 seconds, so a short wait shows nothing. Its text says what the message waits for: the prompt, the agent to take the last message, or the agent to be idle.
+- `while_busy = "wait"`: when the agent is working, the message waits in SQLite. rex-tg delivers it when the pane's state becomes `idle` or `done`.
 - After rex-tg types a message, it treats the pane as busy until the transcript records the prompt or the state becomes `working`. If neither happens within 15 seconds, it treats the pane as idle again. This stops it from typing two messages into one prompt.
 - A waiting message expires after 30 minutes, and rex-tg tells you. The time is a config setting.
 - `⚡ Send now` types it at once. All three agents steer: a message sent during a run joins the current run (spike S2). Claude Code reads it after the current tool result.
@@ -772,7 +776,7 @@ Waiting (D11):
 Joining messages:
 
 - Telegram splits long texts into several messages. rex-tg joins messages that arrive within 300 ms into one prompt, or within 1500 ms when a message is 4000 characters or longer. These are OpenClaw's values. One transaction stores the joined prompt and ends its parts, so a crash cannot leave both to be typed.
-- Messages that wait while the agent works are delivered one per turn, in the order they arrived. This matches Hermes's `queue` mode and OpenClaw's `followup` mode.
+- Messages that wait (an open prompt, or `while_busy = "wait"`) are delivered one per turn, in the order they arrived. This matches Hermes's `queue` mode and OpenClaw's `followup` mode.
 
 How text is typed:
 
@@ -1031,6 +1035,7 @@ progress_edit_interval = "2s"
 queue_expiry = "30m"
 join_window = "300ms"
 busy_after_typing = "15s"
+while_busy = "steer"
 ```
 
 CLI commands:

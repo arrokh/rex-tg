@@ -208,8 +208,8 @@ func (d *daemon) topicControl(th store.Thread, orig int64, name string) (store.C
 
 // applyControl checks a value, asks the adapter for the command text, and
 // queues the text like a message typed in the topic. Queuing goes through
-// evQueueText, so the text waits until the agent is idle and meets every
-// check before typing. It is typed at most once: the row's id comes from the
+// evQueueText, so the text waits until the agent is idle (kind "control"
+// never steers a running turn) and meets every check before typing. It is typed at most once: the row's id comes from the
 // update (orig), and a repeat of the update is ignored. tgMsg is the user's
 // own message, which gets the reactions; it is 0 for a button.
 func (d *daemon) applyControl(th store.Thread, conv store.Conversation, c agents.Control, ctrl agents.Controller, orig, tgMsg int64, value string) {
@@ -238,7 +238,7 @@ func (d *daemon) applyControl(th store.Thread, conv store.Conversation, c agents
 	// right after does not undo the first. A command that is refused,
 	// cancelled, or expires changes nothing. The transcript corrects the
 	// value when it shows another one.
-	d.emit(evQueueText{threadID: th.ID, orig: orig, tgMsg: tgMsg, text: text, kind: "text", action: inbound.ActText,
+	d.emit(evQueueText{threadID: th.ID, orig: orig, tgMsg: tgMsg, text: text, kind: kindControl, action: inbound.ActText,
 		ctl: &ctlSet{conv: conv.ID, name: c.Name, value: v}})
 }
 

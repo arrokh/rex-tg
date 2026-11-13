@@ -30,6 +30,7 @@ type Timing struct {
 	DeadlineWarn time.Duration // a prompt with a time limit is reminded of this long before it blocks (30 s)
 	AlertFollow  time.Duration // after an answer, when the screen is read for the next question; again at 3x (1 s)
 	LongPoll     time.Duration // how long a getUpdates call waits for updates, whole seconds (25 s)
+	WaitNotice   time.Duration // how long a message waits before it gets the waiting notice (3 s)
 }
 
 // withDefaults fills the zero fields with the production values.
@@ -62,5 +63,6 @@ func (t Timing) withDefaults() Timing {
 	def(&t.DeadlineWarn, 30*time.Second)
 	def(&t.AlertFollow, time.Second)
 	def(&t.LongPoll, longPollSeconds*time.Second)
+	def(&t.WaitNotice, 3*time.Second)
 	return t
 }

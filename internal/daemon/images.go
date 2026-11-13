@@ -146,15 +146,16 @@ func findFiles(md, home, cwd string, exts map[string]bool) []string {
 	seen := map[string]bool{}
 	for _, c := range imageCandidates(md) {
 		p := resolveImage(c, home, cwd, exts)
-		if p == "" || seen[p] {
+		if p == "" {
 			continue
 		}
-		seen[p] = true
-		fi, err := os.Stat(p)
+		real, ok := placeOK(p, home, cwd)
+		if !ok || seen[real] { // one file named twice, also by a link, goes once
+			continue
+		}
+		seen[real] = true
+		fi, err := os.Stat(real)
 		if err != nil || !fi.Mode().IsRegular() || fi.Size() == 0 || fi.Size() > maxImageBytes {
-			continue
-		}
-		if _, ok := placeOK(p, home, cwd); !ok {
 			continue
 		}
 		out = append(out, p)

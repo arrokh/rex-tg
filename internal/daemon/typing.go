@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"rex-tg/internal/agents"
@@ -35,10 +36,61 @@ const (
 type prepResult struct {
 	kind   prepKind
 	reason string
+	notice string // the waiting notice's text (prepWait)
 	pane   store.Pane
 	rt     agents.Runtime
 	conv   int64 // the session the checks were made for
+	// guard: the agent works, so a prompt may open at any moment. The
+	// screen is read for one right before the paste and before Enter.
+	guard bool
 }
+
+// Kinds of queued rows that wait until the agent is idle even when
+// input.while_busy is "steer": an agent's setting command (/model), and the
+// note of a prompt answer, which belongs after the answer's turn.
+const (
+	kindControl = "control"
+	kindNote    = "note"
+)
+
+// steerable tells whether a queued row may join a running turn: the user's
+// own text, a file, or a voice note, but not an agent command (//compact,
+// a control) or a shell command (!ls), which want an idle agent.
+func steerable(in store.Inbound) bool {
+	switch in.Kind {
+	case "text", "file", "voice":
+	default:
+		return false
+	}
+	b := strings.TrimSpace(in.Body)
+	return !strings.HasPrefix(b, "/") && !strings.HasPrefix(b, "!")
+}
+
+// The waiting notice says what the message waits for.
+const (
+	waitPromptText = "⏳ Waiting until the prompt is answered."
+	waitTakeText   = "⏳ Waiting for the agent to take your last message."
+	waitReadyText  = "⏳ Waiting until the agent can take it."
+)
+
+// waitNotice is the text of the waiting notice of a message that waits for
+// reason. A message that would not steer waits until the agent is idle.
+func waitNotice(reason string, canSteer bool) string {
+	if !canSteer {
+		return waitNoticeText
+	}
+	switch reason {
+	case registry.ReasonBlocked, reasonPromptShown:
+		return waitPromptText
+	case registry.ReasonJustTyped:
+		return waitTakeText
+	}
+	return waitReadyText
+}
+
+// reasonPromptShown: an alert is open while the agent's state still says
+// working.
+const reasonPromptShown = "the agent shows a prompt"
 
 // baseFacts gathers the facts about a topic that need no call to Rex.
 func (d *daemon) baseFacts(ctx context.Context, th store.Thread) (inbound.Facts, store.Pane, error) {
@@ -207,7 +259,10 @@ func (d *daemon) pump(now time.Time) {
 // runs in a worker: it calls Rex.
 func (d *daemon) prepare(th store.Thread, in store.Inbound, act inbound.Action) prepResult {
 	ctx := d.ctx
-	wait := func(reason string) prepResult { return prepResult{kind: prepWait, reason: reason} }
+	var canSteer bool // set once the agent is known
+	wait := func(reason string) prepResult {
+		return prepResult{kind: prepWait, reason: reason, notice: waitNotice(reason, canSteer)}
+	}
 	refuse := func(reason string) prepResult { return prepResult{kind: prepRefuse, reason: reason} }
 
 	f, pane, err := d.baseFacts(ctx, th)
@@ -218,14 +273,29 @@ func (d *daemon) prepare(th store.Thread, in store.Inbound, act inbound.Action) 
 		_, reason := inbound.Check(act, f)
 		return refuse(reason)
 	}
+	rt := agents.Runtime("")
+	if conv, err := d.st.Conversation(ctx, th.CurrentConversationID); err == nil {
+		rt = conv.Runtime
+	}
+	canSteer = steerable(in) && d.steers(rt)
+	steer := false
 	if act == inbound.ActText {
 		ready, why, err := d.reg.Ready(ctx, pane.ID, d.now())
 		if err != nil {
 			return wait("the registry is busy")
 		}
-		if !ready {
+		// While the agent works, a message steers the run when that is on:
+		// the same typing as ⚡ Send now. A prompt, a message just typed
+		// (not taken yet), or an unknown state still waits.
+		if !ready && !(why == registry.ReasonWorking && canSteer) {
 			return wait(why)
 		}
+		if !ready && f.PromptOpen {
+			// A prompt may be on its way while the state still says
+			// working: wait for it to end, as a message sent then would.
+			return wait(reasonPromptShown)
+		}
+		steer = !ready
 	}
 	proc, err := d.rx.Process(ctx, pane.Session, pane.Block)
 	if err != nil {
@@ -236,11 +306,22 @@ func (d *daemon) prepare(th store.Thread, in store.Inbound, act inbound.Action) 
 	if ok, reason := inbound.Check(act, f); !ok {
 		return refuse(reason)
 	}
-	rt := agents.Runtime("")
-	if conv, err := d.st.Conversation(ctx, th.CurrentConversationID); err == nil {
-		rt = conv.Runtime
+	return prepResult{kind: prepGo, pane: pane, rt: rt, conv: th.CurrentConversationID,
+		guard: steer || act == inbound.ActSendNow}
+}
+
+// steers reports whether a message sent while an agent of runtime rt works
+// is typed at once (input.while_busy = "steer"). The agent must take Enter
+// while it works in a known way: steer or queue (agents.<rt>.while_working).
+func (d *daemon) steers(rt agents.Runtime) bool {
+	if d.cfg.InputSettings.WhileBusy != "steer" || rt == "" {
+		return false
 	}
-	return prepResult{kind: prepGo, pane: pane, rt: rt, conv: th.CurrentConversationID}
+	switch d.cfg.Input(rt).WhileWorking {
+	case "steer", "queue":
+		return true
+	}
+	return false
 }
 
 func (d *daemon) stillQueued(threadID, updateID int64) bool {
@@ -274,9 +355,12 @@ func (d *daemon) onPrepared(e evPrepared) {
 	case prepWait:
 		// The flag is kept in memory and in the row's reason, so a restart
 		// does not post the waiting notice again.
-		if !d.waitNoticed[e.in.UpdateID] && e.in.Reason != reasonWaitNoticed {
+		// A short wait gets no notice: a message that the agent takes
+		// within seconds (a busy window, a prompt answered) would only
+		// flash one.
+		if !d.waitNoticed[e.in.UpdateID] && e.in.Reason != reasonWaitNoticed && d.now().Sub(e.in.CreatedAt) >= d.timing.WaitNotice {
 			d.waitNoticed[e.in.UpdateID] = true
-			d.postWaitNotice(th, e.in.UpdateID)
+			d.postWaitNotice(th, e.in.UpdateID, e.res.notice)
 			if err := d.st.SetInboundState(d.ctx, e.in.UpdateID, store.InboundQueued, reasonWaitNoticed, d.now()); err != nil {
 				d.log.Warn("waiting: state", "err", err)
 			}
@@ -375,9 +459,9 @@ func (d *daemon) startTyping(th store.Thread, in store.Inbound, res prepResult) 
 			submit = ip.SubmitKey
 		}
 	}
-	pane, text, piVim, claudeVim := res.pane, in.Body, res.rt == agents.Pi, res.rt == agents.Claude
+	pane, text, piVim, claudeVim, guard := res.pane, in.Body, res.rt == agents.Pi, res.rt == agents.Claude, res.guard
 	d.spawn(func() {
-		err := d.typeInto(pane, text, delay, submit, piVim, claudeVim)
+		err := d.typeInto(pane, text, delay, submit, piVim, claudeVim, guard)
 		d.emit(evTyped{thread: th.ID, in: in, err: err})
 	})
 }
@@ -387,6 +471,7 @@ var (
 	errPausedBefore = errors.New("typing is paused")
 	errGoneBefore   = errors.New("the agent is not in front")
 	errRetryBefore  = errors.New("the pane could not be checked")
+	errPromptBefore = errors.New("a prompt is on the screen")
 	errStoppedAfter = errors.New("the text was pasted but Enter was not pressed")
 	errPaste        = errors.New("the paste failed")
 	errSubmit       = errors.New("pressing the submit key failed")
@@ -405,10 +490,22 @@ func (d *daemon) safeNow(pane store.Pane) (paused, inFront bool, err error) {
 	return false, registry.AgentInFront(proc, pane.PID, pane.ProcessName), nil
 }
 
+// promptShown reads the screen and tells whether it shows a prompt that
+// waits for a key (a numbered list with a cursor at the bottom).
+func (d *daemon) promptShown(pane store.Pane) (bool, error) {
+	screen, err := d.rx.Capture(d.ctx, pane.Session, pane.Block)
+	if err != nil {
+		return false, err
+	}
+	return parsePromptView(lastLines(screen, alertLines), true).ok, nil
+}
+
 // typeInto pastes the text, waits, and presses the submit key. The safety
-// checks run again before the paste and before the submit key. Errors never
-// carry Rex's output, which could hold the typed text.
-func (d *daemon) typeInto(pane store.Pane, text string, delay time.Duration, submit string, piVim, claudeVim bool) error {
+// checks run again before the paste and before the submit key. With guard
+// (the agent works), the screen must also show no prompt at both points: a
+// paste would go into the prompt, and Enter would pick its answer. Errors
+// never carry Rex's output, which could hold the typed text.
+func (d *daemon) typeInto(pane store.Pane, text string, delay time.Duration, submit string, piVim, claudeVim, guard bool) error {
 	ctx := d.ctx
 	paused, front, err := d.safeNow(pane)
 	switch {
@@ -456,6 +553,14 @@ func (d *daemon) typeInto(pane store.Pane, text string, delay time.Duration, sub
 			}
 		}
 	}
+	if guard {
+		switch shown, err := d.promptShown(pane); {
+		case err != nil:
+			return errRetryBefore
+		case shown:
+			return errPromptBefore
+		}
+	}
 	if err := d.rx.Paste(ctx, pane.Session, pane.Block, text); err != nil {
 		return errPaste
 	}
@@ -465,6 +570,11 @@ func (d *daemon) typeInto(pane store.Pane, text string, delay time.Duration, sub
 	// Enter must not reach a shell, and /pause must stop it too.
 	if paused, front, err := d.safeNow(pane); err != nil || paused || !front {
 		return errStoppedAfter
+	}
+	if guard {
+		if shown, err := d.promptShown(pane); err != nil || shown {
+			return errStoppedAfter // a prompt came up after the paste
+		}
 	}
 	if err := d.rx.SendKeys(ctx, pane.Session, pane.Block, submit); err != nil {
 		return errSubmit
@@ -482,10 +592,14 @@ func (d *daemon) onTyped(e evTyped) {
 	d.dirty[e.thread] = true
 	now := d.now()
 	switch {
-	case errors.Is(e.err, errPausedBefore), errors.Is(e.err, errRetryBefore):
-		// Nothing was typed. The message waits and is checked again.
-		if err := d.st.SetInboundState(d.ctx, e.in.UpdateID, store.InboundQueued, "", now); err != nil {
+	case errors.Is(e.err, errPausedBefore), errors.Is(e.err, errRetryBefore), errors.Is(e.err, errPromptBefore):
+		// Nothing was typed. The message waits and is checked again; after
+		// a prompt on the screen, not before a second has passed.
+		if err := d.st.SetInboundState(d.ctx, e.in.UpdateID, store.InboundQueued, e.in.Reason, now); err != nil {
 			d.log.Warn("typing: state", "err", err)
+		}
+		if errors.Is(e.err, errPromptBefore) {
+			d.nextPrep[e.thread] = now.Add(max(time.Second, d.timing.Prep))
 		}
 		return
 	case errors.Is(e.err, errGoneBefore):

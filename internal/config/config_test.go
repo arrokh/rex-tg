@@ -45,7 +45,8 @@ func TestDefaults(t *testing.T) {
 		t.Errorf("display = %+v", c.Display)
 	}
 	if c.InputSettings.QueueExpiry.Duration != 30*time.Minute || c.InputSettings.BusyAfterTyping.Duration != 15*time.Second ||
-		c.InputSettings.JoinWindow.Duration != 300*time.Millisecond || c.InputSettings.JoinWindowLong.Duration != 1500*time.Millisecond {
+		c.InputSettings.JoinWindow.Duration != 300*time.Millisecond || c.InputSettings.JoinWindowLong.Duration != 1500*time.Millisecond ||
+		c.InputSettings.WhileBusy != "steer" {
 		t.Errorf("input = %+v", c.InputSettings)
 	}
 	if c.DBPath() != "/h/.local/state/rex-tg/rex-tg.db" || c.SpoolDir() != "/h/.local/state/rex-tg/spool" ||
@@ -198,6 +199,7 @@ func TestLoadErrors(t *testing.T) {
 		{"negative duration", "[rex]\nscan_interval = \"-1s\"\n", "negative"},
 		{"bad mode", "[display]\nmode = \"loud\"\n", "display.mode"},
 		{"bad while working", "[agents.pi]\nwhile_working = \"x\"\n", "while_working"},
+		{"bad while busy", "[input]\nwhile_busy = \"later\"\n", "input.while_busy"},
 		{"empty launch", "[agents.codex]\nlaunch = []\n", "agents.codex.launch"},
 		{"blank launch", "[agents.pi]\nlaunch = [\" \"]\n", "agents.pi.launch"},
 		{"syntax", "[rex\n", "parse"},

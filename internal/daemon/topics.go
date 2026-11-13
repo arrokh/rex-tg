@@ -559,7 +559,11 @@ func (d *daemon) introCard(th store.Thread, conv store.Conversation, title strin
 	if conv.CWD != "" {
 		fmt.Fprintf(&b, "\nFolder: <code>%s</code>", format.Escape(d.tildePath(conv.CWD)))
 	}
-	fmt.Fprintf(&b, "\nMode: %s · Input: waits until idle", format.Escape(th.Mode))
+	input := "waits until idle"
+	if d.cfg.InputSettings.WhileBusy == "steer" {
+		input = "joins the running turn"
+	}
+	fmt.Fprintf(&b, "\nMode: %s · Input: %s", format.Escape(th.Mode), input)
 	b.WriteString("\nWrite here to type into the pane. /help lists the commands.")
 	return b.String()
 }

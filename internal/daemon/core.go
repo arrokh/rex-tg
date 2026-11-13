@@ -219,6 +219,7 @@ func newDaemon(cfg config.Config, home string, log *slog.Logger, now func() time
 	}
 	d := &daemon{
 		cfg: cfg, timing: timing, home: home, log: log, now: now, st: st, tg: tg, rx: rx, snd: snd, adapters: adapters,
+		polled:      &atomic.Int64{}, // Run shares its own with the sender
 		events:      make(chan any, 256),
 		regq:        newJobQueue(),
 		tailers:     map[int64]*tailer{},
