@@ -92,6 +92,7 @@ Doctor checks:
 - An agent marked `(guess)` has no hook report yet. rex-tg took the newest transcript in the agent's folder that changed after the agent started.
 - An agent marked `(waiting for session)` has no known session file yet. rex-tg learns it at the agent's next prompt or turn end.
 - A topic is named after the name you gave its Rex tab (see below), else its Rex pane when you named the pane, else the agent's session name. The name follows changes of all three.
+- `/rename <name>` in a topic names the topic, and its Rex tab when the agent was started with `/new`. The name sticks; `/rename auto` names the topic after the agent's session again. An agent cannot rename its topic: asked to, it may rename its Rex session instead, and rex-tg names the session for `/new` back to `rex-tg`.
 - A name starts with a letter or digit, because Telegram draws a topic's icon from its first character. Stopped topics (🔴) get the same cleanup. pi's `[folder][kind]` tags before a session name go: the folder tag is dropped, and other tags move to the end. Markdown marks (`**`, `` ` ``) and leading symbols go too.
 - A new session in the same pane, such as after the agent's `/clear`, takes over the topic. The bot posts a divider, such as `── claude · new session (clear) ──`.
 - After a Rex restart, the topic follows the session when the agent resumes in its pane.

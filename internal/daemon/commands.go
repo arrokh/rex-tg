@@ -43,6 +43,7 @@ const (
 		"/reasoning on|off\n" +
 		"/resend [id] - send again a reply that may not have arrived (the newest one without an id)\n" +
 		"/mute, /unmute - answers without or with sound\n" +
+		"/rename &lt;name&gt; - rename this topic (and its Rex tab); /rename auto names it after the session again\n" +
 		"/unlink - stop mirroring this session\n" +
 		"/help - this list"
 )
@@ -379,6 +380,8 @@ func (d *daemon) topicCommand(u telegram.Update, m *telegram.Message, th store.T
 		d.resend(th, upd, r.Args)
 	case "unlink":
 		d.unlink(th)
+	case "rename":
+		d.renameCommand(th, r.Args, func(html string) { reply("rename", html) })
 	case "mute", "unmute":
 		d.setMuted(th, r.Command == "mute")
 		if r.Command == "mute" {

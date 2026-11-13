@@ -648,3 +648,35 @@ func (d *daemon) introCard(th store.Thread, conv store.Conversation, title strin
 	b.WriteString("\nWrite here to type into the pane. /help lists the commands.")
 	return b.String()
 }
+
+// renameCommand is /rename <name> in a topic (core). An agent cannot rename
+// its topic, and an agent asked to do so may rename its Rex session instead
+// (which, for the session of /new, rex-tg names back). /rename names the
+// topic, and its tab in the session of /new, as a tab name that you gave
+// would: the name sticks until /rename auto, or until the tab gets the
+// "<folder> · <agent>" form again.
+func (d *daemon) renameCommand(th store.Thread, args string, reply func(string)) {
+	name := cleanLabel(strings.Join(strings.Fields(format.Redact(args)), " "))
+	switch {
+	case name == "":
+		reply("Usage: /rename &lt;name&gt; names this topic, and its Rex tab when the agent was started with /new. /rename auto names it after the agent's session again.")
+		return
+	case strings.EqualFold(name, "auto"):
+		if err := d.st.Delete(d.ctx, tabUserKey(th.ID)); err != nil {
+			reply("Could not change the name now. Try again.")
+			return
+		}
+		reply("✏️ This topic is named after the agent's session again.")
+	default:
+		if tidyName(name, "") == "" {
+			reply("A name needs a letter or a digit.")
+			return
+		}
+		if err := d.st.Set(d.ctx, tabUserKey(th.ID), name); err != nil {
+			reply("Could not change the name now. Try again.")
+			return
+		}
+		reply("✏️ Renaming this topic to <b>" + format.Escape(shortName(tidyName(name, ""), maxTopicName)) + "</b>.")
+	}
+	d.onRename(evRename{thread: th.ID})
+}
