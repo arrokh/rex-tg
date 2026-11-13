@@ -186,6 +186,10 @@ func firstLine(s string) string {
 // so a button made before the list changed sends nothing wrong.
 const quickReplyData = "qr"
 
+// quickPerRow is how many quick replies share a row: on a phone, more cut
+// their labels ("Conti…").
+const quickPerRow = 2
+
 func quickHash(text string) string {
 	h := sha256.Sum256([]byte(text))
 	return hex.EncodeToString(h[:4])
@@ -241,7 +245,7 @@ func answerButtons(st *store.Store, quick []string, base string, thread int64, k
 			continue
 		}
 		row = append(row, telegram.InlineKeyboardButton{Text: q, CallbackData: fmt.Sprintf("%s:%d:%s", quickReplyData, i, quickHash(q))})
-		if len(row) == 4 {
+		if len(row) == quickPerRow {
 			rows, row = append(rows, row), nil
 		}
 	}
