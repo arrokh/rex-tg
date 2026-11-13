@@ -53,6 +53,7 @@ const (
 // none (Error).
 type Screen struct {
 	Text  string `json:"text,omitempty"`
+	VT    string `json:"vt,omitempty"` // the same lines with their colors (SGR sequences only); "" for none
 	At    string `json:"at,omitempty"` // when it was read, "15:04:05"
 	Error string `json:"error,omitempty"`
 }
@@ -169,7 +170,16 @@ var appHTML []byte
 //go:embed app.js
 var appJS []byte
 
-// Handler serves /app (the page shell), /app.js, /api/page?id=…,
+// xterm.js draws the live screen as a terminal (third_party/README.md).
+var (
+	//go:embed third_party/xterm-5.5.0.js
+	xtermJS []byte
+	//go:embed third_party/xterm-5.5.0.css
+	xtermCSS []byte
+)
+
+// Handler serves /app (the page shell), /app.js, the terminal library,
+// /api/page?id=…,
 // /api/screen?id=… and /api/files?id=…&path=…
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
@@ -180,6 +190,17 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /app.js", func(w http.ResponseWriter, r *http.Request) {
 		s.headers(w, "text/javascript; charset=utf-8")
 		_, _ = w.Write(appJS)
+	})
+	// The terminal library: versioned names, so they can be kept long.
+	mux.HandleFunc("GET /xterm-5.5.0.js", func(w http.ResponseWriter, r *http.Request) {
+		s.headers(w, "text/javascript; charset=utf-8")
+		w.Header().Set("Cache-Control", "public, max-age=604800, immutable")
+		_, _ = w.Write(xtermJS)
+	})
+	mux.HandleFunc("GET /xterm-5.5.0.css", func(w http.ResponseWriter, r *http.Request) {
+		s.headers(w, "text/css; charset=utf-8")
+		w.Header().Set("Cache-Control", "public, max-age=604800, immutable")
+		_, _ = w.Write(xtermCSS)
 	})
 	mux.HandleFunc("GET /api/page", s.page)
 	mux.HandleFunc("GET /api/screen", s.liveScreen)
@@ -193,7 +214,7 @@ func (s *Server) headers(w http.ResponseWriter, ctype string) {
 	h.Set("Cache-Control", "no-store")
 	h.Set("X-Content-Type-Options", "nosniff")
 	h.Set("Referrer-Policy", "no-referrer")
-	h.Set("Content-Security-Policy", "default-src 'none'; script-src 'self' https://telegram.org; style-src 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'")
+	h.Set("Content-Security-Policy", "default-src 'none'; script-src 'self' https://telegram.org; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'")
 }
 
 // allowed checks that a request is the owner's, signed by Telegram. It

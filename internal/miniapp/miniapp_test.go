@@ -115,6 +115,13 @@ func TestPageOnlyForTheOwner(t *testing.T) {
 	if err != nil || res.StatusCode != http.StatusOK || !strings.Contains(res.Header.Get("Content-Security-Policy"), "default-src 'none'") {
 		t.Fatalf("shell: %v %v", res, err)
 	}
+	// The terminal library comes from the same address, without a signature.
+	for _, p := range []string{"/xterm-5.5.0.js", "/xterm-5.5.0.css"} {
+		res, err := http.Get(srv.URL + p)
+		if err != nil || res.StatusCode != http.StatusOK || res.ContentLength == 0 {
+			t.Errorf("%s: %v %v", p, res, err)
+		}
+	}
 }
 
 func TestRenderDiff(t *testing.T) {

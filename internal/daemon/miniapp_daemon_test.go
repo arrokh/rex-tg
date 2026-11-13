@@ -318,8 +318,11 @@ func TestScreenOpensTheLiveScreen(t *testing.T) {
 	if code != http.StatusOK || !strings.Contains(text, "$ make test") {
 		t.Fatalf("screen: %d %v", code, body)
 	}
-	if strings.Contains(text, "abcdefghijklmnop") {
-		t.Errorf("the live screen shows a secret: %q", text)
+	if strings.Contains(text, "abcdefghijklmnop") || strings.Contains(fmt.Sprint(body["vt"]), "abcdefghijklmnop") {
+		t.Errorf("the live screen shows a secret: %q / %q", text, body["vt"])
+	}
+	if vt, _ := body["vt"].(string); !strings.Contains(vt, "$ make test\x1b[0m") {
+		t.Errorf("vt = %q, want the lines with a reset each", vt)
 	}
 	time.Sleep(1100 * time.Millisecond) // reads of one topic are a second apart
 	e.setScreen("$ make test\nok\n")

@@ -301,6 +301,16 @@ func (c *Client) Capture(ctx context.Context, session, block string) (string, er
 	return string(out), nil
 }
 
+// CaptureVT returns the text of a block like Capture, with the terminal's
+// control sequences (colors and styles) kept.
+func (c *Client) CaptureVT(ctx context.Context, session, block string) (string, error) {
+	out, err := c.run(ctx, "capture", nil, "capture", "-s", session, "-b", block, "--trim", "--format=vt")
+	if err != nil {
+		return "", err
+	}
+	return string(out), nil
+}
+
 // Paste sends a paste event to a block. The JSON goes through stdin, never argv.
 func (c *Client) Paste(ctx context.Context, session, block, text string) error {
 	body, err := json.Marshal(map[string]any{
