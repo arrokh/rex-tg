@@ -81,6 +81,7 @@ Your text goes to the agent. Text that starts with `/` also goes to the agent (f
 | `/reasoning on\|off` | Shows the agent's thinking, when the agent stores it. |
 | `/resend [id]` | Sends again a reply that may not have arrived. |
 | `/mute`, `/unmute` | Answers arrive without or with sound. |
+| `/at <time or delay> <text>` | Sends text to the agent later, such as `/at 09:00 run the tests` or `/at 30m check the build`. `/at` lists, `/at cancel <n>` removes one. |
 | `/unlink` | Closes the topic in rex-tg. |
 
 To send an agent a command that has a bot command's name, use two slashes: `//help` sends `/help` to the agent, and `//model` sends the agent's own `/model`.

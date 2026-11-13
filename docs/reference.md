@@ -139,6 +139,16 @@ Doctor checks:
 - Buttons for the model: Claude Code has `opus`, `sonnet`, `haiku`, and `fable`. Codex has the models in `~/.codex/models_cache.json`. pi has none, because it knows hundreds of models. Set your own with `[agents.<name>.choices]` (see Configuration).
 - `//model` still sends `/model` to the agent unchanged.
 
+### `/at`
+
+- `/at 09:00 run the tests and report` sends that text to the topic's agent at the next 09:00, by the clock of this Mac. If 09:00 has passed today, it is tomorrow's.
+- `/at 30m <text>` and `/at 2h <text>` send it after a delay. `1h30m` and `45s` work too. The longest delay is 30 days.
+- `/at` with no text lists the topic's schedules, numbered, with their times. `/at cancel <n>` removes one.
+- A topic holds at most 20 schedules. The text has the same limit as a reply, 4000 characters.
+- When the time comes, rex-tg posts a silent note, `⏰ Sending the scheduled message: …`, and queues the text as if you had typed it in the topic. All the usual checks apply: the agent must be in front, a prompt that is open makes it wait, `input.while_busy` decides whether it steers a running turn, and you get the waiting notice. Text that starts with `/` or `!` waits until the agent is idle.
+- Schedules are kept across a restart. A schedule that came due while rex-tg was not running is sent at once, with a note, when it is less than 1 hour late. When it is later, it is not sent, and the topic says `⏰ Missed: … (rex-tg was not running at 09:00)`.
+- A schedule is removed when it is sent, cancelled, or its topic closes. A schedule is sent once, also across a restart.
+
 ### Progress and answers
 
 - Only two kinds of message make a sound: the agent's answer (its first message) and a prompt that waits for you (an alert or its reminder). Progress, notices, the waiting notice, and replies to commands come silently.

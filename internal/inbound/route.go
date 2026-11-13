@@ -36,7 +36,7 @@ type Route struct {
 }
 
 var topicCommands = setOf("info", "screen", "approve", "deny", "esc", "interrupt",
-	"key", "force", "model", "effort", "mode", "verbose", "reasoning", "resend", "unlink", "mute", "unmute", "rename", "help")
+	"key", "force", "model", "effort", "mode", "verbose", "reasoning", "resend", "unlink", "mute", "unmute", "rename", "at", "help")
 
 var mainCommands = setOf("start", "agents", "new", "topics", "status", "pause", "unpause", "help")
 

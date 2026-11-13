@@ -213,6 +213,9 @@ type daemon struct {
 	boardLoaded          bool                    // board was read from the store
 	reminders            map[int64]*reminder     // reminders of open alerts, by alert
 	lastRemind           time.Time               // the last look for due reminders
+	sched                map[int64]schedule      // scheduled messages (/at), by id
+	schedLoaded          bool                    // sched was read from the store
+	lastSched            time.Time               // the last look for due schedules
 	remindSwept          bool                    // stale reminders of closed alerts were dropped
 	macSwept             bool                    // with MacNotice off, holds from before the start were cleared
 	ctlPending           map[int64]ctlSet        // queued control commands, by row id
@@ -266,6 +269,7 @@ func newDaemon(cfg config.Config, home string, log *slog.Logger, now func() time
 		alertWanted:  map[int64]string{},
 		liveText:     map[int64]liveText{},
 		reminders:    map[int64]*reminder{},
+		sched:        map[int64]schedule{},
 		ctlPending:   map[int64]ctlSet{},
 		vimNoticed:   map[int64]bool{},
 		alertBusy:    map[int64]bool{},
@@ -518,6 +522,7 @@ func (d *daemon) tick() {
 	}
 	d.tickBoard(now)
 	d.tickReminders(now)
+	d.tickSchedules(now)
 	d.sweepMacNotices()
 	d.checkUpdate(now)
 }
@@ -574,6 +579,7 @@ func (d *daemon) closeThread(threadID int64) {
 		}
 	}
 	d.closeAlerts(th, store.AlertGone)
+	d.dropSchedules(threadID)
 	// Messages that still wait for this topic can never be typed.
 	if qs, err := d.st.QueuedInbound(d.ctx, threadID); err == nil {
 		for _, q := range qs {
