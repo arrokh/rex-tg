@@ -976,10 +976,15 @@ func TestOneWaitNoticeForAllWaitingMessages(t *testing.T) {
 	working(e, e.pi, thread)
 	e.say(thread, "first thing")
 	notice := e.waitText(thread, "Waiting until the agent is idle")
-	e.say(thread, "second thing")
-	e.waitFor("the notice counts both", func() bool {
+	e.say(thread, "//compact")
+	e.waitFor("the notice counts two", func() bool {
 		m, _ := e.message(notice.ID)
-		return strings.Contains(m.Text, "2 messages wait until the agent is idle") && buttonData(m, "Send all now") != ""
+		return strings.Contains(m.Text, "2 messages wait")
+	})
+	e.say(thread, "second thing")
+	e.waitFor("the notice counts all three", func() bool {
+		m, _ := e.message(notice.ID)
+		return strings.Contains(m.Text, "3 messages wait until the agent is idle") && buttonData(m, "Send all now") != ""
 	})
 	n := 0
 	for _, m := range e.botMessages(thread) {
@@ -996,6 +1001,26 @@ func TestOneWaitNoticeForAllWaitingMessages(t *testing.T) {
 	if got := e.pastes(); got[0] != "first thing" || got[1] != "second thing" {
 		t.Errorf("pasted %q, want both in order", got)
 	}
+	// The agent command still waits until the agent is idle.
+	e.never("the agent command typed into the run", 500*time.Millisecond, func() bool { return len(e.pastes()) > 2 })
+}
+
+// An approved command can run for minutes and write no transcript line
+// until it ends. The screen of a blocked pane is read on a clock too, so
+// a waiting message goes in once the prompt is gone.
+func TestAnsweredPromptIsSeenWithoutATranscriptLine(t *testing.T) {
+	e, p, thread := piTopicCfg(t, "pi-unblock-clock", func(e *env) { e.cfg.InputSettings.WhileBusy = "steer" })
+	p.User("busy work")
+	p.ToolCall("c1", "make release")
+	e.waitFor("the progress message", func() bool { return e.hasText(thread, "⏱") })
+	e.setScreen(permScreen)
+	e.setStatus("blocked", "permission")
+	e.waitText(thread, "Permission needed")
+	e.say(thread, "tell me when it is done")
+	e.waitText(thread, "Waiting until the prompt is answered")
+	e.never("typing while the prompt is open", 400*time.Millisecond, func() bool { return len(e.pastes()) > 0 })
+	e.setScreen("") // answered on the Mac; the command runs, the transcript stays quiet
+	e.waitFor("the waiting message typed", func() bool { return len(e.pastes()) == 1 })
 }
 
 func TestSendNowAndCancelButtons(t *testing.T) {

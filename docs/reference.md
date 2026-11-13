@@ -91,7 +91,7 @@ Doctor checks:
 - Tap an agent in the list: if the session already has a topic, you get a link to it. If you deleted that topic, a new one is made for the same session.
 - An agent marked `(guess)` has no hook report yet. rex-tg took the newest transcript in the agent's folder that changed after the agent started.
 - An agent marked `(waiting for session)` has no known session file yet. rex-tg learns it at the agent's next prompt or turn end.
-- A topic is named after its Rex pane when you named the pane, else after the agent's session name. The name follows changes of both.
+- A topic is named after the name you gave its Rex tab (see below), else its Rex pane when you named the pane, else the agent's session name. The name follows changes of all three.
 - A name starts with a letter or digit, because Telegram draws a topic's icon from its first character. Stopped topics (🔴) get the same cleanup. pi's `[folder][kind]` tags before a session name go: the folder tag is dropped, and other tags move to the end. Markdown marks (`**`, `` ` ``) and leading symbols go too.
 - A new session in the same pane, such as after the agent's `/clear`, takes over the topic. The bot posts a divider, such as `── claude · new session (clear) ──`.
 - After a Rex restart, the topic follows the session when the agent resumes in its pane.
@@ -103,7 +103,7 @@ Doctor checks:
 - Tap the agent, then tap a folder or send a path such as `~/work/app`. cux is one of the agents when it is installed.
 - The folder buttons, at most 6: the folders in `[rex] new_folders` first, in their order, then the folder of this topic's agent, then the folders where agents ran recently, newest first. A folder that no longer exists is left out.
 - Every tab goes into one Rex session, `rex-tg` (`[rex] new_session`). rex-tg makes the session when it is missing. If an agent in it renames the session, rex-tg names it back within 30 seconds.
-- A tab is named after its folder and agent, such as `app · pi`. The tab follows its topic name: at link time, and at the 30-second name check when its label differs. When you (or an agent, with `rex window rename`) rename the tab, rex-tg keeps that name, and the topic takes it at the next name check. When the topic has only the folder name, the tab keeps the `<folder> · <agent>` form. Two tabs with one name get ` #2`, ` #3`. Tabs in other Rex sessions are never renamed.
+- A tab is named after its folder and agent, such as `app · pi`. The tab follows its topic name: at link time, and at the 30-second name check when its label differs. When you (or an agent, with `rex window rename`) rename the tab, rex-tg keeps that name, and the topic takes it at the next name check. Rename the tab back to its `<folder> · <agent>` form, such as `app · pi`, and rex-tg names the tab and the topic again. When the topic has only the folder name, the tab keeps the `<folder> · <agent>` form. Two tabs with one name get ` #2`, ` #3`. Tabs in other Rex sessions are never renamed.
 - The agent starts as if you typed its name in a terminal, so your `~/.zshrc` applies.
 - If the agent asks something before it starts, such as "trust this folder?", the question comes to the chat with a button per answer. A button moves the cursor there and presses Enter. rex-tg checks the screen after each key.
 - In a topic, `/new` also starts another agent. `//new` sends `/new` to the agent.
@@ -112,9 +112,9 @@ Doctor checks:
 
 - A message you send while the agent works joins the current run at once, as typing on the Mac does. Claude Code reads it after its current tool. Set `[input] while_busy = "wait"` to wait until the agent is idle instead.
 - A message still waits while a prompt is open, or for a moment right after another message was typed. Agent commands (`//compact`, `/model` buttons), shell commands (`!ls`), and the note of a prompt answer always wait until the agent is idle.
-- When you answer a prompt, on the Mac or in Telegram, the waiting messages go in as soon as the agent goes on. Claude Code and Codex send no signal for an answer, so rex-tg sees it when the agent's transcript goes on and its screen shows no prompt any more.
+- When you answer a prompt, on the Mac or in Telegram, the waiting messages go in as soon as rex-tg sees the prompt gone. Claude Code and Codex send no signal for an answer, so rex-tg reads the screen: when the agent's transcript goes on, and every 3 seconds while the pane waits (every 15 seconds after the first minute). Key hints such as `Esc to cancel` at the bottom of the screen mean a prompt is still there.
 - While the agent works, rex-tg reads the screen right before it types. If a prompt is on the screen, it waits instead of typing into it.
-- Messages that wait share one notice, on the oldest one, after it waited 3 seconds. It says what they wait for and how many wait, such as `⏳ 2 messages wait until the prompt is answered.`, with `⚡ Send all now` and `✖ Cancel all` (`⚡ Send now` and `✖ Cancel` for one). The notice goes away when the message is typed (👀, then 👍) or refused (👎).
+- Messages that wait share one notice, on the oldest one, after it waited 3 seconds. It says what they wait for and how many wait, such as `⏳ 2 messages wait until the prompt is answered.`, with `⚡ Send all now` and `✖ Cancel all` (`⚡ Send now` and `✖ Cancel` for one). `⚡ Send all now` sends the message the notice is on and your own messages behind it; an agent command or a shell command behind it still waits until the agent is idle. The notice goes away when the message is typed (👀, then 👍) or refused (👎).
 - Waiting messages go in the order you sent them. Each one is its own turn.
 - `⚡ Send now` types a waiting message at once. All three agents steer: the message joins the current run.
 - Telegram splits long messages into parts. rex-tg joins parts that arrive close together into one prompt. The window is 300 ms, or 1500 ms for long messages.

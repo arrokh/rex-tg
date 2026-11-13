@@ -143,31 +143,32 @@ func (e *env) options() daemon.Options {
 // production-length pauses. A test that checks one of these waits uses the
 // value from here.
 var testTiming = daemon.Timing{
-	Tick:         20 * time.Millisecond,
-	Prep:         50 * time.Millisecond,
-	WaitNotice:   50 * time.Millisecond,
-	TailPoll:     50 * time.Millisecond,
-	TailerGrace:  300 * time.Millisecond,
-	TailRestart:  300 * time.Millisecond,
-	VimPoll:      10 * time.Millisecond,
-	VimRetry:     300 * time.Millisecond,
-	Spool:        100 * time.Millisecond,
-	AnswerGrace:  600 * time.Millisecond,
-	StoppedGrace: 200 * time.Millisecond,
-	Typing:       500 * time.Millisecond,
-	NewAgentWait: 3 * time.Second,
-	NewAgentPoll: 50 * time.Millisecond,
-	CheckDelay:   100 * time.Millisecond,
-	UpdateCheck:  50 * time.Millisecond,
-	BoardEdit:    50 * time.Millisecond,
-	BoardRefresh: time.Hour, // tests trigger the board by state changes
-	RemindCheck:  50 * time.Millisecond,
-	Draft:        50 * time.Millisecond,
-	DraftKeep:    time.Hour, // a test of the refresh sets its own
-	LiveCheck:    30 * time.Millisecond,
-	DeadlineWarn: 400 * time.Millisecond,
-	AlertFollow:  100 * time.Millisecond,
-	LongPoll:     time.Second, // the shortest that Telegram takes
+	Tick:          20 * time.Millisecond,
+	Prep:          50 * time.Millisecond,
+	WaitNotice:    50 * time.Millisecond,
+	PromptRecheck: 100 * time.Millisecond,
+	TailPoll:      50 * time.Millisecond,
+	TailerGrace:   300 * time.Millisecond,
+	TailRestart:   300 * time.Millisecond,
+	VimPoll:       10 * time.Millisecond,
+	VimRetry:      300 * time.Millisecond,
+	Spool:         100 * time.Millisecond,
+	AnswerGrace:   600 * time.Millisecond,
+	StoppedGrace:  200 * time.Millisecond,
+	Typing:        500 * time.Millisecond,
+	NewAgentWait:  3 * time.Second,
+	NewAgentPoll:  50 * time.Millisecond,
+	CheckDelay:    100 * time.Millisecond,
+	UpdateCheck:   50 * time.Millisecond,
+	BoardEdit:     50 * time.Millisecond,
+	BoardRefresh:  time.Hour, // tests trigger the board by state changes
+	RemindCheck:   50 * time.Millisecond,
+	Draft:         50 * time.Millisecond,
+	DraftKeep:     time.Hour, // a test of the refresh sets its own
+	LiveCheck:     30 * time.Millisecond,
+	DeadlineWarn:  400 * time.Millisecond,
+	AlertFollow:   100 * time.Millisecond,
+	LongPoll:      time.Second, // the shortest that Telegram takes
 }
 
 // start runs the daemon in a goroutine.

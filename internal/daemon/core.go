@@ -167,12 +167,18 @@ type daemon struct {
 	// promptChecks are the sessions whose transcript went on while their
 	// pane may be blocked, by when to read the screen (checkPromptGone).
 	promptChecks map[int64]time.Time
-	renamedBack  time.Time  // the last rename back of the session for /new (under tabMu)
-	vimStuck     sync.Map   // pane id -> vimStuckMark: the vim label that showed no reaction to a key
-	newMu        sync.Mutex // held while /new finds or makes a session, see startTab
-	botUser      string     // set before the workers start
-	scanQueue    atomic.Bool
-	ctl          controlStore // latest setting values per session, see controls.go
+	// blockedSince holds the blocked panes' sessions, by when they were
+	// noted blocked, and recheckAt when their screen was last asked for
+	// (tickPromptChecks).
+	blockedSince  map[int64]time.Time
+	recheckAt     map[int64]time.Time
+	blockedScanAt time.Time
+	renamedBack   time.Time  // the last rename back of the session for /new (under tabMu)
+	vimStuck      sync.Map   // pane id -> vimStuckMark: the vim label that showed no reaction to a key
+	newMu         sync.Mutex // held while /new finds or makes a session, see startTab
+	botUser       string     // set before the workers start
+	scanQueue     atomic.Bool
+	ctl           controlStore // latest setting values per session, see controls.go
 
 	// core
 	ownerUser, ownerChat int64
@@ -231,6 +237,8 @@ func newDaemon(cfg config.Config, home string, log *slog.Logger, now func() time
 		polled:       &atomic.Int64{}, // Run shares its own with the sender
 		below:        map[int64]bool{},
 		promptChecks: map[int64]time.Time{},
+		blockedSince: map[int64]time.Time{},
+		recheckAt:    map[int64]time.Time{},
 		events:       make(chan any, 256),
 		regq:         newJobQueue(),
 		tailers:      map[int64]*tailer{},

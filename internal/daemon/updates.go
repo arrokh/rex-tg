@@ -310,8 +310,11 @@ func (d *daemon) threadOfMessage(m *telegram.Message) (store.Thread, bool) {
 	return th, err == nil && ok && th.Status != store.ThreadClosed
 }
 
-// sendNowButton is `⚡ Send now` on the topic's waiting notice: it types
-// every waiting message of the topic without waiting, in order.
+// sendNowButton is `⚡ Send now` on the topic's waiting notice: it types the
+// waiting messages of the topic without waiting, in order: the one the
+// notice is on, and the user's own text behind it. An agent command (a
+// /model button, //compact) or a shell command (!ls) behind it still waits
+// until the agent is idle; only its own notice sends it now.
 func (d *daemon) sendNowButton(cb *telegram.CallbackQuery, id int64) {
 	th, ok := d.threadOfMessage(cb.Message)
 	if !ok || !d.stillQueued(th.ID, id) {
@@ -319,9 +322,11 @@ func (d *daemon) sendNowButton(cb *telegram.CallbackQuery, id int64) {
 		return
 	}
 	n := 0
-	for _, q := range d.waitingRows(th.ID) {
-		d.actions[q] = inbound.ActSendNow
-		n++
+	for _, q := range d.waitingInbound(th.ID) {
+		if q.UpdateID == id || steerable(q) {
+			d.actions[q.UpdateID] = inbound.ActSendNow
+			n++
+		}
 	}
 	d.dirty[th.ID] = true
 	delete(d.nextPrep, th.ID)
@@ -333,18 +338,27 @@ func (d *daemon) sendNowButton(cb *telegram.CallbackQuery, id int64) {
 	d.removeButtons(cb.Message.Chat.ID, cb.Message.MessageID)
 }
 
-// waitingRows are the ids of a topic's waiting messages, oldest first, not
-// counting the parts that are being joined (core).
-func (d *daemon) waitingRows(threadID int64) []int64 {
+// waitingInbound is a topic's waiting messages, oldest first, not counting
+// the parts that are being joined (core).
+func (d *daemon) waitingInbound(threadID int64) []store.Inbound {
 	qs, err := d.st.QueuedInbound(d.ctx, threadID)
 	if err != nil {
 		return nil
 	}
-	var out []int64
+	var out []store.Inbound
 	for _, q := range qs {
 		if _, joining := d.joining[q.UpdateID]; !joining {
-			out = append(out, q.UpdateID)
+			out = append(out, q)
 		}
+	}
+	return out
+}
+
+// waitingRows are the ids of a topic's waiting messages (waitingInbound).
+func (d *daemon) waitingRows(threadID int64) []int64 {
+	var out []int64
+	for _, q := range d.waitingInbound(threadID) {
+		out = append(out, q.UpdateID)
 	}
 	return out
 }

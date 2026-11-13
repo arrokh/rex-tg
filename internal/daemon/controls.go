@@ -487,6 +487,22 @@ func (d *daemon) pruneControlRecords(now time.Time) {
 			}
 		}
 	}
+	// The tab names of topics that are closed or gone.
+	for _, prefix := range []string{"tab_set:", "tab_user:"} {
+		keys, err := d.st.KeysWithPrefix(d.ctx, prefix)
+		if err != nil {
+			continue
+		}
+		for _, k := range keys {
+			var tid int64
+			if _, err := fmt.Sscanf(strings.TrimPrefix(k, prefix), "%d", &tid); err != nil {
+				continue
+			}
+			if th, err := d.st.Thread(d.ctx, tid); errors.Is(err, store.ErrNotFound) || (err == nil && th.Status == store.ThreadClosed) {
+				_ = d.st.Delete(d.ctx, k)
+			}
+		}
+	}
 	if keys, err := d.st.KeysWithPrefix(d.ctx, "ctl:"); err == nil {
 		for _, k := range keys {
 			var conv int64

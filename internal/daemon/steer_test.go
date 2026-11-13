@@ -98,3 +98,19 @@ func TestScreenHasPrompt(t *testing.T) {
 		t.Error("a working screen counts as a prompt")
 	}
 }
+
+// Key hints count only at the bottom of the screen: the agent's own text
+// higher up may quote them.
+func TestPromptHintsOnlyAtTheBottom(t *testing.T) {
+	quoted := []string{
+		"⏺ The tool asks \"Do you want to proceed?\" and shows Esc to cancel.",
+		"  more output",
+		"  more output",
+		"  more output",
+		"  more output",
+		"✻ Working… (esc to interrupt)",
+	}
+	if screenHasPrompt(quoted, nil) {
+		t.Error("hints quoted in the agent's output count as a prompt")
+	}
+}
