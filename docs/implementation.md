@@ -36,7 +36,7 @@ This guide is the contract between the packages of rex-tg. [design.md](design.md
 | `internal/inbound` | Safety checks, waiting queue policy, echo matching | `agents` |
 | `internal/sender` | The only writer to Telegram: outbox, parts, rate limits, progress messages | `format`, `store`, `telegram` |
 | `internal/keychain` | The bot token in the macOS Keychain, through `security` | stdlib |
-| `internal/miniapp` | Mini App server: page signature check, page rendering, live screen, read-only file browser | goldmark |
+| `internal/miniapp` | Mini App server: page signature check, page rendering, live screen, read-only file browser, changes view | goldmark |
 | `internal/termimg` | The `/screen` picture (PNG), from terminal lines | `golang.org/x/image` |
 | `internal/daemon` | Wiring: core loop, sender, router, alerts, housekeeping | everything |
 | `cmd/rex-tg` | CLI: `daemon`, `hook`, `login`, `install`, `uninstall`, `status`, `doctor` | everything |
@@ -360,7 +360,7 @@ type Config struct {
 		Pi, Claude, Codex                                RuntimeInput
 	}
 	Display struct{ Mode string; Backfill, TurnImages int; ShowMacPrompts, MacNotice, ShowChanges bool; ProgressDelay, ProgressEditInterval Duration; QuickReplies []string }
-	MiniApp struct{ URL, Listen string; AnswerPreview int; Files bool } // URL empty turns the Mini App off
+	MiniApp struct{ URL, Listen string; AnswerPreview int; Files, Changes bool } // URL empty turns the Mini App off
 	Alerts  struct{ RemindAfter Duration; Reminders int } // 10m, 3; 0 turns reminders off
 	Input   struct{ QueueExpiry, JoinWindow, JoinWindowLong, BusyAfterTyping Duration; MaxUploadMB int }
 	Voice   struct{ WhisperCLI, Model, Language string } // optional; empty WhisperCLI turns voice notes off

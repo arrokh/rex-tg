@@ -35,6 +35,7 @@ const (
 		"/info - session, pane, and state\n" +
 		"/screen [lines] - the pane screen as an image; /screen text sends text\n" +
 		"/files - browse the agent's folder in the Mini App\n" +
+		"/changes - what changed in the agent's repository: not committed, on this branch, or in the last turn\n" +
 		"/approve, /deny - answer the open prompt\n" +
 		"/esc, /interrupt - press Escape, or stop the turn\n" +
 		"/key &lt;keys&gt; - press keys\n" +
@@ -341,6 +342,8 @@ func (d *daemon) topicCommand(u telegram.Update, m *telegram.Message, th store.T
 		d.screenCommand(th, upd, r.Args)
 	case "files":
 		d.filesCommand(th, upd)
+	case "changes":
+		d.changesCommand(th, upd)
 	case "approve", "deny":
 		d.spawn(func() { d.approveDeny(th, upd, r.Command == "approve") })
 	case "esc":

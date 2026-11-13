@@ -62,7 +62,7 @@ func TestRouteText(t *testing.T) {
 }
 
 func TestRouteTextAllCommands(t *testing.T) {
-	for _, c := range []string{"info", "screen", "files", "approve", "deny", "esc", "interrupt", "key", "force", "mode", "verbose", "reasoning", "resend", "unlink", "mute", "unmute", "help"} {
+	for _, c := range []string{"info", "screen", "files", "changes", "approve", "deny", "esc", "interrupt", "key", "force", "mode", "verbose", "reasoning", "resend", "unlink", "mute", "unmute", "help"} {
 		if r := inbound.RouteText("/"+c, true, "b"); r.Kind != inbound.RouteCommand || r.Command != c {
 			t.Errorf("topic /%s: %+v", c, r)
 		}
@@ -323,7 +323,11 @@ func TestMatchEcho(t *testing.T) {
 		{"exact oldest first", "same", []inbound.Delivered{d(2, "same", time.Minute), d(1, "same", 5*time.Minute)}, 1, true},
 		{"exact at 10 minutes", "x", []inbound.Delivered{d(1, "x", 10*time.Minute)}, 1, true},
 		{"exact too old", "x", []inbound.Delivered{d(1, "x", 10*time.Minute+time.Second)}, 0, false},
-		{"exact in the future", "x", []inbound.Delivered{d(1, "x", -time.Second)}, 0, false},
+		// Claude Code stamps a message typed while it works when it queues
+		// it, a moment before rex-tg records the delivery (seen live: 1 ms).
+		{"exact queued a moment before the delivery", "x", []inbound.Delivered{d(1, "x", -time.Millisecond)}, 1, true},
+		{"exact at the skew", "x", []inbound.Delivered{d(1, "x", -3*time.Second)}, 1, true},
+		{"exact too far in the future", "x", []inbound.Delivered{d(1, "x", -4*time.Second)}, 0, false},
 		{"prefix fallback", p40 + "XYZ", []inbound.Delivered{d(1, p40+"different tail", 10*time.Second)}, 1, true},
 		{"prefix fallback first wins", p40 + "1", []inbound.Delivered{d(2, p40+"b", 5*time.Second), d(1, p40+"c", 20*time.Second)}, 1, true},
 		{"prefix too old for fallback", p40 + "XYZ", []inbound.Delivered{d(1, p40+"tail", 31*time.Second)}, 0, false},

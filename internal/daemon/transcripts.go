@@ -531,7 +531,7 @@ func (d *daemon) onBatch(ev evBatch) {
 				d.turnStarted(conv.ID, conv.CWD, tr.Running())
 				if !e.Auto { // no person typed it, so it is no Telegram message
 					echo = d.echo(th, e, now)
-					if !echo && d.cfg.Display.MacNotice && d.typedRecently(th.ID, now) {
+					if !echo && d.cfg.Display.MacNotice && d.typedRecently(th.ID, e.At, now) {
 						// The text did not match, but rex-tg typed into this
 						// pane a moment ago. Never hold that turn: its answer
 						// would not reach Telegram.
@@ -591,14 +591,31 @@ func (d *daemon) onBatch(ev evBatch) {
 const typedRecentlyWindow = 30 * time.Second
 
 // typedRecently tells whether rex-tg is typing into a topic's pane, or typed
-// a message there within typedRecentlyWindow, whose prompt the transcript has
-// not shown yet. A message whose prompt was seen is no longer in question.
-func (d *daemon) typedRecently(thread int64, now time.Time) bool {
+// a message there whose prompt the transcript has not shown yet, within
+// typedRecentlyWindow before now or around the prompt's own time (at). A
+// message whose prompt was seen is no longer in question. The prompt's own
+// time counts because an agent may write a prompt long after it took it:
+// Claude Code writes a message typed while it works when the turn takes it
+// in.
+func (d *daemon) typedRecently(thread int64, at, now time.Time) bool {
 	if dl := d.delivering[thread]; dl != nil && dl.echoKey == "" {
 		return true
 	}
-	rows, err := d.st.DeliveredSince(d.ctx, thread, now.Add(-typedRecentlyWindow))
-	return err == nil && len(rows) > 0
+	from := now.Add(-typedRecentlyWindow)
+	if !at.IsZero() && at.Add(-typedRecentlyWindow).Before(from) {
+		from = at.Add(-typedRecentlyWindow)
+	}
+	rows, err := d.st.DeliveredSince(d.ctx, thread, from)
+	if err != nil {
+		return false
+	}
+	for _, r := range rows {
+		near := !at.IsZero() && r.DeliveredAt.Sub(at).Abs() <= typedRecentlyWindow
+		if near || !r.DeliveredAt.Before(now.Add(-typedRecentlyWindow)) {
+			return true
+		}
+	}
+	return false
 }
 
 // echo tells whether a transcript prompt is a message that rex-tg typed. An

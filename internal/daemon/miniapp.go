@@ -113,6 +113,7 @@ func (d *daemon) serveMiniApp(ctx context.Context) {
 		Handler: miniapp.NewWithSecret(d.miniSecret, owner, func(id string) (miniapp.Page, bool) { return loadPage(d.st, id) }, d.log).
 			WithScreen(d.liveScreen).
 			WithFiles(func() bool { return d.cfg.MiniApp.Files }, format.Redact).
+			WithChanges(func() bool { return d.cfg.MiniApp.Changes }, format.Redact, d.lastTurn).
 			Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
@@ -304,6 +305,12 @@ type evTurnTree struct {
 	t    turnTree
 }
 
+// evTurnRange is what a turn changed, for /changes (BaseTurn).
+type evTurnRange struct {
+	thread int64
+	r      miniapp.TurnRange
+}
+
 type evTurnChanges struct {
 	thread int64
 	key    string
@@ -349,9 +356,14 @@ func (d *daemon) turnAnswered(conv, thread int64, key string) {
 	if !ok || start.tree == "" {
 		return
 	}
+	at := d.now()
 	d.spawn(func() {
 		_, end, err := gitTree(d.ctx, start.top)
-		if err != nil || end == start.tree {
+		if err != nil {
+			return
+		}
+		d.emit(evTurnRange{thread: thread, r: miniapp.TurnRange{Top: start.top, From: start.tree, To: end, At: at}})
+		if end == start.tree {
 			return
 		}
 		st, diff, err := gitChanges(d.ctx, start.top, start.tree, end)
@@ -365,6 +377,42 @@ func (d *daemon) turnAnswered(conv, thread int64, key string) {
 		}
 		d.emit(evTurnChanges{thread: thread, key: key, page: id, label: label})
 	})
+}
+
+func lastTurnKey(thread int64) string { return fmt.Sprintf("last_turn:%d", thread) }
+
+// onTurnRange keeps what the topic's newest turn changed (core). A turn that
+// ended before the kept one does not replace it.
+func (d *daemon) onTurnRange(e evTurnRange) {
+	if old, ok := readLastTurn(d.st, e.thread); ok && old.At.After(e.r.At) {
+		return
+	}
+	b, err := json.Marshal(e.r)
+	if err == nil {
+		err = d.st.Set(d.ctx, lastTurnKey(e.thread), string(b))
+	}
+	if err != nil {
+		d.log.Warn("last turn: keep", "err", err)
+	}
+}
+
+// lastTurn is the newest turn of a changes page's topic, or the zero range
+// (the Mini App's server).
+func (d *daemon) lastTurn(p miniapp.Page) miniapp.TurnRange {
+	t, _ := readLastTurn(d.st, p.Thread)
+	return t
+}
+
+func readLastTurn(st *store.Store, thread int64) (miniapp.TurnRange, bool) {
+	v, ok, err := st.Get(context.Background(), lastTurnKey(thread))
+	if err != nil || !ok {
+		return miniapp.TurnRange{}, false
+	}
+	var t miniapp.TurnRange
+	if json.Unmarshal([]byte(v), &t) != nil {
+		return miniapp.TurnRange{}, false
+	}
+	return t, true
 }
 
 // onTurnChanges names the changes page under the answer, and puts its button on
@@ -585,7 +633,7 @@ func (d *daemon) prunePages(now time.Time) {
 		switch kind {
 		case miniapp.KindDiff:
 			age = diffMaxAge
-		case miniapp.KindScreen, miniapp.KindFiles:
+		case miniapp.KindScreen, miniapp.KindFiles, miniapp.KindChanges:
 			age = livePageMaxAge // since the last use
 		}
 		if perr != nil || now.Sub(time.Unix(at, 0)) > age {

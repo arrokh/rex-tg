@@ -304,20 +304,65 @@ var gitSlots = make(chan struct{}, 2)
 // gitCmd runs git in dir with a time limit, without the user's fsmonitor
 // (it can start a daemon).
 func gitCmd(ctx context.Context, dir string, stdin string, args ...string) ([]byte, error) {
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	return gitRun(ctx, dir, 5*time.Second, stdin, args...)
+}
+
+// maxGitOutput caps what one git call may print: more is an error.
+const maxGitOutput = 32 << 20
+
+// errGitOutput is a git call that printed more than its cap.
+var errGitOutput = errors.New("miniapp: git printed too much")
+
+// gitRun runs git in dir like gitCmd, with a time limit of its own. Output
+// beyond maxGitOutput is an error.
+func gitRun(ctx context.Context, dir string, limit time.Duration, stdin string, args ...string) ([]byte, error) {
+	out, over, err := gitOut(ctx, dir, limit, maxGitOutput, stdin, args...)
+	if over {
+		return nil, errGitOutput
+	}
+	return out, err
+}
+
+// capped keeps the first max bytes written to it. A write beyond them
+// fails, so git stops at once (a broken pipe).
+type capped struct {
+	b    bytes.Buffer
+	max  int
+	over bool
+}
+
+func (c *capped) Write(p []byte) (int, error) {
+	if room := c.max - c.b.Len(); len(p) > room {
+		c.b.Write(p[:max(room, 0)])
+		c.over = true
+		return 0, errGitOutput
+	}
+	return c.b.Write(p)
+}
+
+// gitOut runs git in dir and keeps the first max bytes of its output; over
+// tells that there was more (then err is nil).
+func gitOut(ctx context.Context, dir string, limit time.Duration, max int, stdin string, args ...string) (out []byte, over bool, err error) {
+	ctx, cancel := context.WithTimeout(ctx, limit)
 	defer cancel()
 	select { // a few at a time, however many requests come
 	case gitSlots <- struct{}{}:
 		defer func() { <-gitSlots }()
 	case <-ctx.Done():
-		return nil, ctx.Err()
+		return nil, false, ctx.Err()
 	}
 	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", dir, "-c", "core.fsmonitor=false"}, args...)...)
 	cmd.Env = append(os.Environ(), "GIT_OPTIONAL_LOCKS=0", "GIT_TERMINAL_PROMPT=0")
 	if stdin != "" {
 		cmd.Stdin = strings.NewReader(stdin)
 	}
-	return cmd.Output()
+	c := &capped{max: max}
+	cmd.Stdout = c
+	err = cmd.Run()
+	if c.over {
+		return c.b.Bytes(), true, nil
+	}
+	return c.b.Bytes(), false, err
 }
 
 // inRepo tells whether dir is in a git repository's work tree.

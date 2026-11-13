@@ -72,7 +72,8 @@ Your text goes to the agent. Text that starts with `/` also goes to the agent (f
 | --- | --- |
 | `/info` | Shows the agent's state. |
 | `/screen [lines]` | Sends the pane's screen as a picture, with secrets removed. `/screen text` sends text. With the Mini App, `🖥 Live screen` opens it live. |
-| `/files` | Opens the agent's folder in the Mini App, read-only. |
+| `/files` | Opens the agent's folder in the Mini App as a folder tree, read-only. |
+| `/changes` | Says what changed in the agent's git repository, and opens it in the Mini App: not committed, on this branch, or in the last turn. |
 | `/approve`, `/deny` | Answers the open permission prompt. |
 | `/esc`, `/interrupt`, `/key <keys>` | Sends Escape, stops the turn, or presses keys. |
 | `/force <text>` | Types text even when a prompt is open. |

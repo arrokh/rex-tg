@@ -1,6 +1,7 @@
 // Package miniapp serves rex-tg's Telegram Mini App: pages that are too big
 // for a chat message, such as an agent's long answer or the changes of a
-// turn, the live screen of a topic's pane, and the files of its folder. The
+// turn, the live screen of a topic's pane, the files of its folder, and the
+// changes of its repository. The
 // daemon keeps the pages and reads the screens; this package checks who
 // asks and renders them.
 //
@@ -33,11 +34,11 @@ import (
 
 // Page is what the Mini App shows.
 type Page struct {
-	Kind   string    `json:"kind"`             // KindAnswer, KindDiff, KindScreen or KindFiles
+	Kind   string    `json:"kind"`             // KindAnswer, KindDiff, KindScreen, KindFiles or KindChanges
 	Title  string    `json:"title"`            // a short title
 	Text   string    `json:"text"`             // Markdown (an answer) or a unified diff
-	Thread int64     `json:"thread,omitempty"` // the topic of a screen or files page
-	Dir    string    `json:"dir,omitempty"`    // the folder of a files page
+	Thread int64     `json:"thread,omitempty"` // the topic of a screen, files or changes page
+	Dir    string    `json:"dir,omitempty"`    // the folder of a files or changes page
 	At     time.Time `json:"at"`
 }
 
@@ -47,6 +48,8 @@ const (
 	KindDiff   = "diff"
 	KindScreen = "screen" // the live screen of a topic's pane
 	KindFiles  = "files"  // the files of a folder
+	// KindChanges is the changes of a repository, read when the page asks.
+	KindChanges = "changes"
 )
 
 // Screen is what the live screen shows: the pane's text, or why there is
@@ -67,14 +70,16 @@ const MaxAge = 24 * time.Hour
 
 // Server serves the Mini App.
 type Server struct {
-	secret []byte       // HMAC key from the bot token
-	owner  func() int64 // the paired owner's user id (0: none)
-	load   func(id string) (Page, bool)
-	screen func(Page) Screen   // nil: no live screen
-	files  func() bool         // whether the file browser is on (nil: off)
-	redact func(string) string // cleans a file's text before it is shown
-	now    func() time.Time
-	log    *slog.Logger
+	secret  []byte       // HMAC key from the bot token
+	owner   func() int64 // the paired owner's user id (0: none)
+	load    func(id string) (Page, bool)
+	screen  func(Page) Screen    // nil: no live screen
+	files   func() bool          // whether the file browser is on (nil: off)
+	changes func() bool          // whether the changes view is on (nil: off)
+	turn    func(Page) TurnRange // the last turn of a changes page's topic (nil: none)
+	redact  func(string) string  // cleans a file's text before it is shown
+	now     func() time.Time
+	log     *slog.Logger
 	// refusedAt is when a refusal was last logged: the address is public,
 	// so refusals are logged at most once a minute.
 	refusedAt atomic.Int64
@@ -104,6 +109,14 @@ func (s *Server) WithScreen(read func(Page) Screen) *Server {
 // file's text before it is shown.
 func (s *Server) WithFiles(on func() bool, redact func(string) string) *Server {
 	s.files, s.redact = on, redact
+	return s
+}
+
+// WithChanges turns on the changes view while on() is true. redact cleans
+// a diff before it is shown. turn returns the last turn of a page's topic
+// (nil: no BaseTurn).
+func (s *Server) WithChanges(on func() bool, redact func(string) string, turn func(Page) TurnRange) *Server {
+	s.changes, s.redact, s.turn = on, redact, turn
 	return s
 }
 
@@ -180,7 +193,8 @@ var (
 
 // Handler serves /app (the page shell), /app.js, the terminal library,
 // /api/page?id=…,
-// /api/screen?id=… and /api/files?id=…&path=…
+// /api/screen?id=…, /api/files?id=…&path=… and
+// /api/changes?id=…&base=…[&path=…&new=1]
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /app", func(w http.ResponseWriter, r *http.Request) {
@@ -205,6 +219,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/page", s.page)
 	mux.HandleFunc("GET /api/screen", s.liveScreen)
 	mux.HandleFunc("GET /api/files", s.fileView)
+	mux.HandleFunc("GET /api/changes", s.changesView)
 	return mux
 }
 
@@ -258,7 +273,7 @@ func (s *Server) page(w http.ResponseWriter, r *http.Request) {
 	switch p.Kind {
 	case KindDiff:
 		body = RenderDiff(p.Text)
-	case KindScreen, KindFiles: // the page asks for its content itself
+	case KindScreen, KindFiles, KindChanges: // the page asks for its content itself
 	default:
 		body = RenderAnswer(p.Text)
 	}
@@ -300,6 +315,62 @@ func (s *Server) fileView(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_ = json.NewEncoder(w).Encode(v)
+}
+
+// changesView answers the list of a changes page (base: BaseHead,
+// BaseBranch, or "" to choose), or with path the change of one file (new=1:
+// the new file that git does not track).
+func (s *Server) changesView(w http.ResponseWriter, r *http.Request) {
+	if !s.allowed(w, r) {
+		return
+	}
+	p, ok := s.loadKind(w, r, KindChanges)
+	if !ok {
+		return
+	}
+	if s.changes == nil || !s.changes() {
+		http.Error(w, `{"error":"The changes view is off."}`, http.StatusNotFound)
+		return
+	}
+	q := r.URL.Query()
+	base := q.Get("base")
+	var turn TurnRange
+	if s.turn != nil {
+		turn = s.turn(p)
+	}
+	if base != "" && base != BaseHead && base != BaseBranch && base != BaseTurn {
+		http.Error(w, `{"error":"No such base."}`, http.StatusBadRequest)
+		return
+	}
+	if rel := q.Get("path"); rel != "" {
+		if base == "" {
+			base = BaseHead
+		}
+		fc, err := ChangeOf(r.Context(), p.Dir, rel, base, q.Get("new") == "1", turn, s.redact)
+		if err != nil {
+			http.Error(w, `{"error":"This file has no changes now, or it is hidden."}`, http.StatusNotFound)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(fc)
+		return
+	}
+	l, err := ListChanges(r.Context(), p.Dir, base, turn)
+	switch {
+	case errors.Is(err, ErrNotRepo):
+		http.Error(w, `{"error":"This folder is not in a git repository now."}`, http.StatusNotFound)
+		return
+	case errors.Is(err, ErrNoBase) && base == BaseTurn:
+		http.Error(w, `{"error":"No turn of the agent in this repository was kept yet."}`, http.StatusNotFound)
+		return
+	case errors.Is(err, ErrNoBase):
+		http.Error(w, `{"error":"This repository has no main branch to compare with."}`, http.StatusNotFound)
+		return
+	case err != nil:
+		http.Error(w, `{"error":"Could not read the changes: git failed or took too long."}`, http.StatusInternalServerError)
+		return
+	}
+	l.At = s.now().Format("15:04:05")
+	_ = json.NewEncoder(w).Encode(l)
 }
 
 func refusal(err error, owner int64) string {

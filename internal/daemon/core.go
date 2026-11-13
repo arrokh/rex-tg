@@ -408,6 +408,8 @@ func (d *daemon) handle(ev any) {
 		d.onTurnTree(e)
 	case evTurnChanges:
 		d.onTurnChanges(e)
+	case evTurnRange:
+		d.onTurnRange(e)
 	case evLater:
 		e.f()
 	case evRename:
@@ -570,6 +572,9 @@ func (d *daemon) closeThread(threadID int64) {
 		return
 	}
 	d.forgetMac(threadID)
+	if err := d.st.Delete(d.ctx, lastTurnKey(threadID)); err != nil {
+		d.log.Warn("close topic: last turn", "err", err)
+	}
 	if th.Status != store.ThreadClosed {
 		if err := d.st.SetThreadStatus(d.ctx, threadID, store.ThreadClosed); err != nil {
 			d.log.Warn("close topic", "thread", threadID, "err", err)
