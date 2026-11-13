@@ -11,6 +11,9 @@ import (
 // lifecycle.go.
 const uploadMaxAge = 7 * 24 * time.Hour
 
+// shownMaxAge is how long the images that an agent looked at stay (shown.go).
+const shownMaxAge = 3 * 24 * time.Hour
+
 // housekeeping runs once a day in a worker (flow 8): it prunes old database
 // rows, spool files that were never read, and old uploads. It touches only
 // the store and the file system, so it is safe outside the core loop.
@@ -23,6 +26,9 @@ func (d *daemon) housekeeping(now time.Time) {
 	}
 	if n := removeOlder(d.cfg.UploadDir(), now.Add(-uploadMaxAge)); n > 0 {
 		d.log.Info("housekeeping: removed old uploads", "count", n)
+	}
+	if n := removeOlder(d.cfg.ShownDir(), now.Add(-shownMaxAge)); n > 0 {
+		d.log.Info("housekeeping: removed old shown images", "count", n)
 	}
 	d.pruneFileOffers(now)
 	d.prunePages(now)

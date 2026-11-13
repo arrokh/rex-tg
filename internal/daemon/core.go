@@ -194,6 +194,7 @@ type daemon struct {
 	pending              map[int64]pendingTail   // tailers waiting for their first scan, by conversation
 	trackers             map[int64]*turn.Tracker // by thread
 	snaps                map[int64]string        // last saved tracker snapshot
+	shown                map[int64]*shownTurn    // images the agent looked at in the running turn, by thread
 	joiner               *inbound.Joiner
 	joining              map[int64]int64   // update id -> Telegram message id, while in the joiner
 	extra                map[int64][]int64 // joined row -> Telegram messages that get its reactions too
@@ -258,6 +259,7 @@ func newDaemon(cfg config.Config, home string, log *slog.Logger, now func() time
 		pending:      map[int64]pendingTail{},
 		trackers:     map[int64]*turn.Tracker{},
 		snaps:        map[int64]string{},
+		shown:        map[int64]*shownTurn{},
 		joining:      map[int64]int64{},
 		extra:        map[int64][]int64{},
 		actions:      map[int64]inbound.Action{},
@@ -601,6 +603,7 @@ func (d *daemon) closeThread(threadID int64) {
 	}
 	delete(d.trackers, threadID)
 	delete(d.snaps, threadID)
+	delete(d.shown, threadID)
 	delete(d.dirty, threadID)
 	delete(d.busy, threadID)
 	delete(d.nextPrep, threadID)

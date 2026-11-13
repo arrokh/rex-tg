@@ -763,6 +763,14 @@ The sender reads the file when it sends. A file that is gone or unreadable fails
 
 Privacy: rex-tg sends only files that the final answer names, only to the owner's chat, and the other types only on a tap. A file counts only where it really is (after symlinks): inside the agent's folder, the home folder, or a temporary folder (`$TMPDIR`, `/tmp`), and not in a hidden folder or file (`~/.ssh`, `~/.aws`, a project's `.env`) or in `~/Library`. The agent's folder may be inside `~/Library` (iCloud Drive), but an agent started in `~` or `/` gets only the rules of home. The place is checked again when the file is read: at the tap for an offer, which may be days old, and the sender reads the checked path, not a link. An agent can be led to name any path, so a file elsewhere, such as in `/etc`, is never offered or sent. It never searches for files. Set `[display] send_images = false` to turn images off, and `send_files = []` to turn the offers off. An agent that names a file it edited, such as `src/index.html`, offers that file too; remove the type from `send_files` when that is noise.
 
+**Images the agent looked at.** A final answer often names no file: the agent looked at a screenshot with a tool, deleted the file, and wrote "here is the screenshot". When the answer names no image that rex-tg can send, the images in the turn's tool results come after it instead. Only the pi adapter (`toolResult` content blocks with `type: image`) and the Claude Code adapter (`tool_result` content with a `base64` image source) read them. Codex rollouts are not read: no image format of its tool outputs is confirmed. The daemon handles each image when its line arrives (so a turn never holds base64):
+
+- Only tool results count, not images in the user's prompt. A result whose call read a file in the uploads folder (the call's first argument holds that path) is the user's own photo and is skipped.
+- The bytes must be a PNG, JPEG, WebP, or GIF by their first bytes, at most 10 MB. The file is written to `<state>/shown/<sha256>.<ext>` (mode 0600, folder 0700) and housekeeping removes it after 3 days.
+- The turn keeps only references: the last `[display] turn_images` (default 4, at most 10, 0 is off) different images by content hash. A repeat counts as the latest. A turn writes at most 40 MB.
+- A new prompt clears the list. A turn with no final answer sends nothing. Lines that are read again after a restart are guarded by the replay check (section 6), and the outbox key stops a repeat.
+- The images are one silent outbox item (kind `image`, key `<answer key>:shown`) right after the answer. `send_images = false` turns them off too. When the answer names images, only those go (`:images`).
+
 ### 9.5 Incoming messages
 
 Before rex-tg types anything, all of these checks must pass. It runs them right before it types.
@@ -1054,6 +1062,7 @@ mode = "progress"            # progress | block | final
 backfill = 3                 # final answers to post when a topic opens
 show_mac_prompts = true
 mac_notice = true            # hold Mac turns behind one notice (8.4a)
+turn_images = 4              # images the agent looked at that come after an answer that names no image file (0 = off)
 progress_delay = "2s"
 progress_edit_interval = "2s"
 progress_animation = "3s"

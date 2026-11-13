@@ -125,6 +125,10 @@ type Config struct {
 		// SendImages sends the image files that a final answer names to the
 		// topic, right after the answer. On by default.
 		SendImages bool `toml:"send_images"`
+		// TurnImages is how many of the images that the agent looked at in
+		// a turn (in tool results) come after its answer, when the answer
+		// names no image file. The last ones count; 0 turns it off.
+		TurnImages int `toml:"turn_images"`
 		// SendFiles are the other file types (extensions, without the dot)
 		// that a final answer offers: a button per file sends it, as a
 		// document. An empty list offers none.
@@ -245,6 +249,7 @@ func Default(home string) Config {
 	c.Alerts.RemindAfter = Duration{10 * time.Minute}
 	c.Alerts.Reminders = 3
 	c.Display.SendImages = true
+	c.Display.TurnImages = 4
 	c.Display.SendFiles = []string{"pdf", "csv", "tsv", "html", "htm", "xlsx", "docx", "pptx"}
 	c.Display.ShowChanges = true
 	c.MiniApp.Listen = "127.0.0.1:8770"
@@ -299,6 +304,9 @@ func Load(path, home string) (Config, error) {
 	}
 	return c, nil
 }
+
+// MaxTurnImages bounds display.turn_images.
+const MaxTurnImages = 10
 
 // MinMessageLength and MaxMessageLength bound display.message_length. 4000
 // keeps to Telegram's limit of 4096 characters, so a reply is split only
@@ -403,6 +411,9 @@ func (c Config) validate() error {
 	if c.Display.MessageLength < MinMessageLength || c.Display.MessageLength > MaxMessageLength {
 		return fmt.Errorf("display.message_length %d: want %d to %d characters", c.Display.MessageLength, MinMessageLength, MaxMessageLength)
 	}
+	if c.Display.TurnImages < 0 || c.Display.TurnImages > MaxTurnImages {
+		return fmt.Errorf("display.turn_images %d: want 0 to %d", c.Display.TurnImages, MaxTurnImages)
+	}
 	if u := c.MiniApp.URL; u != "" && !strings.HasPrefix(u, "https://") {
 		return fmt.Errorf("miniapp.url %q: Telegram opens a Mini App only from an https:// address", u)
 	}
@@ -487,6 +498,10 @@ func (c Config) LogDir() string { return filepath.Join(c.State.Dir, "logs") }
 
 // UploadDir is the folder for files received from Telegram.
 func (c Config) UploadDir() string { return filepath.Join(c.State.Dir, "uploads") }
+
+// ShownDir is the folder for the images that an agent looked at, until they
+// go to Telegram (display.turn_images).
+func (c Config) ShownDir() string { return filepath.Join(c.State.Dir, "shown") }
 
 // LiveDir is the folder where the pi extension writes the text that pi is
 // writing, for the drafts (display.stream).
