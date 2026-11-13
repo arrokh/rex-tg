@@ -988,3 +988,29 @@ func TestStreaming(t *testing.T) {
 		t.Fatal("a draft for a turn held for the Mac")
 	}
 }
+
+// TestMessageBelowMovesTheProgressDown: a message from outside the turn
+// below the progress message moves it down at the next edit, but not while
+// the turn waits for an answer: then the alert stays the last message.
+func TestMessageBelowMovesTheProgressDown(t *testing.T) {
+	x := newH(t, turn.Config{}, progress)
+	x.ev(prompt("p", "go"), 0)
+	x.tick(2) // shown
+	x.k.MessageBelow()
+	if got := types(without(x.tick(4))); got != "RepostProgress" {
+		t.Fatalf("after a message below: got %s", got)
+	}
+	x.k.State(turn.StateBlocked, at(5))
+	x.k.MessageBelow() // the alert
+	for _, s := range []float64{7, 9, 30} {
+		for _, a := range x.tick(s) {
+			if _, ok := a.(turn.RepostProgress); ok {
+				t.Fatalf("tick %v: the progress moved below the waiting alert", s)
+			}
+		}
+	}
+	x.k.State(turn.StateWorking, at(31))
+	if got := types(without(x.tick(33))); got != "RepostProgress" {
+		t.Fatalf("after the answer: got %s", got)
+	}
+}

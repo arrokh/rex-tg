@@ -220,3 +220,52 @@ func TestAlertContentTooLongFallsBack(t *testing.T) {
 		t.Errorf("alert of %d characters, fallback %v", format.VisibleLen(c.text), strings.Contains(c.text, "<pre>"))
 	}
 }
+
+// A long question wraps over lines on the screen, and one of the agent's
+// own questions may not end with "?": the alert and the line that stays
+// after the answer keep the whole question.
+func TestQuestionTextWrapsAndNeedsNoQuestionMark(t *testing.T) {
+	wrapped := `────────────────────────────────────────
+←  ☐ Release  ☐ Follow-ups  ✔ Submit  →
+
+│ Live test (answer in Telegram): ship this batch —
+│ review fixes and steering — as v0.1.12?
+
+❯ 1. PR, merge, release
+  2. PR only
+  3. Type something.
+────────────────────────────────────────
+  4. Chat about this
+
+Enter to select · Tab/Arrow keys to navigate · Esc to cancel`
+	v := parsePromptView(screenLines(wrapped), false)
+	want := "Live test (answer in Telegram): ship this batch — review fixes and steering — as v0.1.12?"
+	if !v.ok || v.question != want {
+		t.Fatalf("question = %q (ok %v), want %q", v.question, v.ok, want)
+	}
+	if h := alertHead(v, "Claude Code", store.AlertPermission); !strings.Contains(h, "ship this batch") {
+		t.Errorf("head = %q", h)
+	}
+
+	statement := `────────────────────────────────────────
+←  ☒ Release  ☐ Follow-ups  ✔ Submit  →
+
+│ Tick every follow-up you want,
+│ then tap Next.
+
+❯ 1. [ ] Poll-order test
+  2. [ ] Steer notice check
+  3. [ ] Type something
+     Next
+────────────────────────────────────────
+  4. Chat about this
+
+Enter to select · Tab/Arrow keys to navigate · Esc to cancel`
+	v = parsePromptView(screenLines(statement), false)
+	if !v.ok || v.question != "Tick every follow-up you want, then tap Next." {
+		t.Fatalf("question = %q (ok %v)", v.question, v.ok)
+	}
+	if h := alertHead(v, "Claude Code", store.AlertPermission); !strings.HasSuffix(h, ": Tick every follow-up you want, then tap Next.") {
+		t.Errorf("head = %q", h)
+	}
+}

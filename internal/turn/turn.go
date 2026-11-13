@@ -630,18 +630,22 @@ func (t *Tracker) Tick(now time.Time) []Action {
 		}
 		return out
 	}
-	if (t.dirty || t.pendingRepost) && now.Sub(t.lastEdit) >= t.cfg.EditInterval {
+	// While the turn waits for an answer, its alert stays the last message;
+	// the progress message moves below it once the turn goes on.
+	repost := t.pendingRepost && !t.blocked
+	if (t.dirty || repost) && now.Sub(t.lastEdit) >= t.cfg.EditInterval {
 		h := t.progressHTML(now)
 		switch {
-		case t.pendingRepost:
+		case repost:
 			out = append(out, RepostProgress{HTML: h})
 			t.lastEdit = now
+			t.pendingRepost = false
 		case h != t.lastHTML:
 			out = append(out, EditProgress{HTML: h})
 			t.lastEdit = now
 		}
 		t.lastHTML = h
-		t.dirty, t.pendingRepost = false, false
+		t.dirty = false
 		return out
 	}
 	// Nothing changed, but the elapsed time moves on: without this the
@@ -663,6 +667,17 @@ func (t *Tracker) Tick(now time.Time) []Action {
 func (t *Tracker) timerStep(elapsed time.Duration) time.Duration {
 	step := min(elapsed/6, time.Minute)
 	return max(step, t.cfg.TimerInterval, t.cfg.EditInterval)
+}
+
+// MessageBelow tells the tracker that a message came below the progress
+// message from outside the turn: an alert, a notice, a reminder, or the
+// user's own message. The progress message then moves down, so the last
+// message in the topic is the one that shows the turn's progress. While the
+// turn waits for an answer, it moves only after the answer (see Tick).
+func (t *Tracker) MessageBelow() {
+	if t.shown && t.ph == phActive && !t.quiet {
+		t.pendingRepost = true
+	}
 }
 
 // ProgressGone tells the tracker that the progress message was deleted outside

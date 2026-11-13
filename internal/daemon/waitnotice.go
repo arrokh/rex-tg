@@ -29,10 +29,11 @@ func (d *daemon) postWaitNotice(th store.Thread, updateID int64, text string) {
 	if text == "" {
 		text = waitNoticeText
 	}
-	chat, thread := th.ChatID, th.MessageThreadID
+	chat, thread, tid := th.ChatID, th.MessageThreadID, th.ID
 	d.spawn(func() {
 		m, err := d.sendNow(chat, thread, text, waitMarkup(updateID))
 		if err == nil && m.MessageID != 0 {
+			d.markBelow(tid)
 			d.emit(evWaitNotice{updateID: updateID, chat: chat, msg: m.MessageID})
 		}
 	})

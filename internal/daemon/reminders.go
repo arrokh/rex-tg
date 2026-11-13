@@ -178,6 +178,9 @@ func (d *daemon) sendReminder(th store.Thread, a store.Alert, n int, now time.Ti
 		if err != nil && d.ctx.Err() == nil {
 			d.log.Warn("reminder: send", "alert", alert, "n", n, "err", err)
 		}
+		if err == nil {
+			d.markBelow(th.ID)
+		}
 		d.emit(evReminder{alert: alert, chat: chat, msg: msg.MessageID, notSent: telegram.Classify(err) == telegram.ClassNotSent})
 	})
 }
