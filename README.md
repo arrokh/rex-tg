@@ -125,6 +125,7 @@ proxy = "socks5h://127.0.0.1:40000"  # when your network blocks or drops Telegra
 mode = "progress"         # progress, block, or final
 mac_notice = true         # one notice while you work on the Mac
 send_images = true        # send images that an answer names
+turn_images = 4           # else send the last N images the agent looked at (0 = off)
 stream = false            # true: show the text while the agent writes
 ```
 

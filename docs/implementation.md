@@ -359,7 +359,7 @@ type Config struct {
 		PiArgv0, ClaudeArgv0, ClaudeExecGlob, CodexNames []string
 		Pi, Claude, Codex                                RuntimeInput
 	}
-	Display struct{ Mode string; Backfill int; ShowMacPrompts, MacNotice, ShowChanges bool; ProgressDelay, ProgressEditInterval Duration; QuickReplies []string }
+	Display struct{ Mode string; Backfill, TurnImages int; ShowMacPrompts, MacNotice, ShowChanges bool; ProgressDelay, ProgressEditInterval Duration; QuickReplies []string }
 	MiniApp struct{ URL, Listen string; AnswerPreview int; Files bool } // URL empty turns the Mini App off
 	Alerts  struct{ RemindAfter Duration; Reminders int } // 10m, 3; 0 turns reminders off
 	Input   struct{ QueueExpiry, JoinWindow, JoinWindowLong, BusyAfterTyping Duration; MaxUploadMB int }

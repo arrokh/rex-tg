@@ -30,6 +30,9 @@ func TestDefaults(t *testing.T) {
 	if c.Display.MessageLength != 1500 {
 		t.Errorf("message_length = %d, want 1500", c.Display.MessageLength)
 	}
+	if c.Display.TurnImages != 4 {
+		t.Errorf("turn_images = %d, want 4", c.Display.TurnImages)
+	}
 	// Drafts are off; turned on, they go at the fastest speed.
 	if c.Display.Stream || c.Display.StreamInterval.Duration != MinStreamInterval {
 		t.Errorf("stream %v every %v, want off, every %v", c.Display.Stream, c.Display.StreamInterval.Duration, MinStreamInterval)
@@ -221,6 +224,8 @@ func TestLoadErrors(t *testing.T) {
 		{"drafts too fast", "[display]\nstream_interval = \"500ms\"\n", "display.stream_interval"},
 		{"messages too long", "[display]\nmessage_length = 5000\n", "display.message_length"},
 		{"messages too short", "[display]\nmessage_length = 10\n", "display.message_length"},
+		{"too many turn images", "[display]\nturn_images = 11\n", "display.turn_images"},
+		{"negative turn images", "[display]\nturn_images = -1\n", "display.turn_images"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

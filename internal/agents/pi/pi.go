@@ -102,6 +102,8 @@ type block struct {
 	ID        string          `json:"id"`
 	Name      string          `json:"name"`
 	Arguments json.RawMessage `json:"arguments"`
+	MimeType  string          `json:"mimeType"` // image blocks
+	Data      string          `json:"data"`     // image blocks: base64
 }
 
 // ParseLine turns one transcript line into events.
@@ -174,7 +176,13 @@ func (adapter) ParseLine(line []byte, ctx agents.LineContext) ([]agents.Event, e
 			Took:   time.Duration(msg.DurationMs * float64(time.Millisecond)),
 			Output: truncateBytes(joinText(blocks, "\n"), agents.MaxToolOutput),
 		}
-		evs = append(evs, agents.Event{Kind: agents.ToolResult, Key: k.next(), At: at, Tool: tool})
+		var imgs []agents.Image
+		for _, b := range blocks {
+			if b.Type == "image" {
+				imgs = agents.AddImage(imgs, b.MimeType, b.Data)
+			}
+		}
+		evs = append(evs, agents.Event{Kind: agents.ToolResult, Key: k.next(), At: at, Tool: tool, Images: imgs})
 	case "assistant":
 		phase := agents.Commentary
 		switch msg.StopReason {
@@ -202,7 +210,8 @@ func (adapter) ParseLine(line []byte, ctx agents.LineContext) ([]agents.Event, e
 			case "toolCall":
 				kind, lbl := toolLabel(b.Name, b.Arguments, ctx.CWD)
 				evs = append(evs, agents.Event{Kind: agents.ToolCall, Key: k.next(), At: at,
-					Tool: &agents.Tool{CallID: b.ID, Name: b.Name, Kind: kind, Label: lbl}})
+					Tool: &agents.Tool{CallID: b.ID, Name: b.Name, Kind: kind, Label: lbl,
+						Target: truncateBytes(argString(b.Arguments, "path", "file_path", "command"), agents.MaxTarget)}})
 			}
 		}
 		if phase == agents.Error && strings.TrimSpace(text) == "" && msg.ErrorMessage != "" {

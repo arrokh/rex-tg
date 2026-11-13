@@ -136,6 +136,13 @@ type block struct {
 	ToolUseID string          `json:"tool_use_id"`
 	IsError   bool            `json:"is_error"`
 	Content   json.RawMessage `json:"content"`
+	Source    *imageSource    `json:"source"` // image blocks
+}
+
+type imageSource struct {
+	Type      string `json:"type"`
+	MediaType string `json:"media_type"`
+	Data      string `json:"data"`
 }
 
 // ParseLine turns one transcript line into events.
@@ -231,7 +238,8 @@ func (adapter) ParseLine(raw []byte, ctx agents.LineContext) ([]agents.Event, er
 			case "tool_use":
 				kind, lbl := toolLabel(b.Name, b.Input, cwd)
 				evs = append(evs, agents.Event{Kind: agents.ToolCall, Key: k.next(), At: at,
-					Tool: &agents.Tool{CallID: b.ID, Name: b.Name, Kind: kind, Label: lbl}})
+					Tool: &agents.Tool{CallID: b.ID, Name: b.Name, Kind: kind, Label: lbl,
+						Target: truncateBytes(argString(b.Input, "file_path", "path", "command"), agents.MaxTarget)}})
 			}
 		}
 		return evs, nil
@@ -249,7 +257,7 @@ func (adapter) ParseLine(raw []byte, ctx agents.LineContext) ([]agents.Event, er
 				CallID: b.ToolUseID,
 				OK:     !b.IsError,
 				Output: truncateBytes(resultText(b.Content), agents.MaxToolOutput),
-			}})
+			}, Images: resultImages(b.Content)})
 		case "text":
 			if strings.HasPrefix(strings.TrimSpace(b.Text), "[Request interrupted") {
 				evs = append(evs, agents.Event{Kind: agents.TurnEnd, Key: k.next(), At: at})
@@ -381,6 +389,27 @@ func resultText(raw json.RawMessage) string {
 		}
 	}
 	return strings.Join(parts, "\n")
+}
+
+// resultImages decodes the base64 image blocks in a tool result's content.
+// Only tool results count: an image that the user put in a prompt is not
+// read here.
+func resultImages(raw json.RawMessage) []agents.Image {
+	raw = bytes.TrimSpace(raw)
+	if len(raw) == 0 || raw[0] != '[' {
+		return nil
+	}
+	var bs []block
+	if json.Unmarshal(raw, &bs) != nil {
+		return nil
+	}
+	var imgs []agents.Image
+	for _, b := range bs {
+		if b.Type == "image" && b.Source != nil && b.Source.Type == "base64" {
+			imgs = agents.AddImage(imgs, b.Source.MediaType, b.Source.Data)
+		}
+	}
+	return imgs
 }
 
 func toolLabel(name string, input json.RawMessage, cwd string) (agents.ToolKind, string) {

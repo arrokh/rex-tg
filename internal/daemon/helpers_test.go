@@ -2,6 +2,7 @@ package daemon_test
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -606,4 +607,16 @@ func (e *env) waitPaneState(state string) {
 		p, ok, err := e.peek().PaneByBlock(context.Background(), "local", rexBlock)
 		return err == nil && ok && p.State == state
 	})
+}
+
+// ReadCall writes an assistant message that calls pi's read tool on path.
+func (p *piLog) ReadCall(callID, path string) {
+	p.write(fmt.Sprintf(`{"type":"message","id":%q,"timestamp":%q,"message":{"role":"assistant","content":[{"type":"toolCall","id":%q,"name":"read","arguments":{"path":%s}}],"stopReason":"toolUse"}}`,
+		p.nextID(), now(), callID, jstr(path)))
+}
+
+// ToolResultImage writes a tool result with a text block and an image block.
+func (p *piLog) ToolResultImage(callID, mime string, data []byte) {
+	p.write(fmt.Sprintf(`{"type":"message","id":%q,"timestamp":%q,"message":{"role":"toolResult","toolCallId":%q,"content":[{"type":"text","text":"Read image file"},{"type":"image","mimeType":%q,"data":%q}],"durationMs":20}}`,
+		p.nextID(), now(), callID, mime, base64.StdEncoding.EncodeToString(data)))
 }

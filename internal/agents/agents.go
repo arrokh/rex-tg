@@ -8,6 +8,7 @@
 package agents
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -124,7 +125,14 @@ type Tool struct {
 	OK     bool          // ToolResult only
 	Took   time.Duration // ToolResult only; 0 when unknown
 	Output string        // ToolResult only; at most MaxToolOutput bytes, for /verbose full
+	// Target is the raw first argument of a call (a file path, or a shell
+	// command), at most MaxTarget bytes, not redacted and never shown. The
+	// daemon only checks it for the uploads folder (ToolCall only).
+	Target string
 }
+
+// MaxTarget caps Tool.Target, in bytes.
+const MaxTarget = 1000
 
 // MaxToolOutput caps Tool.Output.
 const MaxToolOutput = 2000
@@ -145,6 +153,49 @@ type Event struct {
 	// like a prompt, but it is never posted as typed on the Mac and never
 	// matched with a message from Telegram.
 	Auto bool
+	// Images are the images in a ToolResult's content (what the agent looked
+	// at), decoded. The parsers skip a block that is not valid base64 or that
+	// is larger than MaxImageBytes once decoded.
+	Images []Image
+}
+
+// Image is one image from a tool result.
+type Image struct {
+	MIME string // as the transcript says; not to be trusted, check Data
+	Data []byte
+}
+
+// MaxImageBytes caps the decoded size of one Image.
+const MaxImageBytes = 10 << 20
+
+// maxImagesPerResult caps the images that one tool result gives.
+const maxImagesPerResult = 10
+
+// DecodeImage decodes the base64 data of an image block. It reports false
+// for empty data, bad base64, or an image larger than MaxImageBytes.
+func DecodeImage(mime, b64 string) (Image, bool) {
+	if b64 == "" || base64.StdEncoding.DecodedLen(len(b64)) > MaxImageBytes+3 {
+		return Image{}, false
+	}
+	data, err := base64.StdEncoding.DecodeString(b64)
+	if err != nil {
+		data, err = base64.RawStdEncoding.DecodeString(b64)
+	}
+	if err != nil || len(data) == 0 || len(data) > MaxImageBytes {
+		return Image{}, false
+	}
+	return Image{MIME: mime, Data: data}, true
+}
+
+// AddImage appends an image block to imgs, up to the per-result cap.
+func AddImage(imgs []Image, mime, b64 string) []Image {
+	if len(imgs) >= maxImagesPerResult {
+		return imgs
+	}
+	if im, ok := DecodeImage(mime, b64); ok {
+		imgs = append(imgs, im)
+	}
+	return imgs
 }
 
 // Header is the identity of a session, read from the start of its transcript.

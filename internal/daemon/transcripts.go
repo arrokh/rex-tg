@@ -381,6 +381,9 @@ func (d *daemon) work(th store.Thread, acts []turn.Action) []store.OutboxItem {
 			if a.Kind == "answer" && a.HTML == "" {
 				if img, ok := d.imageItem(th, a); ok {
 					items = append(items, img)
+					d.shownReset(th.ID) // the named files win
+				} else if img, ok := d.shownItem(th, a); ok {
+					items = append(items, img)
 				}
 				if offer, ok := d.fileOfferItem(th, a); ok {
 					items = append(items, offer)
@@ -524,6 +527,7 @@ func (d *daemon) onBatch(ev evBatch) {
 			echo := false
 			switch e.Kind {
 			case agents.UserPrompt:
+				d.shownReset(th.ID) // a new turn: the images of the last one are not its own
 				d.turnStarted(conv.ID, conv.CWD, tr.Running())
 				if !e.Auto { // no person typed it, so it is no Telegram message
 					echo = d.echo(th, e, now)
@@ -544,6 +548,11 @@ func (d *daemon) onBatch(ev evBatch) {
 				}
 			case agents.ToolCall, agents.ToolResult:
 				d.checkPromptGone(conv.ID, now)
+				if e.Kind == agents.ToolCall {
+					d.noteShownCall(th.ID, e)
+				} else {
+					d.noteShownResult(th.ID, e)
+				}
 			case agents.TurnEnd:
 				d.signal(conv.ID, registry.Signal{State: "idle", At: at})
 			case agents.Title:
