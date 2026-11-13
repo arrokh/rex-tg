@@ -175,3 +175,40 @@ func TestRenamedNewSessionIsNamedBack(t *testing.T) {
 		return false
 	})
 }
+
+// /rename names the topic and its tab in the session of /new; the name
+// sticks until /rename auto.
+func TestRenameCommandNamesTheTopicAndItsTab(t *testing.T) {
+	e := newEnv(t)
+	e.seedOwner()
+	e.tabSession("pane one")
+	p := e.newPi("pi-rename")
+	p.User("start")
+	p.Final("ready")
+	e.start()
+	e.hookPi(p, "startup")
+	thread := e.openTopic()
+	e.waitText(thread, "ready")
+	topic := func() string {
+		for _, tp := range e.tg.Topics(chatID) {
+			if tp.ThreadID == thread {
+				return tp.Name
+			}
+		}
+		return ""
+	}
+
+	e.say(thread, "/rename explore lovina")
+	e.waitFor("the topic renamed", func() bool { return topic() == "explore lovina" })
+	e.waitFor("the tab renamed", func() bool {
+		r := e.tabRenames()
+		return len(r) > 0 && r[len(r)-1] == "explore lovina"
+	})
+	if len(e.pastes()) != 0 {
+		t.Errorf("/rename was typed into the pane: %q", e.pastes())
+	}
+
+	e.setTab("explore lovina")
+	e.say(thread, "/rename auto")
+	e.waitFor("the topic named after the pane again", func() bool { return topic() == "pane one" })
+}
