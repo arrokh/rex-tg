@@ -202,6 +202,7 @@ Text that starts with `/` goes to the agent, except the commands below and the m
 - Alerts read like the prompt: who asks, what it wants to do (the command in monospace), warnings, and the question in bold; the answers are the buttons. Once answered, an alert shrinks to one line with the question and your answer, so old prompts do not fill the topic.
 - A Claude question offers `Chat about this`: tap it to talk the question over instead of answering. On a question with previews, the button is `💬 Chat about this`; rex-tg moves the cursor there and presses Enter.
 - Claude Code questions: tap an answer, or reply with text to give your own answer ("Type something"). For answers to tick, the `☐` buttons tick them and `Next ➡` goes on. With several questions, each next one, and the "Submit answers" page, comes as its own alert.
+- pi asks nothing before it acts, but an extension can open a dialog (`ctx.ui.select` or `confirm`, such as `/goal-clear`). pi reports it as blocked, and the alert is a question with one button per answer. A tap moves the cursor to that answer, one key at a time with the screen read after each, and presses Enter. The alert stays while the dialog is on screen, and closes when it goes. A reply with text answers nothing: tap an answer, or `Esc`. A dialog with a text field (`input`, `editor`) is not read: answer it on the Mac.
 - The review page of several questions (`Review your answers`) lists each question and its answer, as `• question` and `→ answer`. Its buttons are `1 Submit answers`, `2 Cancel`, and `Esc`. Tap `1 Submit answers` to send the answers.
 
 | Agent | Buttons | Reply with text |
@@ -209,7 +210,7 @@ Text that starts with `/` goes to the agent, except the commands below and the m
 | Claude Code | `1 Yes`, `2 Yes, and don't ask again …`, `3 No`, `Esc` | No (Esc) + your note |
 | Claude Code question | one per answer (☐ to tick, `Next ➡`), `Esc` | your own answer ("Type something") |
 | Codex | `Yes, proceed` (y), `don't ask again` (p), `No …` (Esc) | No (Esc) + your note |
-| pi | pi asks nothing before it acts | — |
+| pi extension dialog (a select, or a confirm) | one per answer, `Esc` | — (tap an answer) |
 
 ### `/screen`
 

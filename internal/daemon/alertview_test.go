@@ -409,3 +409,156 @@ func TestAlertHashIgnoresThePreview(t *testing.T) {
 		t.Error("a new question counts as the same")
 	}
 }
+
+// pi's extension dialogs (pi-coding-agent's selector), with made-up text.
+const (
+	piSelectScreen = `⠋ Working...
+────────────────────────────────────────
+
+ Pick a plan (20s)
+
+ → Small
+   Medium
+   Large
+
+ ↑↓ navigate  enter select  escape cancel
+
+────────────────────────────────────────
+~/work/demo (main)`
+
+	piConfirmScreen = `────────────────────────────────────────
+
+ Clear the plan?
+ Plan: ship the thing (3 of 5 done)
+
+ → Yes
+   No
+
+ ↑↓ navigate  enter select  escape cancel
+
+────────────────────────────────────────
+~/work/demo (main)`
+
+	piScrollScreen = `────────────────────────────────────────
+
+ Pick one
+
+   Item 2
+   Item 3
+ → Item 4
+   Item 5
+   (4/12)
+
+ ↑↓ navigate  enter select  escape cancel
+
+────────────────────────────────────────`
+)
+
+func TestPromptViewPiSelect(t *testing.T) {
+	v := parsePromptView(screenLines(piSelectScreen), true)
+	if !v.ok || !v.dialog || !v.isQuestion() || v.multi() {
+		t.Fatalf("view %+v", v)
+	}
+	if v.question != "Pick a plan" || len(v.body) != 0 {
+		t.Errorf("question %q body %v (the countdown is no part of it)", v.question, v.body)
+	}
+	var labels []string
+	for _, o := range v.alertOptions() {
+		labels = append(labels, o.Label)
+	}
+	if got := strings.Join(labels, "|"); got != "1 Small|2 Medium|3 Large|Esc" {
+		t.Errorf("buttons %q", got)
+	}
+	if k := v.options[1].key; k != pickPrefix+"Medium" {
+		t.Errorf("key %q", k)
+	}
+	rows, cur := promptRows(screenLines(piSelectScreen))
+	if len(rows) != 3 || cur != 0 || rows[2] != pickPrefix+"Large" {
+		t.Errorf("rows %v cursor %d", rows, cur)
+	}
+}
+
+func TestPromptViewPiConfirm(t *testing.T) {
+	v := parsePromptView(screenLines(piConfirmScreen), true)
+	if !v.ok || v.question != "Clear the plan?" || len(v.body) != 1 || v.body[0] != "Plan: ship the thing (3 of 5 done)" {
+		t.Fatalf("view %+v", v)
+	}
+	if len(v.options) != 2 || v.options[0].label != "Yes" || v.options[1].label != "No" {
+		t.Errorf("options %+v", v.options)
+	}
+	html := alertHTML(v, "pi", "permission", nil)
+	if !strings.HasPrefix(html, "❓ <b>Question</b> · pi") || !strings.Contains(html, "Tap an answer") {
+		t.Errorf("alert %q", html)
+	}
+	moved := strings.Replace(strings.Replace(piConfirmScreen, " → Yes", "   Yes", 1), "   No", " → No", 1)
+	if _, cur := promptRows(screenLines(moved)); cur != 1 {
+		t.Errorf("cursor %d, want 1", cur)
+	}
+}
+
+// The hash holds the dialog, not the cursor, the spinner above it, the
+// footer under it, or the countdown.
+func TestAlertHashPiDialog(t *testing.T) {
+	base := alertHash(screenLines(piSelectScreen))
+	for name, s := range map[string]string{
+		"cursor":  strings.Replace(strings.Replace(piSelectScreen, " → Small", "   Small", 1), "   Medium", " → Medium", 1),
+		"spinner": strings.Replace(piSelectScreen, "⠋ Working...", "⠙ Working... 3s", 1),
+		"footer":  strings.Replace(piSelectScreen, "~/work/demo (main)", "~/work/demo (main)  12% ctx", 1),
+		"timeout": strings.Replace(piSelectScreen, "(20s)", "(7s)", 1),
+	} {
+		if alertHash(screenLines(s)) != base {
+			t.Errorf("%s changed the hash", name)
+		}
+	}
+	if alertHash(screenLines(strings.Replace(piSelectScreen, "Large", "Huge", 1))) == base {
+		t.Error("another answer did not change the hash")
+	}
+	if alertHash(screenLines(strings.Replace(piSelectScreen, "Pick a plan", "Pick a size", 1))) == base {
+		t.Error("another question did not change the hash")
+	}
+	// A list that scrolls: the window moves with the cursor.
+	scrolled := strings.Replace(strings.Replace(piScrollScreen, "   Item 2\n", "   Item 1\n", 1), "(4/12)", "(5/12)", 1)
+	if alertHash(screenLines(piScrollScreen)) != alertHash(screenLines(scrolled)) {
+		t.Error("the window of a long list changed the hash")
+	}
+	if v := parsePromptView(screenLines(piScrollScreen), true); !v.ok || len(v.options) != 4 {
+		t.Errorf("scrolling list %+v", v)
+	}
+}
+
+// Screens that only look like a dialog are none: no cursor row, two of
+// them, a repeated answer, a wrong indent, or no rule above.
+func TestPiDialogNeedsItsShape(t *testing.T) {
+	for name, s := range map[string]string{
+		"no cursor":   strings.Replace(piConfirmScreen, " → Yes", "   Yes", 1),
+		"two cursors": strings.Replace(piConfirmScreen, "   No", " → No", 1),
+		"same answer": strings.Replace(piConfirmScreen, "   No", "   Yes", 1),
+		"indent":      strings.Replace(piConfirmScreen, "   No", "  No", 1),
+		"no rule":     strings.Replace(piConfirmScreen, "────────────────────────────────────────\n\n Clear", "text\n\n Clear", 1),
+	} {
+		if d := parsePiDialog(screenLines(s)); d.ok {
+			t.Errorf("%s: %+v", name, d)
+		}
+	}
+	if d := parsePiDialog(screenLines(multiScreen)); d.ok {
+		t.Errorf("a Claude Code question is no pi dialog: %+v", d)
+	}
+}
+
+// Extensions add lines to pi's footer (usage, accounts, versions), so the
+// hints of a dialog can sit well above the bottom of the screen (seen live:
+// eight lines under them).
+func TestPromptViewPiDialogAboveATallFooter(t *testing.T) {
+	screen := piConfirmScreen + "\n" + strings.Join([]string{
+		"~/work/demo • [demo] tidy up",
+		"↑1k ↓2k R3k $0.001 (sub) 1.0%/200k (auto)          model-x • high",
+		"acct-a 5h [██████████] 100% left",
+		"acct-b 5h [████████░░] 80% left",
+		"mail: someone@example.com (global)",
+		"tool 1.2.3",
+	}, "\n")
+	v := parsePromptView(screenLines(screen), true)
+	if !v.ok || !v.dialog || v.question != "Clear the plan?" || len(v.options) != 2 {
+		t.Fatalf("view %+v", v)
+	}
+}

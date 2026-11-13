@@ -60,6 +60,7 @@ type promptView struct {
 	review   bool         // the "Review your answers" page of several questions
 	answers  []reviewItem // that page's questions and the answers given
 	chat     bool         // a "Chat about this" row without a number (a question with previews)
+	dialog   bool         // an extension's dialog of pi: answers without numbers (pidialog.go)
 	ok       bool         // the screen holds a prompt this view understands
 }
 
@@ -82,7 +83,7 @@ const reviewLines = 30
 
 // isQuestion tells a question (AskUserQuestion) from a permission prompt.
 func (v promptView) isQuestion() bool {
-	if v.tabs != "" || v.next || v.review {
+	if v.tabs != "" || v.next || v.review || v.dialog {
 		return true
 	}
 	for _, o := range v.options {
@@ -188,6 +189,9 @@ func runeWidth(r rune) int { return termimg.RuneWidth(r) }
 // a rule, the agent's output, or maxQuestionLines), and the descriptions,
 // the text field, and the "Next" row below.
 func parsePromptView(lines []string, shortcuts bool) promptView {
+	if d := parsePiDialog(lines); d.ok {
+		return d.view()
+	}
 	var v promptView
 	lines = cutPreview(lines)
 	clean := make([]string, len(lines))
@@ -499,6 +503,8 @@ func alertHTML(v promptView, agent, kind string, dl *alertDeadline) string {
 		}
 	}
 	switch {
+	case v.dialog:
+		b.WriteString("\n<i>Tap an answer, or Esc to cancel it.</i>")
 	case v.multi():
 		b.WriteString("\n<i>Tick any, then tap Next. Reply with text to cancel and send your own answer.</i>")
 	case v.isQuestion() || kind == store.AlertQuestion:
@@ -535,6 +541,9 @@ func alertHead(v promptView, agent, kind string) string {
 // promptRows are the rows a cursor moves over: the answers and the Next row,
 // top to bottom, and the one with the cursor (-1: none).
 func promptRows(lines []string) (rows []string, cursor int) {
+	if d := parsePiDialog(lines); d.ok {
+		return d.rows(), d.cursor
+	}
 	cursor = -1
 	lines = cutPreview(lines) // a preview box beside the answers is no row
 	// Only the prompt's list: from its last row numbered 1.
@@ -570,6 +579,9 @@ func promptRows(lines []string) (rows []string, cursor int) {
 // countdown do not change, so a cursor moved on the Mac or by "Next" does not
 // make the alert stale.
 func alertHash(lines []string) string {
+	if d := parsePiDialog(lines); d.ok {
+		return screenHash(d.hashLines())
+	}
 	var out []string
 	// A question's preview box shows the answer under the cursor, so it
 	// changes as the cursor moves: it is no part of the question.

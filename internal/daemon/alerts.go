@@ -437,6 +437,16 @@ func (d *daemon) answerAlertAs(alertID int64, idx int, tapped int64, outcome str
 		if outcome == "" {
 			outcome = "➡ " + tickedText(lines)
 		}
+	case len(opt.Keys) == 1 && strings.HasPrefix(opt.Keys[0], pickPrefix):
+		// An answer of a pi dialog: walk to its row, then Enter.
+		label := strings.TrimPrefix(opt.Keys[0], pickPrefix)
+		if err := d.pressRow(ctx, th, pane, al, opt.Keys[0]); err != nil {
+			respond("Not sent: "+err.Error()+".", true)
+			return false
+		}
+		if outcome == "" {
+			outcome = "✅ " + format.Escape(label)
+		}
 	case len(opt.Keys) == 1 && opt.Keys[0] == chatKey:
 		if err := d.pressRow(ctx, th, pane, al, "chat"); err != nil {
 			respond("Not sent: "+err.Error()+".", true)
@@ -580,8 +590,9 @@ func (d *daemon) refreshAlert(ctx context.Context, th store.Thread, pane store.P
 	return false
 }
 
-// pressRow moves the cursor of a question to its "Next" row (want "next")
-// or its unnumbered "Chat about this" row (want "chat"), one key at a time
+// pressRow moves the cursor of a question to its "Next" row (want "next"),
+// its unnumbered "Chat about this" row (want "chat"), or an answer of a pi
+// dialog (want pickPrefix and its text), one key at a time
 // with the screen read after each, and presses Enter there (a worker).
 // Every key passes the safety checks first.
 func (d *daemon) pressRow(ctx context.Context, th store.Thread, pane store.Pane, al store.Alert, want string) error {
@@ -644,6 +655,9 @@ func (d *daemon) pressRow(ctx context.Context, th store.Thread, pane store.Pane,
 }
 
 func rowName(row string) string {
+	if strings.HasPrefix(row, pickPrefix) {
+		return "answer"
+	}
 	if row == "chat" {
 		return "Chat about this"
 	}

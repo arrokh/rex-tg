@@ -541,7 +541,7 @@ When the prompt ends, by a button or on the Mac, rex-tg removes the buttons from
 | Claude Code | Several questions (a tab bar), then "Review your answers": `1. Submit answers`, `2. Cancel` | Each next question, and the review page, gets its own alert after the answer before |
 | Codex | Approval: `1. Yes, proceed (y)`, `2. … don't ask again … (p)`, `3. No, and tell Codex … (esc)` | A button per answer with the printed key (`y`, `p`, Esc); a reply refuses (Esc) and sends your note |
 | Codex | Older approval without numbers | The `[agents.codex] answers`: `y` and `escape` only, since a guessed "always" key could make a lasting rule (`p` allows a host for good on a network prompt) |
-| pi | none of its own | pi asks nothing before it acts; an extension's dialog is not reported to rex-tg |
+| pi | Extension dialog (`ctx.ui.select`, `confirm`): `→ Yes` / `  No` rows, the hints `↑↓ navigate  enter select  escape cancel`, a rule above (pi reports it as blocked, kind `question` or, for a confirm, `permission`) | A question with a button per answer and `Esc`. The answers have no digit: a tap moves the cursor row by row, with the screen read after each key, and presses Enter. The screen hash holds the title and the answers only, so the spinner above, pi's footer, a countdown, and the cursor do not change it. Dialogs with a text field are not read |
 
 ### 8.7 Main chat and commands
 
