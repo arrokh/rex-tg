@@ -42,3 +42,24 @@ func TestLongAnswerComesAsChatMessages(t *testing.T) {
 		}
 	}
 }
+
+// A code block with lines too wide for a phone stays in the answer as a
+// short preview, and the whole block comes right after it as a file.
+func TestWideCodeBlockComesAsAFile(t *testing.T) {
+	e, p, thread := piTopic(t, "pi-wide-code")
+	wide := `{"name": "` + strings.Repeat("x", 100) + `"}`
+	p.User("show the config")
+	p.Final("Here it is:\n\n```json\n" + wide + "\n```\n\nThat is all.")
+	answer := e.waitText(thread, "That is all.")
+	if strings.Contains(answer.Text, strings.Repeat("x", 100)) || !strings.Contains(answer.Text, "code-1.json") {
+		t.Errorf("answer = %q, want a preview that names the file", answer.Text)
+	}
+	e.waitFor("the file after the answer", func() bool {
+		for _, m := range e.botMessages(thread) {
+			if m.Filename == "code-1.json" {
+				return m.ID > answer.ID && string(m.File) == wide+"\n"
+			}
+		}
+		return false
+	})
+}

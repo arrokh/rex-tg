@@ -305,6 +305,24 @@ func (d *daemon) saveSnapshot(threadID int64, t *turn.Tracker) {
 // answer when rich messages are on.
 func (d *daemon) markdownParts(md, kind string, allowRich bool) []store.PartContent {
 	md = format.Redact(md)
+	// A code block with lines too wide for a phone goes as a file after the
+	// message, which keeps a short preview of it.
+	short, code := format.SplitWideCode(md)
+	parts := d.textParts(short, kind, allowRich)
+	if len(parts) == 0 {
+		return nil
+	}
+	if len(parts) == 1 && parts[0].Format == store.FormatDocument {
+		return d.textParts(md, kind, allowRich) // too long for messages: one file holds it all
+	}
+	for _, f := range code {
+		parts = append(parts, store.PartContent{Content: f.Content, Format: store.FormatDocument, Filename: f.Name})
+	}
+	return parts
+}
+
+// textParts is the message, or messages, of markdown (markdownParts).
+func (d *daemon) textParts(md, kind string, allowRich bool) []store.PartContent {
 	if allowRich && d.cfg.Display.RichMessages && format.UTF16Len(md) <= maxRichRunes && md != "" {
 		return []store.PartContent{{Content: md, Format: store.FormatRich}}
 	}
