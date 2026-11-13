@@ -13,6 +13,16 @@ const (
 	hashWindow   = 10 * time.Minute
 	prefixWindow = 30 * time.Second
 	prefixRunes  = 40
+	// deliverySkew is how much later than the prompt's own time a message
+	// may count as delivered. rex-tg stamps a delivery when its typing is
+	// done, after the Enter. An agent may stamp the prompt first: Claude
+	// Code stamps a message typed while it works when it queues the
+	// message, and writes it to the transcript only when the turn takes it
+	// in (seen live: the stamp came 1 ms before the delivery). It is short:
+	// a prompt typed on the Mac a moment before the same text came from
+	// Telegram would take that message's echo. A miss is not held as a
+	// prompt from the Mac anyway (the daemon's typedRecently).
+	deliverySkew = 3 * time.Second
 )
 
 // Normalize makes two spellings of one prompt equal: it trims, converts
@@ -86,15 +96,16 @@ func prefix(s string) string {
 // item delivered in the 30 seconds before at whose body starts with the same
 // 40 characters as the prompt. Both compare the texts without image paths and
 // image markers (see Hash). A prompt that is only an image matches only
-// within those 30 seconds, because all such prompts look the same. It returns
-// the update ID.
+// within those 30 seconds, because all such prompts look the same. An item
+// delivered up to deliverySkew after at counts as delivered before it. It
+// returns the update ID.
 func MatchEcho(prompt string, at time.Time, delivered []Delivered) (int64, bool) {
 	items := make([]Delivered, len(delivered))
 	copy(items, delivered)
 	sort.SliceStable(items, func(i, k int) bool { return items[i].DeliveredAt.Before(items[k].DeliveredAt) })
 
 	within := func(d Delivered, w time.Duration) bool {
-		return !d.DeliveredAt.After(at) && !d.DeliveredAt.Before(at.Add(-w))
+		return !d.DeliveredAt.After(at.Add(deliverySkew)) && !d.DeliveredAt.Before(at.Add(-w))
 	}
 	h := Hash(prompt)
 	window := hashWindow

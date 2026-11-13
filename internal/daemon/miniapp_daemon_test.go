@@ -373,3 +373,48 @@ func TestFilesWithoutTheMiniApp(t *testing.T) {
 	e.say(thread, "/files")
 	e.waitText(thread, "[miniapp] url")
 }
+
+// /changes says what changed in the agent's repository. With nothing
+// changed it sends no button; after a turn that edits a file, its button
+// opens a view with the changes not committed and the last turn's.
+func TestChangesOpensTheView(t *testing.T) {
+	addr := freeAddr(t)
+	e, p, thread, repo := repoTopic(t, "pi-changes-cmd", func(e *env) {
+		e.cfg.MiniApp.URL = "https://mac.example.ts.net:8443"
+		e.cfg.MiniApp.Listen = addr
+	})
+	e.say(thread, "/changes")
+	e.waitText(thread, "Not committed: nothing")
+	e.never("a button for no changes", 300*time.Millisecond, func() bool { return webAppURL(e, thread, "📝 View changes") != "" })
+
+	p.User("change a.txt")
+	time.Sleep(500 * time.Millisecond) // the snapshot of the turn's start
+	if err := os.WriteFile(filepath.Join(repo, "a.txt"), []byte("one\ntwo\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	p.Final("Edited a.txt.")
+	e.waitFor("the changes button", func() bool { return webAppURL(e, thread, "📝 1 file · +1 −0") != "" })
+
+	e.say(thread, "/changes")
+	m := e.waitText(thread, "Last turn (")
+	if !strings.Contains(m.Text, "Not committed: 1 file · +1 −0") || !strings.Contains(m.Text, "Last turn (") {
+		t.Errorf("reply: %q", m.Text)
+	}
+	var u string
+	e.waitFor("the view button", func() bool { u = webAppURL(e, thread, "📝 View changes"); return u != "" })
+	code, body := miniGet(t, e, addr, "/api/changes?id="+pageID(u), ownerID)
+	if code != http.StatusOK || body["base"] != "head" || body["total"] != float64(1) || body["turn_at"] == "" {
+		t.Fatalf("list: %d %v", code, body)
+	}
+	code, body = miniGet(t, e, addr, "/api/changes?id="+pageID(u)+"&base=turn&path=a.txt", ownerID)
+	if code != http.StatusOK || !strings.Contains(fmt.Sprint(body["html"]), "two") {
+		t.Errorf("the turn's a.txt: %d %v", code, body)
+	}
+}
+
+// Without the Mini App, /changes says how to turn it on.
+func TestChangesWithoutTheMiniApp(t *testing.T) {
+	e, _, thread := piTopic(t, "pi-changes-off")
+	e.say(thread, "/changes")
+	e.waitText(thread, "[miniapp] url")
+}

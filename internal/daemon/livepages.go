@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -16,10 +17,11 @@ import (
 )
 
 // Live pages of the Mini App: the screen of a topic's pane, which the page
-// reads again every few seconds while it is open, and the files of the
-// agent's folder. A topic has one page of each (kv "page_for:<thread>:
-// screen:live" and "page_for:<thread>:files:<folder>"); each /screen or
-// /files that sends its button makes it young again.
+// reads again every few seconds while it is open, the files of the agent's
+// folder, and the changes of its repository. A topic has one page of each
+// (kv "page_for:<thread>:screen:live", "page_for:<thread>:files:<folder>"
+// and "page_for:<thread>:changes:<folder>"); each /screen, /files or
+// /changes that sends its button makes it young again.
 
 // livePageMaxAge is how long a live page is kept after the last /screen or
 // /files that sent its button.
@@ -262,4 +264,87 @@ func (d *daemon) filesCommand(th store.Thread, upd int64) {
 		}}}
 		d.replyTopicMarkup(th, "📂 <code>"+format.Escape(d.tildePath(root))+"</code>", markup)
 	})
+}
+
+// changesCommand answers /changes with what changed in the agent's git
+// repository: not committed, on this branch since it left the main branch,
+// and in the agent's last turn. When any of them shows changes, a button
+// opens them in the Mini App, where each can be picked.
+func (d *daemon) changesCommand(th store.Thread, upd int64) {
+	tag := fmt.Sprintf("%d:changes", upd)
+	switch {
+	case !d.miniAppReady():
+		d.replyTopic(th, tag, "📝 The changes view is part of the Mini App, which is off. Set <code>[miniapp] url</code> to turn it on.")
+		return
+	case !d.cfg.MiniApp.Changes:
+		d.replyTopic(th, tag, "📝 The changes view is off (<code>[miniapp] changes</code>).")
+		return
+	}
+	conv, err := d.st.Conversation(d.ctx, th.CurrentConversationID)
+	if err != nil || conv.CWD == "" {
+		d.replyTopic(th, tag, "This topic has no folder yet.")
+		return
+	}
+	cwd := conv.CWD
+	turn, _ := readLastTurn(d.st, th.ID)
+	d.spawn(func() {
+		ctx, cancel := context.WithTimeout(d.ctx, time.Minute)
+		defer cancel()
+		all, err := miniapp.AllChanges(ctx, cwd, turn)
+		switch {
+		case errors.Is(err, miniapp.ErrNotRepo):
+			d.replyTopic(th, tag, "📝 <code>"+format.Escape(d.tildePath(cwd))+"</code> is not in a git repository, so there are no changes to show.")
+			return
+		case err != nil:
+			d.replyTopic(th, tag, "📝 Could not read the changes: git failed or took too long.")
+			return
+		}
+		head := all[0]
+		var lines []string
+		some := false
+		for _, l := range all {
+			switch l.Base {
+			case miniapp.BaseHead:
+				lines = append(lines, "Not committed: "+changesLabel(l))
+			case miniapp.BaseBranch:
+				lines = append(lines, "This branch vs <code>"+format.Escape(l.Main)+"</code>: "+changesLabel(l))
+			case miniapp.BaseTurn:
+				lines = append(lines, "Last turn ("+l.TurnAt+"): "+changesLabel(l))
+			}
+			some = some || l.Total > 0
+		}
+		top := cwd
+		if out, err := git(d.ctx, cwd, nil, "rev-parse", "--show-toplevel"); err == nil {
+			if t := strings.TrimRight(out, "\n"); t != "" {
+				top = filepath.Clean(t)
+			}
+		}
+		where := "📝 <code>" + format.Escape(d.tildePath(top)) + "</code>"
+		if head.Branch != "" {
+			where += " · " + format.Escape(head.Branch)
+		}
+		text := where + "\n" + strings.Join(lines, "\n")
+		if !some {
+			d.replyTopic(th, tag, text)
+			return
+		}
+		id, err := d.livePage(miniapp.KindChanges, th.ID, top, "📝 "+filepath.Base(top), top)
+		if err != nil {
+			d.log.Warn("mini app: changes page", "err", err)
+			d.replyTopic(th, tag, "Could not open the changes view.")
+			return
+		}
+		markup := &telegram.InlineKeyboardMarkup{InlineKeyboard: [][]telegram.InlineKeyboardButton{{
+			{Text: "📝 View changes", WebApp: &telegram.WebAppInfo{URL: miniAppURL(d.cfg.MiniApp.URL, id)}},
+		}}}
+		d.replyTopicMarkup(th, text, markup)
+	})
+}
+
+// changesLabel sums a list: "3 files · +10 −2", or "nothing".
+func changesLabel(l miniapp.ChangeList) string {
+	if l.Total == 0 {
+		return "nothing"
+	}
+	return changeStat{files: l.Total, added: l.Added, removed: l.Removed}.label()
 }

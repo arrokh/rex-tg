@@ -32,6 +32,7 @@ var botCommands = []telegram.BotCommand{
 	{Command: "info", Description: "Topic: session, pane, and state"},
 	{Command: "screen", Description: "Topic: show the pane screen"},
 	{Command: "files", Description: "Topic: browse the agent's folder"},
+	{Command: "changes", Description: "Topic: what changed in the agent's repository"},
 	{Command: "approve", Description: "Topic: answer the open prompt with yes"},
 	{Command: "deny", Description: "Topic: answer the open prompt with no"},
 	{Command: "esc", Description: "Topic: press Escape"},

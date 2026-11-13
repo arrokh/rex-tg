@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -200,5 +201,54 @@ func TestLiveScreenAndFilesOnlyForTheOwner(t *testing.T) {
 	filesOn = false
 	if code, _ := get("/api/files?id=f1&path=a.txt", owner); code != http.StatusNotFound {
 		t.Errorf("the browser is off, yet: %d", code)
+	}
+}
+
+// The changes view answers only the owner, only for a changes page, and
+// only while it is on.
+func TestChangesOnlyForTheOwner(t *testing.T) {
+	root := changesRepo(t)
+	write(t, filepath.Join(root, "main.go"), "package main\n\nfunc main() { println(2) }\n")
+	pages := map[string]Page{
+		"c1": {Kind: KindChanges, Title: "📝 repo", Thread: 7, Dir: root},
+		"f1": {Kind: KindFiles, Title: "📂 repo", Thread: 7, Dir: root},
+	}
+	on := true
+	var turns []int64
+	s := New(fakeToken, func() int64 { return 42 }, func(id string) (Page, bool) { p, ok := pages[id]; return p, ok }, nil).
+		WithChanges(func() bool { return on }, nil, func(p Page) TurnRange { turns = append(turns, p.Thread); return TurnRange{} })
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+	get := func(path, initData string) (int, map[string]any) {
+		req, _ := http.NewRequest("GET", srv.URL+path, nil)
+		req.Header.Set("X-Telegram-Init-Data", initData)
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer res.Body.Close()
+		var body map[string]any
+		_ = json.NewDecoder(res.Body).Decode(&body)
+		return res.StatusCode, body
+	}
+	owner, other := sign(t, fakeToken, fields(42, time.Now())), sign(t, fakeToken, fields(7, time.Now()))
+	if code, _ := get("/api/changes?id=c1", other); code != http.StatusForbidden || len(turns) != 0 {
+		t.Errorf("another user: %d", code)
+	}
+	code, body := get("/api/changes?id=c1", owner)
+	if code != http.StatusOK || body["base"] != BaseHead || body["total"] != float64(1) || len(turns) != 1 || turns[0] != 7 {
+		t.Fatalf("list: %d %v %v", code, body, turns)
+	}
+	if code, body := get("/api/changes?id=c1&base=head&path=main.go", owner); code != http.StatusOK || !strings.Contains(fmt.Sprint(body["html"]), "println(2)") {
+		t.Errorf("main.go: %d %v", code, body)
+	}
+	for _, p := range []string{"/api/changes?id=f1", "/api/changes?id=c1&base=nope", "/api/changes?id=c1&base=turn"} {
+		if code, _ := get(p, owner); code < 400 {
+			t.Errorf("%s: %d", p, code)
+		}
+	}
+	on = false
+	if code, _ := get("/api/changes?id=c1", owner); code != http.StatusNotFound {
+		t.Errorf("the view is off, yet: %d", code)
 	}
 }
