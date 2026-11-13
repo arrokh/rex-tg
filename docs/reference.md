@@ -293,6 +293,8 @@ dir = "~/.local/state/rex-tg"           # Database, spool, logs, and uploads.
 
 ### Tables and rich messages
 
+A code block with a line longer than 80 characters does not fit a phone. It stays in the message as a short preview (3 lines), and the whole block comes right after as a file, such as `code-1.go` (named by the block's language, else `.txt`). Tap it to open or copy it.
+
 A table that is wider than a phone (more than 40 characters) becomes a list: one block per row, with the first cell in bold and `Column: value` for the others. A narrower table stays a monospace grid.
 
 Final answers go out in Telegram's rich message format (`[display] rich_messages`, on by default), so Telegram renders tables, code, and headings itself. If Telegram rejects one, rex-tg sends it in its own format (Telegram HTML, with the tables as above). An answer that does not fit one message goes as a `.md` file. Set `rich_messages = false` to always use rex-tg's own format.
