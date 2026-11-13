@@ -85,7 +85,7 @@ func TestTopicName(t *testing.T) {
 		name, pane, cwd, title, want string
 	}{
 		{"the pane's own name first", "billing api migration to go", "/w/infra", title, "billing api migration to go"},
-		{"a default pane name is skipped", "shell", "/w/notes.md", title, "[notes.md][fix] Update the list…"},
+		{"a default pane name is skipped", "shell", "/w/notes.md", title, "Update the list of follow ups…"},
 		{"then the folder", "shell", "/w/notes.md", "", "notes.md"},
 		{"then the runtime", "", "", "", "pi"},
 		{"spaces are folded", "  my   pane ", "", "", "my pane"},

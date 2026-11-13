@@ -106,3 +106,24 @@ func TestTabOwnerIsTheFirstAgentOfTheTab(t *testing.T) {
 		t.Errorf("owner = %q, want a", got)
 	}
 }
+
+// A topic's icon is the first character of its name, so a name starts with
+// a letter or digit: pi's "[folder]" tag goes when it repeats the folder and
+// moves to the end otherwise; Markdown marks and leading symbols go.
+func TestTopicNameStartsWithALetter(t *testing.T) {
+	cases := []struct{ cwd, title, want string }{
+		{"/work/resume.md", "[resume.md] Resume md Practice", "Resume md Practice"},
+		{"/work/app", "[WIP] Fix login", "Fix login [WIP]"},
+		{"/work/app", "**Fix** the `login` page", "Fix the login page"},
+		{"/work/app", "— 🚀 Launch plan", "Launch plan"},
+		{"/work/app", "2nd try", "2nd try"},
+		{"/work/.dotfiles", "", "dotfiles"},
+		{"/work/app", "[app]", "app"},
+		{"/work/app", "***", "app"},
+	}
+	for _, c := range cases {
+		if got := topicName("shell", agents.Pi, c.cwd, c.title); got != c.want {
+			t.Errorf("topicName(%q, %q) = %q, want %q", c.cwd, c.title, got, c.want)
+		}
+	}
+}

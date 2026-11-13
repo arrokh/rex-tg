@@ -69,6 +69,8 @@ func TestRenderHTML(t *testing.T) {
 			"<pre>| Name  | Qty |\n|-------|-----|\n| apple |   3 |\n| fig   |  12 |</pre>"},
 		{"table center and escape", "| a<b |\n|:-:|\n| x |",
 			"<pre>| a&lt;b |\n|-----|\n|  x  |</pre>"},
+		{"wide table becomes a list", "| File | Change | Why |\n|---|---|---|\n| `a.go` | adds the steer path for every agent | a late message reaches the run |\n| b.go |  | [docs](https://example.com) & more |",
+			"<b><code>a.go</code></b>\nChange: adds the steer path for every agent\nWhy: a late message reaches the run\n\n<b>b.go</b>\nWhy: <a href=\"https://example.com\">docs</a> &amp; more"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

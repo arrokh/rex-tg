@@ -2312,7 +2312,7 @@ func TestTopicNameFollowsThePaneAndTheSession(t *testing.T) {
 		return err == nil && c.Title != ""
 	})
 	skew.Add(int64(31 * time.Second)) // the next name check is due
-	e.waitFor("the rename", func() bool { return name() == "[proj][fix] Repair the flaky…" })
+	e.waitFor("the rename", func() bool { return name() == "Repair the flaky login test on…" })
 	// The tab is the user's: only tabs of the session for /new follow their topic.
 	for _, c := range e.fake.Calls() {
 		if slices.Contains(c.Args, "rename") {

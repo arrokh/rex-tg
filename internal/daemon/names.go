@@ -39,11 +39,53 @@ func paneName(label string) string {
 // session name can come from a prompt, so secrets are redacted.
 func topicName(paneLabel string, rt agents.Runtime, cwd, title string) string {
 	for _, s := range []string{paneName(paneLabel), title, folderBase(cwd), string(rt)} {
-		if s = strings.Join(strings.Fields(format.Redact(s)), " "); s != "" {
+		if s = tidyName(format.Redact(s), folderBase(cwd)); s != "" {
 			return shortName(s, maxTopicName)
 		}
 	}
 	return "agent"
+}
+
+// leadTag is a tag in brackets at the start of a name, such as the
+// "[resume.md]" that pi puts before a session name.
+var leadTag = regexp.MustCompile(`^[\[({<]([^\])}>]{1,40})[\])}>]\s*`)
+
+// tidyName makes a name start with a letter or digit. Telegram draws a
+// topic's icon from the first character of its name, so a name that starts
+// with "[" or "**" gets that symbol as its icon. A leading tag in brackets
+// goes: it is dropped when it only repeats the folder's name, else it moves
+// to the end. Markdown marks (**, __, `) go too, and so do symbols before the
+// first letter or digit. The result is "" when no letter or digit is left.
+func tidyName(s, folder string) string {
+	s = strings.Join(strings.Fields(s), " ")
+	for _, m := range []string{"**", "__", "`"} {
+		s = strings.ReplaceAll(s, m, "")
+	}
+	// pi names a session "[folder][kind] title": every leading tag goes.
+	var tags []string
+	for {
+		m := leadTag.FindStringSubmatch(s)
+		if m == nil {
+			break
+		}
+		rest := strings.TrimSpace(s[len(m[0]):])
+		tag := strings.TrimSpace(m[1])
+		if rest == "" {
+			if len(tags) == 0 {
+				s = tag // the name is only a tag: keep its text
+			}
+			break
+		}
+		s = rest
+		if !strings.EqualFold(tag, folder) {
+			tags = append(tags, "["+tag+"]")
+		}
+	}
+	if len(tags) > 0 {
+		s += " " + strings.Join(tags, "")
+	}
+	s = strings.TrimLeftFunc(s, func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsDigit(r) })
+	return strings.TrimSpace(s)
 }
 
 // folderBase is the last element of a folder path, or "".
