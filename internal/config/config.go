@@ -105,8 +105,14 @@ type Config struct {
 		MacNotice            bool     `toml:"mac_notice"`
 		ProgressDelay        Duration `toml:"progress_delay"`
 		ProgressEditInterval Duration `toml:"progress_edit_interval"`
+		// ProgressAnimation edits the progress message this often while the
+		// agent works, so its hourglass turns and its timer moves. "0s"
+		// turns it off: then the timer moves every 10 s at first and less
+		// often later. Default 3s.
+		ProgressAnimation Duration `toml:"progress_animation"`
 		// RichMessages sends final answers with Telegram's sendRichMessage
-		// (Bot API 10.1) instead of HTML parts. Off by default.
+		// (Bot API 10.1) instead of HTML parts, so Telegram renders tables
+		// and code itself. On by default.
 		RichMessages bool `toml:"rich_messages"`
 		// SendImages sends the image files that a final answer names to the
 		// topic, right after the answer. On by default.
@@ -216,6 +222,8 @@ func Default(home string) Config {
 	c.Display.MessageLength = 1500
 	c.Display.ProgressDelay = secs(2)
 	c.Display.ProgressEditInterval = secs(2)
+	c.Display.ProgressAnimation = secs(3)
+	c.Display.RichMessages = true
 
 	c.InputSettings.QueueExpiry = Duration{30 * time.Minute}
 	c.InputSettings.JoinWindow = Duration{300 * time.Millisecond}
@@ -265,6 +273,11 @@ const (
 	MinMessageLength = 300
 	MaxMessageLength = 4000
 )
+
+// MinProgressAnimation is the fastest display.progress_animation: every
+// working agent edits its progress message this often, within the chat's
+// budget of about one message a second.
+const MinProgressAnimation = 2 * time.Second
 
 // MinStreamInterval is the fastest display.stream_interval.
 const MinStreamInterval = time.Second
@@ -355,6 +368,9 @@ func (c Config) validate() error {
 	}
 	if c.Display.MessageLength < MinMessageLength || c.Display.MessageLength > MaxMessageLength {
 		return fmt.Errorf("display.message_length %d: want %d to %d characters", c.Display.MessageLength, MinMessageLength, MaxMessageLength)
+	}
+	if a := c.Display.ProgressAnimation.Duration; a != 0 && a < MinProgressAnimation {
+		return fmt.Errorf("display.progress_animation %v: \"0s\" (off) or at least %v", a, MinProgressAnimation)
 	}
 	if c.Display.StreamInterval.Duration < MinStreamInterval {
 		return fmt.Errorf("display.stream_interval %v: at least %v (Telegram allows about one message a second in a chat)", c.Display.StreamInterval.Duration, MinStreamInterval)

@@ -137,10 +137,10 @@ func (t *Tracker) rows() []string {
 	return out
 }
 
-// spinner is the progress message's first icon. It turns one step with each
-// edit, so a running turn looks alive; a message cannot animate by itself,
-// and an edit only for the spinner would spend the chat's rate budget.
-var spinner = []string{"◐", "◓", "◑", "◒"}
+// spinner is the progress message's first icon: an hourglass that turns
+// with each edit, so a running turn looks alive. A message cannot animate by
+// itself; Config.AnimateInterval sets how often it is edited for this.
+var spinner = []string{"⏳", "⌛"}
 
 func (t *Tracker) progressHTML(now time.Time) string {
 	var b strings.Builder

@@ -651,7 +651,7 @@ func TestTruncationAndElapsed(t *testing.T) {
 	x.ev(call("c", "t", "Read", agents.ToolRead, strings.Repeat("x", 100)), 0)
 	html := find[turn.ShowProgress](t, x.tick(2)).HTML
 	for _, l := range strings.Split(html, "\n")[:2] {
-		if n := len([]rune(l)); n > 20+len([]rune("◐ ")) {
+		if n := len([]rune(l)); n > 20+len([]rune("⏳ ")) {
 			t.Errorf("line too long (%d): %s", n, l)
 		}
 	}
@@ -1015,12 +1015,12 @@ func TestMessageBelowMovesTheProgressDown(t *testing.T) {
 	}
 }
 
-// TestSpinnerTurnsWithEachEdit: the first icon of the progress message turns
-// one step with each edit that is sent anyway, and never causes one itself.
+// TestSpinnerTurnsWithEachEdit: the hourglass turns one step with each edit
+// that is sent anyway, and without an animation it never causes one itself.
 func TestSpinnerTurnsWithEachEdit(t *testing.T) {
 	x := newH(t, turn.Config{}, progress)
 	x.ev(prompt("p", "go"), 0)
-	if show := find[turn.ShowProgress](t, x.tick(2)).HTML; !strings.HasPrefix(show, "◐ Working…") {
+	if show := find[turn.ShowProgress](t, x.tick(2)).HTML; !strings.HasPrefix(show, "⏳ Working…") {
 		t.Fatalf("show = %q", show)
 	}
 	if got := without(x.tick(4)); len(got) != 0 {
@@ -1031,8 +1031,40 @@ func TestSpinnerTurnsWithEachEdit(t *testing.T) {
 		if types(as) != "EditProgress" {
 			t.Fatalf("tick %v: got %s", s, types(as))
 		}
-		if want := []string{"◓", "◑", "◒", "◐"}[i]; !strings.HasPrefix(as[0].(turn.EditProgress).HTML, want+" ") {
-			t.Errorf("tick %v: %q, want the spinner at %s", s, as[0].(turn.EditProgress).HTML, want)
+		if want := []string{"⌛", "⏳", "⌛", "⏳"}[i]; !strings.HasPrefix(as[0].(turn.EditProgress).HTML, want+" ") {
+			t.Errorf("tick %v: %q, want %s", s, as[0].(turn.EditProgress).HTML, want)
+		}
+	}
+}
+
+// TestAnimationEditsEveryInterval: with AnimateInterval, the progress
+// message is edited that often while nothing else changes, also when its
+// text stays (a turn over an hour shows minutes only), but not while the
+// turn waits for an answer.
+func TestAnimationEditsEveryInterval(t *testing.T) {
+	x := newH(t, turn.Config{AnimateInterval: 3 * time.Second}, progress)
+	x.ev(prompt("p", "go"), 0)
+	x.tick(2) // shown: ⏳
+	if got := without(x.tick(4.9)); len(got) != 0 {
+		t.Fatalf("before 3s: %s", types(got))
+	}
+	as := without(x.tick(5))
+	if types(as) != "EditProgress" || !strings.HasPrefix(as[0].(turn.EditProgress).HTML, "⌛ ") || !strings.Contains(as[0].(turn.EditProgress).HTML, "⏱ 5s") {
+		t.Fatalf("at 5s: %+v", as)
+	}
+	if as = without(x.tick(8)); types(as) != "EditProgress" || !strings.HasPrefix(as[0].(turn.EditProgress).HTML, "⏳ ") {
+		t.Fatalf("at 8s: %+v", as)
+	}
+	// Past an hour the time shows minutes, and the hourglass still turns.
+	x.tick(3700)
+	if as = without(x.tick(3703)); types(as) != "EditProgress" {
+		t.Fatalf("past an hour: %s", types(as))
+	}
+	x.k.State(turn.StateBlocked, at(3704))
+	x.tick(3706) // the edit to "Waiting for your answer"
+	for _, s := range []float64{3709, 3712, 3715} {
+		if got := without(x.tick(s)); len(got) != 0 {
+			t.Fatalf("tick %v while blocked: %s", s, types(got))
 		}
 	}
 }
@@ -1044,7 +1076,7 @@ func TestHeadlineDropsMarkdownMarks(t *testing.T) {
 	x.ev(prompt("p", "go"), 0)
 	x.ev(text("m", agents.Commentary, "No report found for **Full Stack Engineer APAC** in `docs`\nmore"), 0.5)
 	html := find[turn.ShowProgress](t, x.tick(2)).HTML
-	if first := strings.SplitN(html, "\n", 2)[0]; first != "◐ No report found for Full Stack Engineer APAC in docs" {
+	if first := strings.SplitN(html, "\n", 2)[0]; first != "⏳ No report found for Full Stack Engineer APAC in docs" {
 		t.Errorf("headline = %q", first)
 	}
 }

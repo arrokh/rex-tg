@@ -313,22 +313,24 @@ func TestCrashDuringSend(t *testing.T) {
 	e := newCrashEnv(t)
 	e.openTopic()
 
-	e.tg.Delay("sendMessage", 30*time.Second)
-	before := len(e.tg.Calls("sendMessage"))
+	// A final answer goes out as a rich message (the default).
+	e.tg.Delay("sendRichMessage", 30*time.Second)
+	before := len(e.tg.Calls("sendRichMessage"))
 	// No prompt line: a prompt post would be held first and time out (15 s
 	// client limit) before the answer is sent.
 	e.final("the held answer")
 	eventually(t, 20*time.Second, "the answer request to reach Telegram", func() bool {
-		calls := e.tg.Calls("sendMessage")
+		calls := e.tg.Calls("sendRichMessage")
 		for _, c := range calls[before:] {
-			if s, _ := c.Params["text"].(string); strings.Contains(s, "the held answer") {
+			rm, _ := c.Params["rich_message"].(map[string]any)
+			if s, _ := rm["markdown"].(string); strings.Contains(s, "the held answer") {
 				return true
 			}
 		}
 		return false
 	})
 	e.kill()
-	e.tg.Delay("sendMessage", 0)
+	e.tg.Delay("sendRichMessage", 0)
 	e.start()
 
 	// The request died with the daemon, so Telegram never posted the answer.
@@ -355,13 +357,13 @@ func TestCrashAfterTelegramPostedTheAnswer(t *testing.T) {
 	e := newCrashEnv(t)
 	e.openTopic()
 
-	e.tg.DelayAnswer("sendMessage", 30*time.Second)
+	e.tg.DelayAnswer("sendRichMessage", 30*time.Second)
 	e.final("the posted answer")
 	eventually(t, 20*time.Second, "the answer to be posted", func() bool {
 		return e.count(e.thread, "the posted answer") > 0
 	})
 	e.kill()
-	e.tg.DelayAnswer("sendMessage", 0)
+	e.tg.DelayAnswer("sendRichMessage", 0)
 	e.start()
 
 	eventually(t, 20*time.Second, "the notice after the restart", func() bool { return e.noticeCount() > 0 })

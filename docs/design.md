@@ -370,7 +370,7 @@ While the agent works, one progress message is edited in place:
 ⏱ 1m 12s · 4 tools
 ```
 
-- **Headline.** The first line of the agent's latest commentary as plain text (Markdown marks such as `**` dropped), or "Working…" before there is any. Its icon is a spinner (◐ ◓ ◑ ◒) that turns one step with each edit, so a running turn looks alive. A Telegram message cannot animate by itself, and an edit only for the spinner would spend the rate budget, so it turns with the edits that go out anyway (new tools, commentary, the timer).
+- **Headline.** The first line of the agent's latest commentary as plain text (Markdown marks such as `**` dropped), or "Working…" before there is any. Its icon is an hourglass (⏳ ⌛) that turns with each edit. A Telegram message cannot animate by itself, so `[display] progress_animation` (3 s by default, at least 2 s, `"0s"` off) edits the message that often while the agent works: the hourglass turns and the timer moves. Edits go through the shared rate budget at a low priority and merge per topic, so with many agents at work the animation slows down instead of delaying answers. While the turn waits for an answer, the message stays as it is. With the animation off, the hourglass turns only with the edits that go out anyway.
 - **Rows.** One row per tool call: `▸` while it runs, `✅` when it ends, `❌` when it fails. Repeated calls of the same tool in a row collapse, for example `📖 Read ×3`. At most 8 rows of at most 120 characters, as in OpenClaw. Older rows drop off the top.
 - **Labels (D14).** A row shows a short label: Claude's Bash `description`, a file path relative to the project, or a search pattern. For a shell call without a description, it shows the start of the command after secret removal. A row never shows tool output or file contents.
 - **Footer.** Elapsed time and the number of tools. The time moves on even when nothing else changes, for example while the agent thinks or one long tool runs. Such an edit comes every 10 seconds at first. The step grows with the turn (a sixth of the elapsed time) up to one minute, so a long turn spends little of the rate budget. While the turn waits for the user's answer, the time stays.
@@ -415,7 +415,7 @@ While a turn runs, the topic shows the agent's text as a Telegram draft (`sendMe
   - A short last message joins the one before.
   - An answer that would take more than 6 such messages comes in fuller ones, of up to 4000 characters, still split at paragraphs: more messages are too many to read on a phone, and each one costs a second of the chat's budget.
   - There are no `(1/3)` counters. Only the first message makes a sound; the others come silently, as when a person sends a long reply in a few messages.
-- Tables become monospace blocks when they fit a phone (40 characters or less). A wider grid would wrap on a phone and its columns would fall apart, so a wider table becomes a list: one block per row, with the first cell in bold and then `Column: value` for the others. Links and code in cells keep their format. With `[display] rich_messages`, Telegram renders the table itself.
+- In rex-tg's own format (rich messages off, or a rich message that Telegram rejected), tables become monospace blocks when they fit a phone (40 characters or less). A wider grid would wrap on a phone and its columns would fall apart, so a wider table becomes a list: one block per row, with the first cell in bold and then `Column: value` for the others. Links and code in cells keep their format. With `[display] rich_messages`, Telegram renders the table itself.
 - Link previews are off, because agent answers often hold URLs from logs and code.
 - An answer longer than four full messages (16000 characters) is sent as a `.md` file.
 
@@ -626,7 +626,7 @@ These features are built. Some are off until you set them up.
 | --- | --- | --- |
 | Photos and files | rex-tg downloads a photo or document, up to `[input] max_upload_mb` (20 MB, the Bot API limit), to `~/.local/state/rex-tg/uploads/<topic>/`, with mode 0600. Then it types the file's path, after the caption if there is one, like a text message. The agents read image and file paths from the prompt. Uploads older than 7 days are deleted. | On |
 | Voice notes | rex-tg downloads the voice note, converts it to 16 kHz mono WAV with ffmpeg, and runs `whisper_cli -m <model> -l <language> -nt -np -f <wav>`. It posts "🎤 <text>" in the topic and types the text like a text message. | Off until `[voice] whisper_cli` and `model` are set |
-| Rich messages | Final answers of up to 32768 characters go out with `sendRichMessage` (Bot API 10.1) as Markdown, so Telegram renders tables, code, and headings itself. On a 400 error, rex-tg sends the same text as plain text, or as a `.md` file when it is longer than 4000 characters. This is safe for "at most once", because Telegram posted nothing. | Off (`[display] rich_messages`) |
+| Rich messages | Final answers of up to 32768 characters go out with `sendRichMessage` (Bot API 10.1) as Markdown, so Telegram renders tables, code, and headings itself. On a 400 error, rex-tg sends the same answer in its own format (Telegram HTML, which falls back to plain text when Telegram cannot parse it), or as a `.md` file when it does not fit one message. This is safe for "at most once", because Telegram posted nothing. | On (`[display] rich_messages`) |
 | `/pause`, `/unpause` | In the main chat. `/pause` stops all typing into panes, for every topic, until `/unpause`. Outgoing messages continue. The flag survives a restart. | Not paused |
 | `/mute`, `/unmute` | In a topic. Muted topics send every message without sound. | Not muted |
 
@@ -1030,6 +1030,8 @@ show_mac_prompts = true
 mac_notice = true            # hold Mac turns behind one notice (8.4a)
 progress_delay = "2s"
 progress_edit_interval = "2s"
+progress_animation = "3s"
+rich_messages = true
 
 [input]
 queue_expiry = "30m"

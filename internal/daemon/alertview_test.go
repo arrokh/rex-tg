@@ -269,3 +269,24 @@ Enter to select · Tab/Arrow keys to navigate · Esc to cancel`
 		t.Errorf("head = %q", h)
 	}
 }
+
+// The review page of several questions is a question too, also when its tab
+// bar is off the screen: its alert and the line that stays say so.
+func TestReviewPageIsAQuestion(t *testing.T) {
+	screen := `Review your answers
+
+ ● Ship this batch as v0.1.12?
+   → PR, merge, release
+
+Ready to submit your answers?
+
+❯ 1. Submit answers
+  2. Cancel`
+	v := parsePromptView(screenLines(screen), false)
+	if !v.ok || !v.isQuestion() || v.question != "Ready to submit your answers?" {
+		t.Fatalf("view = %+v", v)
+	}
+	if h := alertHead(v, "Claude Code", store.AlertPermission); h != "❓ Claude Code: Ready to submit your answers?" {
+		t.Errorf("head = %q", h)
+	}
+}
