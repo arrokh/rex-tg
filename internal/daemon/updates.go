@@ -102,6 +102,12 @@ func (d *daemon) onMessage(u telegram.Update) {
 		if m.From.IsBot && m.Chat.ID == d.ownerChat {
 			// In the private chat, the only bot is this one: Telegram sends the
 			// bot's own "topic created" notice as an update (seen live).
+			if e := m.ForumTopicEdited; e != nil && e.Name != "" {
+				// Telegram's word that a rename took effect, for the log.
+				th, ok, _ := d.st.ThreadByTopic(d.ctx, m.Chat.ID, m.MessageThreadID)
+				d.log.Info("Telegram confirmed a topic rename", "thread", th.ID, "known", ok, "as_stored", ok && e.Name == th.Name)
+				return
+			}
 			d.log.Debug("own service message", "update", u.UpdateID)
 			return
 		}
