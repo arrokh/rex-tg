@@ -136,3 +136,77 @@ func TestSizeText(t *testing.T) {
 		}
 	}
 }
+
+// Files go to Telegram only from the agent's folder, the home folder, or a
+// temporary folder, and never from a hidden place or ~/Library.
+func TestAllowedPlace(t *testing.T) {
+	root := t.TempDir()
+	home := filepath.Join(root, "home")
+	cwd := filepath.Join(root, "work", "app") // a project outside home
+	for path, want := range map[string]bool{
+		filepath.Join(cwd, "out", "report.pdf"):                  true,
+		filepath.Join(home, "Desktop", "shot.png"):               true,
+		filepath.Join(home, ".ssh", "id_rsa.png"):                false,
+		filepath.Join(home, "work", ".secret", "data.csv"):       false,
+		filepath.Join(home, "Library", "Keychains", "login.csv"): false,
+		filepath.Join(cwd, ".env.csv"):                           false,
+		"/etc/hosts.csv":                                         false,
+	} {
+		if got := allowedPlace(path, home, cwd); got != want {
+			t.Errorf("allowedPlace(%q) = %v, want %v", path, got, want)
+		}
+	}
+	// The temp folder itself counts, for files made there.
+	if !allowedPlace(filepath.Join(os.TempDir(), "chart.png"), home, cwd) {
+		t.Error("a file in the temp folder is refused")
+	}
+	// A symlink in the project to a hidden place is judged where it points.
+	if err := os.MkdirAll(filepath.Join(home, ".aws"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(cwd, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	secret := filepath.Join(home, ".aws", "keys.csv")
+	if err := os.WriteFile(secret, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(cwd, "keys.csv")
+	if err := os.Symlink(secret, link); err != nil {
+		t.Fatal(err)
+	}
+	if got := findFiles("See `"+link+"`.", home, cwd, sendExts(false, []string{"csv"})); len(got) != 0 {
+		t.Errorf("a link to a hidden place was offered: %v", got)
+	}
+}
+
+// The Mac's disk ignores case, and an agent's own folder may be in
+// ~/Library (iCloud Drive): its files may go, not hidden ones.
+func TestAllowedPlaceCaseAndOwnFolder(t *testing.T) {
+	home := "/Users/someone"
+	if allowedPlace("/Users/someone/library/Keychains/login.png", home, "/work/app") {
+		t.Error("~/library in lower case slipped through")
+	}
+	icloud := "/Users/someone/Library/Mobile Documents/com~apple~CloudDocs/app"
+	if !allowedPlace(icloud+"/out/chart.png", home, icloud) {
+		t.Error("a file of an agent working in iCloud Drive is refused")
+	}
+	if allowedPlace(icloud+"/.git/x.png", home, icloud) {
+		t.Error("a hidden folder in the agent's own folder is allowed")
+	}
+	// An agent started in ~ or / does not open ~/Library or /etc.
+	for _, cwd := range []string{home, "/Users", "/", home + "/Library"} {
+		for _, p := range []string{home + "/Library/Keychains/login.csv", "/etc/hosts.csv", home + "/.ssh/k.csv"} {
+			if allowedPlace(p, home, cwd) {
+				t.Errorf("cwd %q: %q is allowed", cwd, p)
+			}
+		}
+		if !allowedPlace(home+"/Desktop/r.pdf", home, cwd) {
+			t.Errorf("cwd %q: a file on the Desktop is refused", cwd)
+		}
+	}
+	// Other apps' caches next to the temp folder are not a temp folder.
+	if allowedPlace("/var/folders/zz/other/C/com.example.app/data.csv", home, "/work/app") {
+		t.Error("another app's cache is allowed")
+	}
+}

@@ -274,6 +274,9 @@ func (d *daemon) onCallback(u telegram.Update) {
 	case macAnswerData:
 		d.macAnswerButton(cb)
 		return
+	case dismissData:
+		d.dismissButton(cb)
+		return
 	case fileOfferData:
 		if len(parts) == 3 {
 			d.fileOfferButton(cb, parts)

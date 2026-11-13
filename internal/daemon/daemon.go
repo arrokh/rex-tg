@@ -15,6 +15,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -127,6 +128,7 @@ func Run(ctx context.Context, opt Options) error {
 	})
 	defer tg.OnMessage(nil)
 	timing := opt.Timing.withDefaults()
+	polled := &atomic.Int64{} // when the last getUpdates call that finished started (pollLoop)
 	rx := opt.Rex
 	if rx == nil {
 		rx = rex.New(cfg.Rex.CLI)
@@ -138,8 +140,10 @@ func Run(ctx context.Context, opt Options) error {
 		Logger:        log,
 		CheckDelay:    timing.CheckDelay,
 		Markup:        fileOfferMarkup(st),
+		PolledSince:   func(t time.Time) bool { return polled.Load() >= t.UnixNano() },
 	})
 	d := newDaemon(cfg, home, log, now, st, tg, rx, snd, opt.ProcStart, timing)
+	d.polled = polled
 	if opt.HasProgram != nil {
 		d.hasProgram = opt.HasProgram
 	}

@@ -111,6 +111,10 @@ type Options struct {
 	// Markup gives the buttons of a text part that are not the sender's own,
 	// or nil (nil Markup: none). It is called when the part is sent.
 	Markup func(p store.Part) *telegram.InlineKeyboardMarkup
+	// PolledSince tells whether a getUpdates call finished at or after t,
+	// so that every message the user sent before t has its number in the
+	// store. The check of an unknown part waits for it (nil: no wait).
+	PolledSince func(t time.Time) bool
 }
 
 const (
@@ -132,6 +136,7 @@ type Sender struct {
 	log        *slog.Logger
 	checkDelay time.Duration
 	markup     func(store.Part) *telegram.InlineKeyboardMarkup
+	polled     func(time.Time) bool
 
 	events chan Event
 	wake   chan struct{}
@@ -177,7 +182,7 @@ func New(st *store.Store, tg *telegram.Client, opt Options) *Sender {
 		opt.CheckDelay = 60 * time.Second
 	}
 	return &Sender{
-		st: st, tg: tg, now: opt.Now, sleep: opt.Sleep, log: opt.Logger, checkDelay: opt.CheckDelay, markup: opt.Markup,
+		st: st, tg: tg, now: opt.Now, sleep: opt.Sleep, log: opt.Logger, checkDelay: opt.CheckDelay, markup: opt.Markup, polled: opt.PolledSince,
 		events:    make(chan Event, eventBufSize),
 		wake:      make(chan struct{}, 1),
 		bucket:    newBucket(opt.RatePerSecond, opt.Burst, opt.Now()),

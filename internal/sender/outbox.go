@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"rex-tg/internal/store"
@@ -248,6 +249,7 @@ func (s *Sender) Recover(ctx context.Context) error {
 	for _, p := range check {
 		s.unknownPart(ctx, p)
 	}
+	s.sweepCheckNotes(ctx, check)
 	// A progress message caught in "sending" may exist; it is never sent again.
 	all, err := s.st.AllProgress(ctx)
 	if err != nil {
@@ -389,7 +391,8 @@ func (s *Sender) unknownPart(ctx context.Context, p store.Part) {
 		return
 	}
 	j := &job{prio: PriorityAnswer, notBefore: s.now().Add(s.checkDelay)}
-	j.run = func(ctx context.Context, j *job) jobResult { return s.checkPart(ctx, j, p.OutboxID, p.Part) }
+	c := &partCheck{}
+	j.run = func(ctx context.Context, j *job) jobResult { return s.checkPart(ctx, j, c, p.OutboxID, p.Part) }
 	if err := s.addJob(j); err != nil {
 		s.log.Warn("part check not started", "outbox", p.OutboxID, "part", p.Part, "err", err)
 	}
@@ -407,11 +410,34 @@ func (s *Sender) unknownPart(ctx context.Context, p store.Part) {
 // It runs once the network works again and CheckDelay after the outcome. By
 // then the request cannot arrive late: its connection was closed, and the
 // client's connections drop unsent data when they close.
-func (s *Sender) checkPart(ctx context.Context, j *job, outboxID int64, part int) jobResult {
+//
+// The numbers of the user's messages come with getUpdates. A message that
+// the user sent just before the note may not be fetched yet, and its number
+// would look like the part's. So the numbers are compared only once a
+// getUpdates call finished after the note (PolledSince): the job comes back
+// every half second for that, and gives up with the notice after
+// maxPollWait.
+func (s *Sender) checkPart(ctx context.Context, j *job, c *partCheck, outboxID int64, part int) jobResult {
 	bg := context.WithoutCancel(ctx)
 	p, err := s.st.Part(ctx, outboxID, part)
+	if err != nil && !errors.Is(err, store.ErrNotFound) {
+		if ctx.Err() != nil {
+			return jobResult{}
+		}
+		return jobResult{retry: true, delay: time.Second} // the store failed: look again
+	}
+	if c.noteID == 0 {
+		c.load(bg, s.st, outboxID, part) // a note posted before a restart
+	}
 	if err != nil || p.State != store.OutboxUnknown || p.Checked {
+		if c.noteID != 0 && err == nil {
+			s.deleteMessage(store.Thread{ID: p.ThreadID, ChatID: p.ChatID, MessageThreadID: p.MessageThreadID}, c.noteID)
+		}
+		c.forget(bg, s.st, outboxID, part)
 		return jobResult{} // gone, sent again by /resend, or checked already
+	}
+	if c.noteID != 0 {
+		return s.judgePart(ctx, bg, p, c)
 	}
 	if !p.HasFloor || s.sentTooOften(ctx, outboxID) {
 		s.giveUpCheck(bg, p)
@@ -421,6 +447,13 @@ func (s *Sender) checkPart(ctx context.Context, j *job, outboxID int64, part int
 	id, v, err := s.sendText(ctx, p.ThreadID, p.ChatID, p.MessageThreadID, text, true, true, nil)
 	switch v {
 	case vOK:
+		// The time after the answer: a poll that started before it may not
+		// have fetched every message older than the note (sendText can wait
+		// for the rate budget first).
+		c.noteID, c.noteAt = id, s.now()
+		if err := c.save(bg, s.st, outboxID, part); err != nil {
+			s.log.Warn("part check: note not saved", "outbox", outboxID, "part", part, "err", err)
+		}
 	case vRetry: // nothing was posted: the network or the rate limit
 		j.attempts++
 		return jobResult{retry: true, delay: backoff(j.attempts - 1)}
@@ -442,7 +475,104 @@ func (s *Sender) checkPart(ctx context.Context, j *job, outboxID int64, part int
 		s.giveUpCheck(bg, p)
 		return jobResult{}
 	}
+	return s.judgePart(ctx, bg, p, c)
+}
+
+// partCheck is the state of one part's check across the job's runs: the
+// note, once it is posted. It is kept in the store too (kv
+// "check_note:<outbox>:<part>"), so a check cut by a stop goes on with the
+// same note after the start, instead of leaving it and posting another.
+type partCheck struct {
+	noteID int64
+	noteAt time.Time
+}
+
+func checkNoteKey(outboxID int64, part int) string {
+	return fmt.Sprintf("check_note:%d:%d", outboxID, part)
+}
+
+func (c *partCheck) save(ctx context.Context, st *store.Store, outboxID int64, part int) error {
+	return st.Set(ctx, checkNoteKey(outboxID, part), fmt.Sprintf("%d:%d", c.noteID, c.noteAt.UnixNano()))
+}
+
+// sweepCheckNotes deletes the notes of checks that cannot go on: their part
+// left the "unknown" state while rex-tg was stopped (/resend), or is gone.
+// The parts still to check (check) keep their notes. A note's message
+// number was stored when it was posted, so the delete hits only that note.
+func (s *Sender) sweepCheckNotes(ctx context.Context, check []store.Part) {
+	keys, err := s.st.KeysWithPrefix(ctx, "check_note:")
+	if err != nil {
+		s.log.Warn("part check: list notes", "err", err)
+		return
+	}
+	live := map[string]bool{}
+	for _, p := range check {
+		live[checkNoteKey(p.OutboxID, p.Part)] = true
+	}
+	for _, k := range keys {
+		var outboxID int64
+		var part int
+		if live[k] {
+			continue
+		}
+		if _, err := fmt.Sscanf(k, "check_note:%d:%d", &outboxID, &part); err != nil {
+			_ = s.st.Delete(ctx, k)
+			continue
+		}
+		c := &partCheck{}
+		c.load(ctx, s.st, outboxID, part)
+		p, err := s.st.Part(ctx, outboxID, part)
+		switch {
+		case err == nil && c.noteID != 0:
+			s.deleteMessage(store.Thread{ID: p.ThreadID, ChatID: p.ChatID, MessageThreadID: p.MessageThreadID}, c.noteID)
+		case err != nil && !errors.Is(err, store.ErrNotFound):
+			continue // the store failed: look again at the next start
+		}
+		c.forget(ctx, s.st, outboxID, part)
+	}
+}
+
+func (c *partCheck) load(ctx context.Context, st *store.Store, outboxID int64, part int) {
+	v, ok, err := st.Get(ctx, checkNoteKey(outboxID, part))
+	if err != nil || !ok {
+		return
+	}
+	var id, at int64
+	if _, err := fmt.Sscanf(v, "%d:%d", &id, &at); err == nil && id != 0 {
+		c.noteID, c.noteAt = id, time.Unix(0, at)
+	}
+}
+
+func (c *partCheck) forget(ctx context.Context, st *store.Store, outboxID int64, part int) {
+	_ = st.Delete(ctx, checkNoteKey(outboxID, part))
+}
+
+// maxPollWait is how long the check waits for a getUpdates call after its
+// note; when Telegram does not answer that long, the notice comes.
+const maxPollWait = 3 * time.Minute
+
+// judgePart compares the numbers once the user's messages up to the note are
+// fetched (see checkPart).
+func (s *Sender) judgePart(ctx, bg context.Context, p store.Part, c *partCheck) jobResult {
 	th := store.Thread{ID: p.ThreadID, ChatID: p.ChatID, MessageThreadID: p.MessageThreadID}
+	id := c.noteID
+	if s.polled != nil && !s.polled(c.noteAt) {
+		if ctx.Err() != nil {
+			return jobResult{} // stopping: the next start goes on with this note
+		}
+		if s.now().Sub(c.noteAt) < maxPollWait {
+			return jobResult{retry: true, delay: 500 * time.Millisecond}
+		}
+		c.forget(bg, s.st, p.OutboxID, p.Part)
+		s.log.Info("part check: no getUpdates after the note; asking", "outbox", p.OutboxID, "part", p.Part)
+		if err := s.st.MarkPartChecked(bg, p.OutboxID, p.Part); err != nil {
+			s.log.Warn("part check not saved", "outbox", p.OutboxID, "part", p.Part, "err", err)
+		}
+		s.deleteMessage(th, id)
+		s.notice(bg, p)
+		return jobResult{}
+	}
+	c.forget(bg, s.st, p.OutboxID, p.Part) // judged now, one way or the other
 	unseen, err := s.st.UnseenBetween(bg, p.ChatID, p.Floor, id)
 	if err == nil && unseen == 0 {
 		if ok, err := s.st.ResendPart(bg, p.OutboxID, p.Part); err != nil {

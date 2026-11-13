@@ -154,6 +154,9 @@ func findFiles(md, home, cwd string, exts map[string]bool) []string {
 		if err != nil || !fi.Mode().IsRegular() || fi.Size() == 0 || fi.Size() > maxImageBytes {
 			continue
 		}
+		if _, ok := placeOK(p, home, cwd); !ok {
+			continue
+		}
 		out = append(out, p)
 		if len(out) == maxImageFiles {
 			break
@@ -177,4 +180,100 @@ func sendExts(sendImages bool, files []string) map[string]bool {
 		}
 	}
 	return exts
+}
+
+// placeOK resolves the symlinks of p and returns where the file really is,
+// when it may go to Telegram from there (allowedPlace). A sender reads the
+// returned path, not p: a link swapped after the check then leads nowhere new.
+func placeOK(p, home, cwd string) (string, bool) {
+	real, err := filepath.EvalSymlinks(p)
+	if err != nil || !allowedPlace(real, home, cwd) {
+		return "", false
+	}
+	return real, true
+}
+
+// allowedPlace tells whether a file may go to Telegram from where it really
+// is (after symlinks): inside the agent's folder, the home folder, or a
+// temporary folder, and not in a hidden folder or file (~/.ssh, ~/.aws, a
+// project's .env) or in ~/Library (keychains, app data). An answer that
+// names a file elsewhere, such as /etc or another disk, sends nothing: an
+// agent can be led to name any path.
+func allowedPlace(real, home, cwd string) bool {
+	// Each place as written and as it really is (/var is /private/var).
+	both := func(p string) []string {
+		out := []string{filepath.Clean(p)}
+		if rp, err := filepath.EvalSymlinks(p); err == nil && rp != out[0] {
+			out = append(out, rp)
+		}
+		return out
+	}
+	// The Mac's disks ignore case by default: ~/library is ~/Library.
+	inside := func(root, p string) (string, bool) {
+		rel, err := filepath.Rel(strings.ToLower(root), strings.ToLower(p))
+		if err != nil || rel == ".." || strings.HasPrefix(rel, "../") {
+			return "", false
+		}
+		return rel, true // in lower case: the checks below look only for a leading "."
+	}
+	var libs []string
+	if home != "" && filepath.IsAbs(home) {
+		libs = both(filepath.Join(home, "Library"))
+	}
+	// The agent's folder is its own place, but not when it holds ~/Library:
+	// an agent started in ~ or / gets only the rules of the other places.
+	cwdRoots := map[string]bool{}
+	if cwd != "" && filepath.IsAbs(cwd) && filepath.Clean(cwd) != "/" {
+		own := true
+		for _, r := range both(cwd) {
+			for _, lib := range libs {
+				if _, in := inside(r, lib); in {
+					own = false
+				}
+			}
+		}
+		if own {
+			for _, r := range both(cwd) {
+				cwdRoots[r] = true
+			}
+		}
+	}
+	var roots []string
+	for r := range cwdRoots {
+		roots = append(roots, r)
+	}
+	for _, r := range []string{home, os.TempDir(), "/tmp"} {
+		if r != "" && filepath.IsAbs(r) {
+			roots = append(roots, both(r)...)
+		}
+	}
+	for _, root := range roots {
+		rel, ok := inside(root, real)
+		if !ok {
+			continue
+		}
+		if cwdRoots[root] {
+			// The agent's own folder: its files may go, also when the
+			// folder is in ~/Library (iCloud Drive, Dropbox), but still
+			// not from a hidden folder in it.
+			for _, part := range strings.Split(rel, string(filepath.Separator)) {
+				if strings.HasPrefix(part, ".") && part != "." {
+					return false
+				}
+			}
+			return true
+		}
+		for _, part := range strings.Split(rel, string(filepath.Separator)) {
+			if strings.HasPrefix(part, ".") && part != "." {
+				return false // a hidden folder or file
+			}
+		}
+		for _, lib := range libs {
+			if _, ok := inside(lib, real); ok {
+				return false
+			}
+		}
+		return true
+	}
+	return false
 }

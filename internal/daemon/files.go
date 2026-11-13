@@ -40,6 +40,7 @@ func fileOfferKey(thread int64, key string) string { return fmt.Sprintf("files:%
 type fileOffer struct {
 	At    int64    `json:"at"` // unix seconds
 	Paths []string `json:"paths"`
+	CWD   string   `json:"cwd,omitempty"` // the agent's folder, for the check at the tap
 }
 
 // fileOfferItem makes the offer of the files a final answer names, or
@@ -59,7 +60,7 @@ func (d *daemon) fileOfferItem(th store.Thread, a turn.Post) (store.OutboxItem, 
 		return store.OutboxItem{}, false
 	}
 	key := a.Key + ":files"
-	b, _ := json.Marshal(fileOffer{At: d.now().Unix(), Paths: paths})
+	b, _ := json.Marshal(fileOffer{At: d.now().Unix(), Paths: paths, CWD: conv.CWD})
 	if err := d.st.Set(d.ctx, fileOfferKey(th.ID, key), string(b)); err != nil {
 		d.log.Warn("file offer: keep the paths", "err", err)
 		return store.OutboxItem{}, false
@@ -151,8 +152,15 @@ func (d *daemon) fileOfferButton(cb *telegram.CallbackQuery, parts []string) {
 		d.answerCallback(cb.ID, name+" is gone or too large now.", false)
 		return
 	}
+	// The offer may be days old: the path may lead somewhere else now.
+	home, _ := os.UserHomeDir()
+	real, ok := placeOK(path, home, o.CWD)
+	if !ok {
+		d.answerCallback(cb.ID, name+" is not in a place rex-tg sends files from.", false)
+		return
+	}
 	item := store.OutboxItem{ThreadID: th.ID, Key: fmt.Sprintf("file:%d:%d", id, idx), Kind: "image",
-		Parts: []store.PartContent{{Content: path, Format: store.FormatImage, Filename: name}}}
+		Parts: []store.PartContent{{Content: real, Format: store.FormatImage, Filename: name}}}
 	_, created, err := d.st.Enqueue(d.ctx, item)
 	switch {
 	case err != nil:
