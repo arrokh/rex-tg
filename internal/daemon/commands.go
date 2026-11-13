@@ -18,6 +18,7 @@ import (
 	"rex-tg/internal/sender"
 	"rex-tg/internal/store"
 	"rex-tg/internal/telegram"
+	"rex-tg/internal/termimg"
 )
 
 const (
@@ -32,7 +33,7 @@ const (
 	topicHelp = "<b>In a topic</b>\n" +
 		"Text goes to the agent. Text that starts with / goes to the agent too, except the commands below. Use //name to send /name.\n" +
 		"/info - session, pane, and state\n" +
-		"/screen [lines] - the pane screen\n" +
+		"/screen [lines] - the pane screen as an image; /screen text sends text\n" +
 		"/approve, /deny - answer the open prompt\n" +
 		"/esc, /interrupt - press Escape, or stop the turn\n" +
 		"/key &lt;keys&gt; - press keys\n" +
@@ -452,11 +453,16 @@ func onOff(v bool) string {
 	return "off"
 }
 
-// screenCommand shows the pane screen as redacted monospace text.
+// screenCommand shows the pane screen, redacted, as an image. With the word
+// "text", or when the image cannot be made or sent, it shows monospace text.
 func (d *daemon) screenCommand(th store.Thread, upd int64, args string) {
-	n := 30
-	if v, err := strconv.Atoi(strings.TrimSpace(args)); err == nil && v > 0 {
-		n = min(v, 80)
+	n, asText := 30, false
+	for _, f := range strings.Fields(args) {
+		if strings.EqualFold(f, "text") {
+			asText = true
+		} else if v, err := strconv.Atoi(f); err == nil && v > 0 {
+			n = min(v, 80)
+		}
 	}
 	d.spawn(func() {
 		f, pane, err := d.baseFacts(d.ctx, th)
@@ -475,8 +481,46 @@ func (d *daemon) screenCommand(th store.Thread, upd int64, args string) {
 			d.replyTopic(th, tag, "The screen is empty.")
 			return
 		}
+		if !asText && d.sendScreenImage(th, lines) {
+			return
+		}
 		d.replyTopic(th, tag, preBlock(lines, 3800))
 	})
+}
+
+// sendScreenImage sends the (already redacted) lines as a silent photo, once.
+// It returns false when the text should be sent instead: the image could not
+// be made, or Telegram did not take the photo (nothing was posted). Any other
+// failure has an unknown outcome, so nothing is sent again; /screen can be
+// asked again.
+func (d *daemon) sendScreenImage(th store.Thread, lines []string) bool {
+	data, err := termimg.Render(lines)
+	if err != nil {
+		d.log.Warn("screen image", "err", err)
+		return false
+	}
+	caption := th.Name
+	if caption == "" {
+		caption = "Screen"
+	}
+	caption += " · " + d.now().Format("15:04:05")
+	err = d.snd.Call(sender.PriorityAnswer, func(ctx context.Context, tg *telegram.Client) error {
+		_, err := tg.SendPhoto(ctx, th.ChatID, th.MessageThreadID, "screen.png", data, caption, true)
+		return err
+	})
+	if err == nil {
+		return true
+	}
+	if d.ctx.Err() != nil {
+		return true
+	}
+	switch telegram.Classify(err) {
+	case telegram.ClassBadRequest, telegram.ClassNotSent:
+		d.log.Warn("screen photo not sent; sending text", "err", err)
+		return false
+	}
+	d.log.Warn("screen photo: outcome unknown", "err", err)
+	return true
 }
 
 // keysCommand presses keys in the pane after the checks of design section 9.5.
