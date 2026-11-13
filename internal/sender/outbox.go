@@ -127,7 +127,11 @@ func (s *Sender) sendRich(ctx context.Context, p store.Part, silent bool) (int64
 	if err := s.token(ctx); err != nil {
 		return 0, vUnknown, err
 	}
-	m, err := s.tg.SendRichMessage(ctx, p.ChatID, p.MessageThreadID, p.Content, silent, nil)
+	var markup *telegram.InlineKeyboardMarkup
+	if s.markup != nil {
+		markup = s.markup(p)
+	}
+	m, err := s.tg.SendRichMessage(ctx, p.ChatID, p.MessageThreadID, p.Content, silent, markup)
 	switch telegram.Classify(err) {
 	case telegram.ClassParseEntities, telegram.ClassBadRequest:
 	default:

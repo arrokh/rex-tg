@@ -172,7 +172,9 @@ type daemon struct {
 	// (tickPromptChecks).
 	blockedSince  map[int64]time.Time
 	recheckAt     map[int64]time.Time
-	goneReads     goneConfirm // the first read without a prompt, until a second confirms it
+	goneReads     goneConfirm        // the first read without a prompt, until a second confirms it
+	turnTrees     map[int64]turnTree // the repository at each running turn's start, by session
+	miniSecret    []byte             // the key that checks the Mini App's signed requests
 	blockedScanAt time.Time
 	renamedBack   time.Time  // the last rename back of the session for /new (under tabMu)
 	vimStuck      sync.Map   // pane id -> vimStuckMark: the vim label that showed no reaction to a key
@@ -241,6 +243,7 @@ func newDaemon(cfg config.Config, home string, log *slog.Logger, now func() time
 		blockedSince: map[int64]time.Time{},
 		recheckAt:    map[int64]time.Time{},
 		goneReads:    goneConfirm{},
+		turnTrees:    map[int64]turnTree{},
 		events:       make(chan any, 256),
 		regq:         newJobQueue(),
 		tailers:      map[int64]*tailer{},
@@ -339,6 +342,9 @@ func (d *daemon) run(parent context.Context) error {
 	d.spawn(func() { d.rexEventLoop(ctx) })
 	d.spawn(func() { d.spoolLoop(ctx) })
 	d.spawn(func() { d.pollLoop(ctx) })
+	if d.miniAppOn() && len(d.miniSecret) > 0 {
+		d.spawn(func() { d.serveMiniApp(ctx) })
+	}
 	if d.cfg.Display.Stream {
 		d.spawn(func() { d.liveLoop(ctx) })
 	}
@@ -387,6 +393,12 @@ func (d *daemon) handle(ev any) {
 		d.deadlines[e.alert] = e.d
 	case evPromptRead:
 		d.onPromptRead(e)
+	case evTurnTree:
+		d.onTurnTree(e)
+	case evTurnChanges:
+		d.onTurnChanges(e)
+	case evLater:
+		e.f()
 	case evRename:
 		d.onRename(e)
 	case evAlertFollow:
@@ -642,7 +654,7 @@ func (d *daemon) enqueue(it store.OutboxItem) {
 // stable inputs.
 func (d *daemon) notice(threadID int64, key, html string) {
 	d.enqueue(store.OutboxItem{
-		ThreadID: threadID, Key: key, Kind: "notice",
+		ThreadID: threadID, Key: key, Kind: "notice", Silent: true, // only answers and prompts make a sound
 		Parts: []store.PartContent{{Content: html, Format: store.FormatHTML}},
 	})
 }
@@ -658,6 +670,7 @@ func (d *daemon) sendNow(chatID, threadID int64, html string, markup *telegram.I
 	err := d.snd.Call(sender.PriorityAnswer, func(ctx context.Context, tg *telegram.Client) error {
 		m, err := tg.SendMessage(ctx, telegram.SendMessageParams{
 			ChatID: chatID, MessageThreadID: threadID, Text: html, ParseMode: "HTML", ReplyMarkup: markup,
+			DisableNotification: true, // only answers and prompts make a sound
 		})
 		msg = m
 		return err

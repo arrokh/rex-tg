@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"rex-tg/internal/config"
+	"rex-tg/internal/miniapp"
 	"rex-tg/internal/rex"
 	"rex-tg/internal/sender"
 	"rex-tg/internal/store"
@@ -139,11 +140,14 @@ func Run(ctx context.Context, opt Options) error {
 		Now:           opt.Now,
 		Logger:        log,
 		CheckDelay:    timing.CheckDelay,
-		Markup:        fileOfferMarkup(st),
+		Markup:        bothMarkups(fileOfferMarkup(st), answerMarkup(st, cfg.Display.QuickReplies, cfg.MiniApp.URL)),
 		PolledSince:   func(t time.Time) bool { return polled.Load() >= t.UnixNano() },
 	})
 	d := newDaemon(cfg, home, log, now, st, tg, rx, snd, opt.ProcStart, timing)
 	d.polled = polled
+	if d.miniAppOn() && opt.Token != "" {
+		d.miniSecret = miniapp.Secret(opt.Token) // the key that checks Telegram's signature, not the token
+	}
 	if opt.HasProgram != nil {
 		d.hasProgram = opt.HasProgram
 	}

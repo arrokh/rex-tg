@@ -55,10 +55,28 @@ type promptView struct {
 	notes    []string // warnings, such as "⚠ …"
 	question string   // "Do you want to proceed?", or the question asked
 	options  []viewOption
-	next     bool // a "Next" or "Submit" row under answers to tick
-	review   bool // the "Review your answers" page of several questions
-	ok       bool // the screen holds a prompt this view understands
+	next     bool         // a "Next" or "Submit" row under answers to tick
+	review   bool         // the "Review your answers" page of several questions
+	answers  []reviewItem // that page's questions and the answers given
+	ok       bool         // the screen holds a prompt this view understands
 }
+
+// reviewItem is one question on the review page, with the answer given.
+type reviewItem struct{ question, answer string }
+
+// reviewOptions tells the answers of the review page: Submit answers and
+// Cancel. The page is known by them also when its title is above the
+// lines read (long questions push it out).
+func reviewOptions(opts []viewOption) bool {
+	if len(opts) != 2 {
+		return false
+	}
+	return strings.EqualFold(opts[0].label, "Submit answers") && strings.EqualFold(opts[1].label, "Cancel")
+}
+
+// reviewLines is how far above its answers the review page is read: each
+// question there may wrap over several lines.
+const reviewLines = 30
 
 // isQuestion tells a question (AskUserQuestion) from a permission prompt.
 func (v promptView) isQuestion() bool {
@@ -253,8 +271,15 @@ func parsePromptView(lines []string, shortcuts bool) promptView {
 		}
 	}
 	// The prompt's lines above the answers.
+	if reviewOptions(v.options) {
+		v.review = true
+	}
+	limit := maxQuestionLines
+	if v.review {
+		limit = reviewLines
+	}
 	start := first
-	for i := first - 1; i >= 0 && first-i <= maxQuestionLines; i-- {
+	for i := first - 1; i >= 0 && first-i <= limit; i-- {
 		t := strings.TrimSpace(clean[i])
 		if ruleRe.MatchString(t) || (t != "" && isBorder(clean[i])) || agentOutRe.MatchString(t) || strings.HasPrefix(t, "❯ ") {
 			break
@@ -313,6 +338,30 @@ func parsePromptView(lines []string, shortcuts bool) promptView {
 		t := strings.TrimSpace(l)
 		bar := strings.HasPrefix(t, "│")
 		t = strings.TrimSpace(strings.TrimPrefix(t, "│"))
+		if v.review && (i < qFrom || question < 0) {
+			// The review page: "● question" (it may wrap) and "→ answer".
+			switch {
+			case strings.EqualFold(t, "Review your answers"):
+			case strings.HasPrefix(t, "●"):
+				v.answers = append(v.answers, reviewItem{question: strings.TrimSpace(strings.TrimPrefix(t, "●"))})
+			case strings.HasPrefix(t, "→"):
+				if len(v.answers) == 0 || v.answers[len(v.answers)-1].answer != "" {
+					v.answers = append(v.answers, reviewItem{question: "…"}) // its question is not on the screen
+				}
+				a := &v.answers[len(v.answers)-1]
+				a.answer = strings.TrimSpace(strings.TrimSpace(a.answer + " " + strings.TrimPrefix(t, "→")))
+			case len(v.answers) == 0:
+				v.answers = append(v.answers, reviewItem{question: "… " + t}) // its start is above the lines read
+			default:
+				a := &v.answers[len(v.answers)-1]
+				if a.answer != "" {
+					a.answer += " " + t
+				} else {
+					a.question += " " + t
+				}
+			}
+			continue
+		}
 		switch {
 		case i >= qFrom && i <= question && question >= 0:
 			qParts = append(qParts, t)
@@ -383,6 +432,20 @@ const (
 func alertHTML(v promptView, agent, kind string, dl *alertDeadline) string {
 	r := func(s string) string { return format.Escape(format.Redact(s)) }
 	var b strings.Builder
+	if v.review {
+		fmt.Fprintf(&b, "❓ <b>Review your answers</b> · %s", format.Escape(agent))
+		for _, a := range v.answers {
+			b.WriteString("\n• " + r(format.Truncate(a.question, 200)))
+			if a.answer != "" {
+				b.WriteString("\n   → <b>" + r(format.Truncate(a.answer, 200)) + "</b>")
+			}
+		}
+		if v.question != "" {
+			b.WriteString("\n\n<b>" + r(v.question) + "</b>")
+		}
+		b.WriteString("\n<i>Tap Submit answers to send them, or Cancel.</i>")
+		return b.String()
+	}
 	if v.isQuestion() || kind == store.AlertQuestion {
 		fmt.Fprintf(&b, "❓ <b>Question</b> · %s", format.Escape(agent))
 	} else {
@@ -462,6 +525,9 @@ func alertHead(v promptView, agent, kind string) string {
 	icon := "🔐"
 	if v.isQuestion() || kind == store.AlertQuestion {
 		icon = "❓"
+	}
+	if v.review {
+		return icon + " " + format.Escape(agent) + ": Review your answers"
 	}
 	what := v.title
 	if len(v.body) > 0 {

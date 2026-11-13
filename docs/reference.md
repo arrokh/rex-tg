@@ -141,6 +141,8 @@ Doctor checks:
 
 ### Progress and answers
 
+- Only two kinds of message make a sound: the agent's answer (its first message) and a prompt that waits for you (an alert or its reminder). Progress, notices, the waiting notice, and replies to commands come silently.
+- Under each answer, quick replies send their text to the agent with one tap, as if you typed it: `Continue`, `Yes`, `Run tests`, `Commit` by default. Set your own with `[display] quick_replies` (at most 8), or `[]` for none.
 - `typing…` shows while the agent works, in the topic you used last.
 - The progress message appears after 2 seconds without an answer. It shows the latest commentary and the recent tool calls. It never shows tool output, unless `/verbose full` is on.
 - The progress message stays the last message of a running turn. When an alert, a notice, or your own message comes below it, it moves down. While a prompt waits for your answer, the alert stays last.
@@ -270,6 +272,8 @@ summary_after = "2m"                    # Keep the "Done" summary only for turns
 rich_messages = true                    # Send final answers as Telegram rich messages: Telegram renders tables and code itself.
 send_images = true                      # Send the image files that a final answer names.
 send_files = ["pdf", "csv", "tsv", "html", "htm", "xlsx", "docx", "pptx"]  # Other file types that a final answer offers, with a button to send each.
+quick_replies = ["Continue", "Yes", "Run tests", "Commit"]  # Buttons under each answer that send their text to the agent.
+show_changes = true                     # A button under an answer that shows what the turn changed (needs [miniapp] url).
 message_length = 1500                   # About how long one message of a long answer is (300 to 4000).
 stream = false                          # Show the agent's text while it writes, as a Telegram draft.
 stream_interval = "1s"                  # Least time between two drafts of a topic. 1s is the fastest: Telegram allows about one message a second in a chat.
@@ -286,6 +290,11 @@ busy_after_typing = "15s"               # After a message is typed, the pane cou
 while_busy = "steer"                    # A message sent while the agent works: "steer" joins the current run, "wait" waits until idle.
 max_upload_mb = 20                      # Largest photo or file to download from Telegram.
 
+[miniapp]
+url = ""                                # The Mini App's public HTTPS address (see Mini App). Empty turns it off.
+listen = "127.0.0.1:8770"               # Its local address.
+answer_preview = 3000                   # Longer answers show their start and open whole in the Mini App.
+
 [voice]
 whisper_cli = ""                        # Path to whisper-cli. Empty turns voice notes off.
 model = ""                              # Path to a ggml model file. Use an absolute path.
@@ -294,6 +303,27 @@ language = ""                           # Language code for whisper.cpp, such as
 [state]
 dir = "~/.local/state/rex-tg"           # Database, spool, logs, and uploads.
 ```
+
+### Mini App
+
+The Mini App shows what does not fit a chat message, in Telegram, only for you. It opens from buttons under an answer:
+
+- `📄 Whole answer`: an answer longer than 3000 characters (`[miniapp] answer_preview`) shows its start in the chat, and the whole answer, with its tables and code, in the Mini App.
+- `📝 2 files · +40 −12`: what the turn changed in the agent's git repository, file by file. rex-tg takes a snapshot of the working files (tracked and new, not ignored) when a turn starts and when it ends with its answer, through a copy of git's index, so your own index stays as it is. Other agents that work in the same repository at the same time show up in it too. Set `[display] show_changes = false` to turn it off.
+
+The Mini App needs a public HTTPS address that reaches this Mac. With Tailscale:
+
+1. Start the Funnel for rex-tg's port: `tailscale funnel --bg --https=8443 http://127.0.0.1:8770`.
+2. Put its address in the config and restart rex-tg:
+
+```toml
+[miniapp]
+url = "https://<your-mac>.<tailnet>.ts.net:8443"   # empty turns the Mini App off
+listen = "127.0.0.1:8770"                           # the local address that the Funnel reaches
+answer_preview = 3000                               # longer answers open in the Mini App
+```
+
+Only you can open a page: every request carries Telegram's signature of who opened it, and rex-tg checks it with the bot's key. Pages are kept for 30 days.
 
 ### Tables and rich messages
 

@@ -375,7 +375,7 @@ While the agent works, one progress message is edited in place:
 - **Labels (D14).** A row shows a short label: Claude's Bash `description`, a file path relative to the project, or a search pattern. For a shell call without a description, it shows the start of the command after secret removal. A row never shows tool output or file contents.
 - **Footer.** Elapsed time and the number of tools. The time moves on even when nothing else changes, for example while the agent thinks or one long tool runs. Such an edit comes every 10 seconds at first. The step grows with the turn (a sixth of the elapsed time) up to one minute, so a long turn spends little of the rate budget. While the turn waits for the user's answer, the time stays.
 - **When it appears.** Only after 2 seconds without an answer, so that quick answers do not flash a progress message first. When the turn ends before the progress message could go out (the chat's budget went to answers first), none is posted: a late "Working… 0s" below newer messages would only confuse.
-- **Silent.** The progress message is sent with `disable_notification`, as Hermes does with tool progress. Edits never make a sound. Answers and alerts do.
+- **Silent.** The progress message is sent with `disable_notification`, as Hermes does with tool progress. Edits never make a sound. Only the agent's answer (its first message) and a prompt that waits for the user (an alert or its reminder) make a sound; notices, the waiting notice, command replies, block-mode text, and prompts typed on the Mac are silent.
 - **Edits.** At most one edit every 2 seconds per topic, within the shared rate budget (section 9.3).
 - **It stays at the bottom.** If other messages arrive below it while the turn runs, rex-tg posts a new progress message and deletes the old one, as OpenClaw does. This counts the agent's own posts, alerts, reminders, waiting notices, other notices, and your own messages, so the last message of a running turn is always the one that shows its progress. While the turn waits for your answer, the alert stays the last message; the progress message moves below it once the turn goes on.
 - **At the end (D13).** rex-tg edits the progress message into one summary line, with the tool rows in a collapsed quote. Then it sends the answer as a new message:
@@ -636,6 +636,13 @@ These features are built. Some are off until you set them up.
 | `/pause`, `/unpause` | In the main chat. `/pause` stops all typing into panes, for every topic, until `/unpause`. Outgoing messages continue. The flag survives a restart. | Not paused |
 | `/mute`, `/unmute` | In a topic. Muted topics send every message without sound. | Not muted |
 | `/rename <name>` | In a topic. Names the topic, and its Rex tab in the session for `/new`, until `/rename auto`. | The session's name |
+
+### 8.9a Answer buttons and the Mini App
+
+- **Quick replies.** The last text message of an answer carries buttons from `[display] quick_replies` (callback data `qr:<index>:<hash of the text>`). A tap queues the text like a message typed in the topic, with the tap's update id as the row id, so a repeat types nothing; a button made before the list changed is refused as out of date.
+- **Mini App.** A small HTTPS server (`[miniapp] listen`, reached through `[miniapp] url`, such as a Tailscale Funnel) serves `/app`, `/app.js`, and `/api/page?id=…`. A page request must carry the Mini App's init data; rex-tg checks Telegram's HMAC signature with the key derived from the bot token (the daemon keeps only that key), its age (at most 24 hours), and that it was signed for the owner. Pages live in kv `page:<random id>` for 30 days. Markdown is rendered with GFM; raw HTML in it is dropped.
+- **Long answers.** An answer longer than `[miniapp] answer_preview` characters is a page; the chat gets its first part (about 1200 characters, cut like a message) and a `📄 Whole answer` button.
+- **Turn changes.** When a turn's first prompt arrives, rex-tg writes the working files of the session's git repository as a tree, through a copy of the index (`GIT_INDEX_FILE`), so the user's index and files stay as they are; when the turn's answer arrives it does it again, and the diff of the two trees is a page. A `📝 <files> · +a −r` button goes on the answer, by the sender's markup hook when the page is ready before the answer goes out, else by an edit of the answer's keyboard. Each git call has a 15-second limit; a diff page holds at most 2 MB.
 
 ### 8.10 Agent controls
 
