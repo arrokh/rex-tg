@@ -234,8 +234,10 @@ func answerButtons(st *store.Store, quick []string, base string, thread int64, k
 				pages = append(pages, telegram.InlineKeyboardButton{Text: "📝 " + label, WebApp: &telegram.WebAppInfo{URL: miniAppURL(base, id)}})
 			}
 		}
-		if len(pages) > 0 {
-			rows = append(rows, pages)
+		for _, b := range pages {
+			// One to a row: their labels ("📝 2 files · +40 −12") are long
+			// for a phone.
+			rows = append(rows, []telegram.InlineKeyboardButton{b})
 		}
 	}
 	var row []telegram.InlineKeyboardButton

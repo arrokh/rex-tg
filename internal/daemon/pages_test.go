@@ -5,6 +5,7 @@ import (
 	"io"
 	"log/slog"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -44,5 +45,31 @@ func TestPrunePages(t *testing.T) {
 	}
 	if _, ok, _ := st.Get(d.ctx, pageForKey(1, miniapp.KindDiff, "k")); ok {
 		t.Error("the name of a gone page is left")
+	}
+}
+
+// Each Mini App button has its own row, then the quick replies come two to
+// a row: on a phone, longer rows cut the labels.
+func TestAnswerButtonsRows(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	ctx := context.Background()
+	_ = st.Set(ctx, pageForKey(1, miniapp.KindAnswer, "k"), "a1")
+	_ = st.Set(ctx, pageForKey(1, miniapp.KindDiff, "k"), "d1|2 files · +40 −12")
+	m := answerButtons(st, []string{"Continue", "Yes", "Commit"}, "https://mac.example:8443", 1, "k")
+	var got []string
+	for _, row := range m.InlineKeyboard {
+		var labels []string
+		for _, b := range row {
+			labels = append(labels, b.Text)
+		}
+		got = append(got, strings.Join(labels, "|"))
+	}
+	want := []string{"📄 Whole answer", "📝 2 files · +40 −12", "Continue|Yes", "Commit"}
+	if strings.Join(got, " / ") != strings.Join(want, " / ") {
+		t.Errorf("rows = %q, want %q", got, want)
 	}
 }
