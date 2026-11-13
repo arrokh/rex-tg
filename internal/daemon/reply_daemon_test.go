@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 )
 
 // A reply carries the message it answers to the agent: the agent's answer as
@@ -67,5 +68,24 @@ func TestReplyQuotesTheAnsweredMessage(t *testing.T) {
 		if !m.FromBot && m.Reaction == "👎" {
 			t.Errorf("message %q got 👎\n%s", m.Text, e.dump())
 		}
+	}
+}
+
+// An answer sent as a rich message (the default) reaches the bot without
+// text when the user replies to it (seen live). The quote then comes from
+// what rex-tg sent, as plain text.
+func TestReplyToARichAnswerQuotesIt(t *testing.T) {
+	e, p, thread := piTopicCfg(t, "pi-reply-rich", func(e *env) { e.cfg.Display.RichMessages = true })
+	p.User("plan it")
+	time.Sleep(10 * time.Millisecond) // the answer comes after the prompt: the pane is idle then
+	p.Final("My plan: **three PRs**, then a retest.")
+	answer := e.waitText(thread, "My plan")
+	st := e.peek()
+	th, _, _ := st.ThreadByTopic(context.Background(), chatID, thread)
+	e.waitFor("the answer recorded", func() bool { _, ok, _ := st.SentKind(context.Background(), th.ID, answer.ID); return ok })
+	e.tg.PushReply(chatID, thread, ownerID, answer.ID, "", "agreed, as drafts")
+	e.waitFor("the paste", func() bool { return len(e.pastes()) == 1 })
+	if got, want := e.pastes()[0], "agreed, as drafts\n\nIn reply to:\n> My plan: three PRs, then a retest."; got != want {
+		t.Fatalf("pasted %q, want %q", got, want)
 	}
 }

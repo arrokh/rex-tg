@@ -46,6 +46,7 @@ type Message struct {
 	File      []byte // documents only
 	Photo     bool   // sent with sendPhoto
 	ReplyTo   int64  // the message that a sendMessage replied to (reply_parameters)
+	Rich      bool   // sent with sendRichMessage: a reply to it carries no text (seen live)
 }
 
 // Topic is a forum topic.
@@ -288,6 +289,9 @@ func (s *Server) PushReply(chatID, threadID, fromID, replyTo int64, quote, text 
 			ForumTopicCreated: &telegram.ForumTopicCreated{Name: "topic"}}
 	} else if old := s.find(chatID, replyTo); old != nil {
 		w := s.wire(old)
+		if old.Rich {
+			w.Text = "" // Telegram gives a rich message's reply no text (seen live)
+		}
 		if old.ParseMode == "HTML" {
 			if v, err := checkHTML(old.Text); err == nil {
 				v = html.UnescapeString(v)
@@ -701,7 +705,7 @@ func (s *Server) handle(method string, p map[string]any, docName string, docData
 			return nil, e
 		}
 		m := s.addMsg(&Message{ChatID: chat, ThreadID: thread, FromBot: true, Text: text,
-			Markup: mk, Silent: flag(p, "disable_notification")})
+			Markup: mk, Silent: flag(p, "disable_notification"), Rich: true})
 		out := s.wire(m)
 		out.Text = text
 		return out, nil
