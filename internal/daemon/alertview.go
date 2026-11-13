@@ -571,7 +571,9 @@ func promptRows(lines []string) (rows []string, cursor int) {
 // make the alert stale.
 func alertHash(lines []string) string {
 	var out []string
-	for _, l := range lines {
+	// A question's preview box shows the answer under the cursor, so it
+	// changes as the cursor moves: it is no part of the question.
+	for _, l := range cutPreview(lines) {
 		l, _ = stripCursor(unbox(l))
 		if footerLine(strings.TrimSpace(l)) {
 			continue // the hints change with the row under the cursor

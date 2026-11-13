@@ -188,9 +188,12 @@ func TestChatAboutThisWithPreviewsFromTelegram(t *testing.T) {
 		t.Fatalf("no Chat about this button: %+v", q.Markup)
 	}
 	e.pressButton(q, data)
+	// The box shows the preview of the answer under the cursor, so it
+	// changes with every key, as in Claude Code.
+	listPreview := strings.Replace(strings.Replace(qPreview, "| Name | Qty |", "- Name: Qty   ", 1), "1. Table of contents", "2. A list of names  ", 1)
 	moves := []string{
-		strings.Replace(strings.Replace(qPreview, "❯ 1. Table", "  1. Table", 1), "  2. List", "❯ 2. List", 1),
-		strings.Replace(strings.Replace(qPreview, "❯ 1. Table", "  1. Table", 1), "  Chat about this", "❯ Chat about this", 1),
+		strings.Replace(strings.Replace(listPreview, "❯ 1. Table", "  1. Table", 1), "  2. List", "❯ 2. List", 1),
+		strings.Replace(strings.Replace(listPreview, "❯ 1. Table", "  1. Table", 1), "  Chat about this", "❯ Chat about this", 1),
 	}
 	for i, s := range moves {
 		e.waitFor("a down key", func() bool { return len(e.keys()) == 1+i })

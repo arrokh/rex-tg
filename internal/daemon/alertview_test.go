@@ -394,3 +394,18 @@ func TestReviewPageOfLongQuestions(t *testing.T) {
 		t.Errorf("head = %q", hd)
 	}
 }
+
+// The preview box changes with the cursor, so the screen's fingerprint
+// leaves it out: the question stays the same question.
+func TestAlertHashIgnoresThePreview(t *testing.T) {
+	other := strings.Replace(previewScreen, "| Name | Qty |", "- Name: Qty   ", 1)
+	if other == previewScreen {
+		t.Fatal("the test screen did not change")
+	}
+	if alertHash(screenLines(other)) != alertHash(screenLines(previewScreen)) {
+		t.Error("a new preview counts as a new question")
+	}
+	if alertHash(screenLines(strings.Replace(previewScreen, "Which layout", "Which colour", 1))) == alertHash(screenLines(previewScreen)) {
+		t.Error("a new question counts as the same")
+	}
+}

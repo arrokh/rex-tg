@@ -141,7 +141,7 @@ Text that starts with `/` goes to the agent, except the commands below and the m
 - Waiting messages go in the order you sent them. Each one is its own turn.
 - `⚡ Send now` types a waiting message at once. All three agents steer: the message joins the current run.
 - Telegram splits long messages into parts. rex-tg joins parts that arrive close together into one prompt. The window is 300 ms, or 1500 ms for long messages.
-- A reply tells the agent what you reply to. Your text comes first, then `In reply to:` and the replied message as a quote (`> …`), cut at 600 characters. If you quote part of a message in Telegram, only that part is sent. A rich-message answer reaches rex-tg without its text in a reply, so rex-tg quotes the text it sent.
+- A reply tells the agent what you reply to. Your text comes first, then `In reply to:` and the replied message as a quote (`> …`), cut at 600 characters. If you quote part of a message in Telegram, only that part is sent. A rich-message answer reaches rex-tg without its text in a reply, so rex-tg quotes the text it sent. A reply to an answer that came as a `.md` file, or to a code file, quotes its start too; a reply to an image quotes nothing.
 - This works for replies to the agent's messages (answers, tool lines, prompts typed on the Mac) and to your own messages. A reply to one of rex-tg's own messages (notices, alerts, cards) sends only your text. So do an agent command such as `//compact` and a shell command such as `!ls`.
 
 ### `/model` and `/effort`

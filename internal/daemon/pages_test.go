@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"path/filepath"
@@ -71,5 +72,52 @@ func TestAnswerButtonsRows(t *testing.T) {
 	want := []string{"📄 Whole answer", "📝 2 files · +40 −12", "Continue|Yes", "Commit"}
 	if strings.Join(got, " / ") != strings.Join(want, " / ") {
 		t.Errorf("rows = %q, want %q", got, want)
+	}
+}
+
+// sentText quotes what rex-tg sent in a message, by its kind: a rich answer
+// and an answer as a .md file as plain text, HTML without tags, a code file
+// as it is, and nothing for an image (its content is a file path).
+func TestSentTextByKind(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	ctx := context.Background()
+	c, err := st.UpsertConversation(ctx, store.Conversation{Runtime: "claude", NativeID: "s1", Transcript: "/tmp/s1.jsonl", FirstSeenAt: time.Unix(1, 0)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	th, err := st.LinkTopic(ctx, 100, 7, c.ID, "topic", time.Unix(1, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := &daemon{ctx: ctx, st: st, log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	cases := []struct {
+		part store.PartContent
+		want string
+	}{
+		{store.PartContent{Content: "My plan: **three PRs**.", Format: store.FormatRich}, "My plan: three PRs."},
+		{store.PartContent{Content: "<b>Done</b> &amp; tested", Format: store.FormatHTML}, "Done & tested"},
+		{store.PartContent{Content: "# Report\n\nAll **good**.", Format: store.FormatDocument, Filename: "answer.md"}, "Report\n\nAll good."},
+		{store.PartContent{Content: "func main() {}\n", Format: store.FormatDocument, Filename: "code-1.go"}, "func main() {}\n"},
+		{store.PartContent{Content: "/Users/x/shot.png", Format: store.FormatImage, Filename: "shot.png"}, ""},
+	}
+	for i, c := range cases {
+		id, _, err := st.Enqueue(ctx, store.OutboxItem{ThreadID: th.ID, Key: fmt.Sprintf("k%d", i), Kind: "answer", Parts: []store.PartContent{c.part}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		msg := int64(500 + i)
+		if err := st.MarkPartSent(ctx, id, 0, msg); err != nil {
+			t.Fatal(err)
+		}
+		if got := d.sentText(th.ID, msg); got != c.want {
+			t.Errorf("%s %s: sentText = %q, want %q", c.part.Format, c.part.Filename, got, c.want)
+		}
+	}
+	if got := d.sentText(th.ID, 999); got != "" {
+		t.Errorf("a message rex-tg did not send: %q", got)
 	}
 }
