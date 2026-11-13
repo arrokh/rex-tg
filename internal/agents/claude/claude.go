@@ -149,7 +149,7 @@ func (adapter) ParseLine(raw []byte, ctx agents.LineContext) ([]agents.Event, er
 	case "assistant", "user", "custom-title", "system", "attachment":
 	case "", "api-request", "api-request-blob", "api-request-shape", "session-owner", "atis-latch",
 		"last-prompt", "tools-used", "queue-operation", "mode", "permission-mode",
-		"file-history-snapshot", "file-history-delta", "ai-title", "cost-state", "progress", "summary":
+		"file-history-snapshot", "file-history-delta", "pr-link", "ai-title", "cost-state", "progress", "summary":
 		return nil, nil
 	default:
 		return unknown(l.Type), nil
