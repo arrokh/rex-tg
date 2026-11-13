@@ -252,12 +252,13 @@ func (d *daemon) tracker(th store.Thread) *turn.Tracker {
 		return t
 	}
 	cfg := turn.Config{
-		ProgressDelay:  d.cfg.Display.ProgressDelay.Duration,
-		EditInterval:   d.cfg.Display.ProgressEditInterval.Duration,
-		AnswerGrace:    d.timing.AnswerGrace,
-		StoppedGrace:   d.timing.StoppedGrace,
-		TypingInterval: d.timing.Typing,
-		Redact:         format.Redact,
+		ProgressDelay:   d.cfg.Display.ProgressDelay.Duration,
+		EditInterval:    d.cfg.Display.ProgressEditInterval.Duration,
+		AnimateInterval: d.cfg.Display.ProgressAnimation.Duration,
+		AnswerGrace:     d.timing.AnswerGrace,
+		StoppedGrace:    d.timing.StoppedGrace,
+		TypingInterval:  d.timing.Typing,
+		Redact:          format.Redact,
 	}
 	set := d.settings(th)
 	var t *turn.Tracker

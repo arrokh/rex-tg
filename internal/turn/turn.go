@@ -47,7 +47,11 @@ type Config struct {
 	// elapsed time on, while nothing else changes (the agent thinks or a long
 	// tool runs). The step grows with the turn, up to one minute. Default 10s.
 	TimerInterval time.Duration
-	AnswerGrace   time.Duration // default 5s
+	// AnimateInterval, when set, edits the progress message this often
+	// while nothing else changes: the hourglass turns and the timer moves.
+	// It replaces the growing TimerInterval steps. Zero turns it off.
+	AnimateInterval time.Duration
+	AnswerGrace     time.Duration // default 5s
 	// StoppedGrace is the wait for the last lines of an agent that stopped.
 	// Its lines were written before it exited, so they are read by the time
 	// the stop is seen; a short wait is enough. Default 2s.
@@ -656,9 +660,13 @@ func (t *Tracker) Tick(now time.Time) []Action {
 	// Nothing changed, but the elapsed time moves on: without this the
 	// message would show "⏱ 2s" until the turn ends while the agent thinks.
 	// A wait for the user's answer keeps its time; the agent is not working.
-	if !t.blocked && now.Sub(t.lastEdit) >= t.timerStep(now.Sub(t.start)) {
-		if h := t.progressHTML(now); h != t.lastHTML {
-			t.spin++
+	step, animate := t.timerStep(now.Sub(t.start)), t.cfg.AnimateInterval > 0
+	if animate {
+		step = max(t.cfg.AnimateInterval, t.cfg.EditInterval)
+	}
+	if !t.blocked && now.Sub(t.lastEdit) >= step {
+		if h := t.progressHTML(now); h != t.lastHTML || animate {
+			t.spin++ // the animation turns the hourglass even when the text stays
 			h = t.progressHTML(now)
 			out = append(out, EditProgress{HTML: h})
 			t.lastHTML = h

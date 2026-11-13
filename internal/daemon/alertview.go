@@ -56,12 +56,13 @@ type promptView struct {
 	question string   // "Do you want to proceed?", or the question asked
 	options  []viewOption
 	next     bool // a "Next" or "Submit" row under answers to tick
+	review   bool // the "Review your answers" page of several questions
 	ok       bool // the screen holds a prompt this view understands
 }
 
 // isQuestion tells a question (AskUserQuestion) from a permission prompt.
 func (v promptView) isQuestion() bool {
-	if v.tabs != "" || v.next {
+	if v.tabs != "" || v.next || v.review {
 		return true
 	}
 	for _, o := range v.options {
@@ -196,6 +197,9 @@ func parsePromptView(lines []string, shortcuts bool) promptView {
 			v.tabs = strings.Join(f, " ")
 			n++
 		default:
+			if strings.EqualFold(strings.TrimSpace(strings.TrimPrefix(t, "│")), "Review your answers") {
+				v.review = true // also when its tab bar is not on the screen
+			}
 			block = append(block, l)
 			para = append(para, n)
 		}

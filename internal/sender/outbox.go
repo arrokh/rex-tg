@@ -11,6 +11,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"rex-tg/internal/format"
 	"rex-tg/internal/store"
 	"rex-tg/internal/telegram"
 )
@@ -118,8 +119,10 @@ func (s *Sender) noteMessage(chatID, messageID int64) {
 const maxFallbackText = 4000
 
 // sendRich sends markdown as a rich message. When Telegram answers 400 (parse
-// error or bad request) nothing was posted, so the text is sent again as plain
-// text, or as a .md document when it is longer than maxFallbackText.
+// error or bad request) nothing was posted, so the text is sent again in
+// rex-tg's own format (Telegram HTML, which falls back to plain text when
+// Telegram cannot parse it), or as a .md document when it does not fit one
+// message.
 func (s *Sender) sendRich(ctx context.Context, p store.Part, silent bool) (int64, verdict, error) {
 	if err := s.token(ctx); err != nil {
 		return 0, vUnknown, err
@@ -132,6 +135,9 @@ func (s *Sender) sendRich(ctx context.Context, p store.Part, silent bool) (int64
 	}
 	s.log.Warn("rich message rejected; falling back", "outbox", p.OutboxID, "part", p.Part, "err", err)
 	if utf8.RuneCountInString(p.Content) <= maxFallbackText {
+		if ms := format.Messages(p.Content, maxFallbackText, maxFallbackText); len(ms) == 1 {
+			return s.sendText(ctx, p.ThreadID, p.ChatID, p.MessageThreadID, ms[0].HTML, true, silent, nil)
+		}
 		return s.sendText(ctx, p.ThreadID, p.ChatID, p.MessageThreadID, p.Content, false, silent, nil)
 	}
 	if err := s.token(ctx); err != nil {

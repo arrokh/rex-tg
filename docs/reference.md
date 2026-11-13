@@ -142,7 +142,7 @@ Doctor checks:
 - `typing…` shows while the agent works, in the topic you used last.
 - The progress message appears after 2 seconds without an answer. It shows the latest commentary and the recent tool calls. It never shows tool output, unless `/verbose full` is on.
 - The progress message stays the last message of a running turn. When an alert, a notice, or your own message comes below it, it moves down. While a prompt waits for your answer, the alert stays last.
-- Its first icon is a spinner (◐ ◓ ◑ ◒) that turns one step with each edit, so you can see that the turn is still running.
+- Its first icon is an hourglass (⏳ ⌛) that turns every 3 seconds while the agent works, and the timer moves with it, so you can see that the turn is still running. Set `[display] progress_animation` to change the pace, or to `"0s"` to stop it; then the icon turns only when the message changes anyway.
 - Its timer moves on while the agent thinks or a long tool runs: every 10 seconds at first, then less often, at most once a minute later in a long turn. It stops while rex-tg waits for your answer.
 - At the end of the turn, the tool rows stay in a collapsed quote under the summary line.
 - A long answer comes as several messages of about 1500 characters, split at paragraphs and headings like a chat, never inside a code block, and without `(1/2)` numbers. Only the first one makes a sound. `message_length` sets the size (300 to 4000; 4000 splits only when Telegram's limit needs it). An answer that would take more than 6 messages comes in fuller ones, up to 4000 characters each. An answer longer than 16000 characters comes as a `.md` file.
@@ -262,7 +262,8 @@ show_mac_prompts = true                 # Post prompts that you type in the pane
 mac_notice = true                       # Hold turns typed on the Mac behind one notice, until you write in Telegram.
 progress_delay = "2s"                   # Wait before the progress message appears.
 progress_edit_interval = "2s"           # Least time between two edits of the progress message.
-rich_messages = false                   # Send final answers as Telegram rich messages.
+progress_animation = "3s"              # How often the progress message turns its hourglass and moves its timer. "0s" turns it off; at least 2s.
+rich_messages = true                    # Send final answers as Telegram rich messages: Telegram renders tables and code itself.
 send_images = true                      # Send the image files that a final answer names.
 send_files = ["pdf", "csv", "tsv", "html", "htm", "xlsx", "docx", "pptx"]  # Other file types that a final answer offers, with a button to send each.
 message_length = 1500                   # About how long one message of a long answer is (300 to 4000).
@@ -294,7 +295,7 @@ dir = "~/.local/state/rex-tg"           # Database, spool, logs, and uploads.
 
 A table that is wider than a phone (more than 40 characters) becomes a list: one block per row, with the first cell in bold and `Column: value` for the others. A narrower table stays a monospace grid.
 
-`[display] rich_messages = true` sends final answers in Telegram's rich message format, so Telegram renders tables and code itself. If Telegram rejects one, rex-tg sends plain text. Text longer than 4000 characters goes as a `.md` file.
+Final answers go out in Telegram's rich message format (`[display] rich_messages`, on by default), so Telegram renders tables, code, and headings itself. If Telegram rejects one, rex-tg sends it in its own format (Telegram HTML, with the tables as above). An answer that does not fit one message goes as a `.md` file. Set `rich_messages = false` to always use rex-tg's own format.
 
 ## Voice notes
 

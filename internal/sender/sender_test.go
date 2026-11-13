@@ -802,7 +802,9 @@ func TestRichPartSent(t *testing.T) {
 	}
 }
 
-func TestRichFallbackToPlainText(t *testing.T) {
+// A rejected rich message comes again in rex-tg's own format: Telegram HTML,
+// so the answer keeps its bold text instead of showing "**" marks.
+func TestRichFallbackToHTML(t *testing.T) {
 	for _, desc := range []string{"Bad Request: can't parse entities: bad", "Bad Request: something else"} {
 		e := newEnv(t, sender.Options{})
 		th := e.topic(1)
@@ -811,7 +813,7 @@ func TestRichFallbackToPlainText(t *testing.T) {
 		e.start()
 		e.waitState(id, store.OutboxSent)
 		ms := e.srv.Messages(chat)
-		if len(ms) != 1 || ms[0].Text != "**raw** markdown" || ms[0].ParseMode != "" || ms[0].File != nil {
+		if len(ms) != 1 || ms[0].Text != "<b>raw</b> markdown" || ms[0].ParseMode != "HTML" || ms[0].File != nil {
 			t.Fatalf("%q: messages = %+v", desc, ms)
 		}
 		if n := len(e.srv.Calls("sendRichMessage")); n != 1 {
