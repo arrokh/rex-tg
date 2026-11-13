@@ -399,10 +399,10 @@ While a turn runs, the topic shows the agent's text as a Telegram draft (`sendMe
   - **pi:** its extension sees each token (`message_update`). It writes the text of the message that pi is writing to `<state>/live/<session id>.json`, at most every 300 ms, and removes the file when the message is complete (`message_end`, `agent_end`, `session_shutdown`). rex-tg makes the folder with mode 0700 and reads it every 400 ms. A file older than 30 seconds does not count, and rex-tg removes one older than 10 minutes (pi was killed). So a pi draft grows word by word. The last word waits until it is whole, so a key that is half written cannot slip past the secret removal.
   - **Claude Code and Codex:** their transcripts hold only complete blocks, and Claude Code's screen shows no partial text either (checked live). Their draft shows the latest commentary block, so it changes block by block.
 - **What it shows.** The end of the text, at most 3000 characters from the start of a line, rendered like an answer and with secrets removed. Block mode shows only pi's text, because its blocks are posted as messages anyway.
-- **When.** Only while a turn runs that Telegram sees: not for a turn held for the Mac (8.4a), not in final mode (answers only), and not once its answer is out. A topic gets at most one draft every 1.5 seconds. A draft that did not change is sent again after 20 seconds, so it does not fade during a long tool call; after 2 minutes without a change it may fade.
+- **When.** Only while a turn runs that Telegram sees: not for a turn held for the Mac (8.4a), not in final mode (answers only), and not once its answer is out. A topic gets at most one draft every `[display] stream_interval` (1 second by default, which is also the least: drafts share the chat's budget of about one message a second, and a 429 from Telegram would pause every send). A draft that did not change is sent again after 20 seconds, so it does not fade during a long tool call; after 2 minutes without a change it may fade.
 - **Order.** Drafts go last in the sender, after answers, alerts, and progress. The sender sends one request at a time. rex-tg closes a turn's draft before the answer's outbox row exists, and the draft request checks this when it is sent. So no draft comes after the answer.
-- **Errors.** A draft that fails is not sent again at once; the next change sends the newest text, at most one per 1.5 seconds. After 3 refusals (400) in a row, rex-tg sends no drafts until the next start, and logs it once.
-- `[display] stream = false` turns drafts off.
+- **Errors.** A draft that fails is not sent again at once; the next change sends the newest text, at most one per `stream_interval`. After 3 refusals (400) in a row, rex-tg sends no drafts until the next start, and logs it once.
+- Drafts are off by default: at their fastest they change once a second, which is slower than the word-by-word stream of OpenClaw or Hermes. `[display] stream = true` turns them on.
 
 ### 8.2 The answer
 
@@ -495,6 +495,32 @@ When the prompt ends, by a button or on the Mac, rex-tg removes the buttons from
 - The next reminder comes `remind_after` after the one before, up to `[alerts] reminders` (3) times. So reminders never come in a burst, also not after the daemon was stopped. Each one deletes the one before, so the topic keeps one reminder.
 - The reminder is deleted when the alert closes, by a button or on the Mac. A reminder of an alert that closed while the daemon was stopped is deleted at the next start.
 - At most once: a reminder's number is stored before it is sent (kv `remind:<alert>`). A send whose outcome is unknown is not repeated, also not after a restart.
+
+**Prompts with a time limit.** Claude Code's safety checks deny a request by themselves after a while: `⚠ Claude Code will automatically block this request in 2:00, to avoid holding up an unattended session` (or `in about 2 minutes`; seen in Claude Code 2.1.323). rex-tg reads the limit from the screen when it posts the alert. The prompt counts down on the screen, so the time it shows is the time left from that read. The line counts only inside the prompt, at most 4 lines above its question or answers, so an agent's output that quotes it does not. The "about 2 minutes" form is rounded, so rex-tg allows it up to a quarter (at most 30 seconds) earlier.
+
+- The alert says by when to answer: `⏳ Answer within 2:00 (by 07:00:57), or Claude Code blocks it.`
+- Instead of the usual reminders, one reminder comes 30 seconds before the limit (`⏰ 0:30 left to answer the prompt above, then Claude Code blocks it.`), when the alert came at least 15 seconds before that. It is deleted when the alert closes.
+- When the pane leaves the prompt unanswered at its limit (at most 5 seconds early, or a tenth of the limit), the topic gets `⌛ Blocked: no answer within 2:00, so Claude Code denied the request.` A prompt answered on the Mac in time gets no notice, and neither does a topic that closes. The limit is kept in memory only; after a restart the alert gets the usual reminders.
+
+**A note with the answer.** A text reply to an open alert is a note for the agent; each permission alert says so in its last line. rex-tg refuses the prompt with Esc, the same key `/deny` presses, with every check of a button, then queues the note like a message, so it is typed when the agent waits for it. The topic says so once the note is queued. That is what Claude Code's "Tab to amend" does for No, and what Codex's "No, and tell Codex what to do differently" asks for.
+
+- **Why Esc.** Both agents read Esc as a refusal that waits for the user: Claude Code 2.1.323 rejects and asks "What should Claude do instead?", and in Codex 0.167.1 Esc is the answer "No, and tell Codex what to do differently" (it ends the turn, so the note starts the next one). A label that starts with No is no safe guess: Claude Code's plan prompt shows "No, refine with Ultraplan in a cloud session" (it starts a cloud session) before "No, keep planning" (a text field, which its digit only focuses), and Codex's network prompt shows "No, and block this host in the future". Every alert has Esc. Only a menu without Esc falls back to a No that does nothing more. Before this, `/deny` on a menu without a No took the last answer, which on Codex's app-tool menu is "Allow and don't ask me again".
+- **A yes is no note.** A reply that starts with a yes (`yes`, `ok`, `go`, `ya`, `iya`, `lanjut`, `gas`, …) presses nothing and points to the Yes button: a reply must never deny what the user meant to allow. A reply that is a bot command (`/approve`) stays a command.
+- **No Tab.** rex-tg does not press Tab: Tab opens a note field on the answer that has the cursor, which rex-tg would have to move first, and a wrong guess there could approve the request. For Yes with a note, tap Yes and send the note as a message.
+
+**The screen check and the countdown.** Before it presses a key, rex-tg compares the prompt on the screen with the one it posted (a hash of the last lines). Claude Code redraws its countdown every second, so the time in that line does not count; else every tap on such a prompt would find it changed ("This prompt is gone").
+
+**Keys by agent** (Claude Code 2.1.323 and Codex 0.167.1, read from their binaries).
+
+| Agent | Prompt | What rex-tg offers |
+| --- | --- | --- |
+| Claude Code | Permission: `1. Yes`, `2. Yes, and don't ask again …`, `3. No` | A button per answer (the digit, which Claude Code takes without Enter), `Esc`; a reply refuses (Esc) and sends your note |
+| Claude Code | Safety check: `1. Yes`, `2. No`, with a time limit | The same, plus the time limit, a reminder 30 s before, and `⌛ Blocked` |
+| Claude Code | Plan: `Yes, …` answers, `No, keep planning` | A button per answer; `/deny` and a reply press Esc, never "No, refine with Ultraplan" |
+| Claude Code | Question (AskUserQuestion) | A button per answer (the digit), `Esc`; a reply cancels it (Esc) and sends your text. A question with several answers to tick, or several questions, needs the Mac: a digit only ticks there. |
+| Codex | Approval: `1. Yes, proceed (y)`, `2. … don't ask again … (p)`, `3. No, and tell Codex … (esc)` | A button per answer with the printed key (`y`, `p`, Esc); a reply refuses (Esc) and sends your note |
+| Codex | Older approval without numbers | The `[agents.codex] answers`: `y` and `escape` only, since a guessed "always" key could make a lasting rule (`p` allows a host for good on a network prompt) |
+| pi | none of its own | pi asks nothing before it acts; an extension's dialog is not reported to rex-tg |
 
 ### 8.7 Main chat and commands
 

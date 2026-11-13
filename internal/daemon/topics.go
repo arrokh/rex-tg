@@ -380,7 +380,7 @@ func (d *daemon) onState(c registry.Change) {
 		return
 	}
 	if c.State != "blocked" {
-		d.closeAlerts(th, store.AlertGone)
+		d.promptEnded(th)
 	}
 }
 

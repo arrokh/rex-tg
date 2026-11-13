@@ -172,7 +172,11 @@ func (d *daemon) pushDraft(thread int64, dr *draft, now time.Time) {
 	if dr.busy || dr.closed.Load() {
 		return
 	}
-	changed := dr.want != dr.shown && now.Sub(dr.sentAt) >= d.timing.Draft
+	every := d.timing.Draft // tests only
+	if every <= 0 {
+		every = d.cfg.Display.StreamInterval.Duration
+	}
+	changed := dr.want != dr.shown && now.Sub(dr.sentAt) >= every
 	fading := dr.shown != "" && now.Sub(dr.sentAt) >= d.timing.DraftKeep && now.Sub(dr.changedAt) < draftRefreshFor
 	if !changed && !fading {
 		return

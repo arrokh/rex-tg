@@ -69,7 +69,8 @@ type (
 		threadID, orig, tgMsg int64
 		text, kind            string
 		action                inbound.Action
-		ctl                   *ctlSet // a control command: its value counts once typed
+		ctl                   *ctlSet   // a control command: its value counts once typed
+		note                  *noteDone // a note to an alert: tell the user once queued
 	}
 	evOpenDone struct{ paneID int64 }
 	evTailScan tailScan
@@ -176,20 +177,21 @@ type daemon struct {
 	nextPrep             map[int64]time.Time
 	delivering           map[int64]*delivery
 	waitNoticed          map[int64]bool
-	macNotes             map[int64]*macNote  // the Mac hold's notice, by thread
-	drafts               map[int64]*draft    // the draft of a running turn, by thread
-	liveText             map[int64]liveText  // what pi's extension last wrote, by thread
-	draftsOff            bool                // Telegram refused drafts: none until the next start
-	draftRefused         int                 // drafts refused in a row
-	self                 *selfWatch          // the daemon's own binary, for the restart after an update
-	board                *board              // the live /agents message
-	boardLoaded          bool                // board was read from the store
-	reminders            map[int64]*reminder // reminders of open alerts, by alert
-	lastRemind           time.Time           // the last look for due reminders
-	remindSwept          bool                // stale reminders of closed alerts were dropped
-	macSwept             bool                // with MacNotice off, holds from before the start were cleared
-	ctlPending           map[int64]ctlSet    // queued control commands, by row id
-	vimNoticed           map[int64]bool      // inbound rows told that pi-vim did not react
+	macNotes             map[int64]*macNote      // the Mac hold's notice, by thread
+	drafts               map[int64]*draft        // the draft of a running turn, by thread
+	deadlines            map[int64]alertDeadline // the time limit of an open alert, by alert
+	liveText             map[int64]liveText      // what pi's extension last wrote, by thread
+	draftsOff            bool                    // Telegram refused drafts: none until the next start
+	draftRefused         int                     // drafts refused in a row
+	self                 *selfWatch              // the daemon's own binary, for the restart after an update
+	board                *board                  // the live /agents message
+	boardLoaded          bool                    // board was read from the store
+	reminders            map[int64]*reminder     // reminders of open alerts, by alert
+	lastRemind           time.Time               // the last look for due reminders
+	remindSwept          bool                    // stale reminders of closed alerts were dropped
+	macSwept             bool                    // with MacNotice off, holds from before the start were cleared
+	ctlPending           map[int64]ctlSet        // queued control commands, by row id
+	vimNoticed           map[int64]bool          // inbound rows told that pi-vim did not react
 	alertBusy            map[int64]bool
 	opening              map[int64]bool      // panes whose topic is being created
 	newFlows             map[string]*newFlow // /new requests, by the token that their buttons carry
@@ -226,6 +228,7 @@ func newDaemon(cfg config.Config, home string, log *slog.Logger, now func() time
 		waitNoticed: map[int64]bool{},
 		macNotes:    map[int64]*macNote{},
 		drafts:      map[int64]*draft{},
+		deadlines:   map[int64]alertDeadline{},
 		liveText:    map[int64]liveText{},
 		reminders:   map[int64]*reminder{},
 		ctlPending:  map[int64]ctlSet{},
@@ -348,6 +351,8 @@ func (d *daemon) handle(ev any) {
 		d.onMacSent(e)
 	case evDraftSent:
 		d.onDraftSent(e)
+	case evAlertDeadline:
+		d.deadlines[e.alert] = e.d
 	case evLive:
 		d.onLive(e)
 	case evBoard:
@@ -357,8 +362,12 @@ func (d *daemon) handle(ev any) {
 	case evTopicCreated:
 		d.onTopicCreated(e)
 	case evQueueText:
-		if d.queueText(e.threadID, e.orig, e.tgMsg, e.text, e.kind, e.action) && e.ctl != nil {
+		queued := d.queueText(e.threadID, e.orig, e.tgMsg, e.text, e.kind, e.action)
+		if queued && e.ctl != nil {
 			d.ctlPending[-e.orig] = *e.ctl // the row's id
+		}
+		if e.note != nil {
+			d.noteQueued(e.threadID, e.note, queued)
 		}
 	case evTailScan:
 		d.onTailScan(e)

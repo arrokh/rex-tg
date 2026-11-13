@@ -91,7 +91,7 @@ To send an agent a command that has a bot command's name, use two slashes: `//he
 - **Reactions on your message:** 👀 means typed into the pane. 👍 means the agent got it. 👎 means refused; a reply says why.
 - **Progress:** one message updates while the agent works. When the turn ends, it becomes one summary line.
 - **Answer:** a new message. A long answer comes in numbered parts, such as `(1/3)`.
-- **Live text:** while the agent writes, the text shows as a draft at the bottom of the topic (word by word for pi, block by block for Claude Code and Codex).
+- **Live text (optional):** with `stream = true`, the text shows as a draft at the bottom of the topic while the agent writes (word by word for pi, block by block for Claude Code and Codex). Off by default.
 - **Files:** when an answer names an image on your Mac, rex-tg sends the picture too. A PDF, CSV, HTML, or Office file gets a 📎 button: tap it to get the file.
 - **Permission prompts:** the bot shows the bottom of the pane, with one button per answer.
 - **⏰ Still waiting for your answer:** a prompt has waited 10 minutes. Tap the reminder to jump to the prompt.
@@ -119,7 +119,7 @@ proxy = "socks5h://127.0.0.1:40000"  # when your network blocks or drops Telegra
 mode = "progress"         # progress, block, or final
 mac_notice = true         # one notice while you work on the Mac
 send_images = true        # send images that an answer names
-stream = true             # show the text while the agent writes
+stream = false            # true: show the text while the agent writes
 ```
 
 ## Logs, stop, and uninstall

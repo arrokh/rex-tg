@@ -105,6 +105,24 @@ func (d *daemon) tickReminders(now time.Time) {
 			continue
 		}
 		r := d.reminderOf(a.ID)
+		if dl, ok := d.deadlines[a.ID]; ok {
+			// A prompt with a time limit gets one reminder, 30 seconds
+			// before it blocks, instead of the usual ones.
+			due := dl.at.Add(-d.timing.DeadlineWarn - dl.early)
+			if r.busy || r.n > 0 || now.Before(due) || !now.Before(dl.at) || due.Sub(a.CreatedAt) < d.timing.DeadlineWarn/2 {
+				continue
+			}
+			th, err := d.st.Thread(d.ctx, a.ThreadID)
+			if err != nil || th.Status != store.ThreadLive {
+				continue
+			}
+			r.n++
+			r.busy, r.prev, r.last = true, r.last, now
+			d.saveReminder(a.ID, r) // before the send: never twice
+			left := clockText(dl.at.Sub(now))
+			d.sendReminder(th, a, r.n, now, 0, 0, fmt.Sprintf("⏰ <b>%s left</b> to answer the prompt above, then %s blocks it.", left, format.Escape(dl.agent)))
+			continue
+		}
 		since := a.CreatedAt
 		if r.n > 0 && r.last.After(since) {
 			since = r.last
@@ -121,21 +139,28 @@ func (d *daemon) tickReminders(now time.Time) {
 		r.busy, r.prev, r.last = true, r.last, now
 		r.chat, r.msg = 0, 0    // the old one is deleted below
 		d.saveReminder(a.ID, r) // before the send: never twice
-		d.sendReminder(th, a, r.n, now, oldChat, oldMsg)
+		d.sendReminder(th, a, r.n, now, oldChat, oldMsg, "")
 	}
 	for id, r := range d.reminders {
 		if !open[id] && !r.busy {
 			d.dropReminder(id, r)
 		}
 	}
+	for id := range d.deadlines {
+		if !open[id] {
+			delete(d.deadlines, id) // answered, or closed without a notice
+		}
+	}
 }
 
 // sendReminder posts reminder n of an alert in a worker, after it deletes
-// the reminder before it (oldChat, oldMsg).
-func (d *daemon) sendReminder(th store.Thread, a store.Alert, n int, now time.Time, oldChat, oldMsg int64) {
-	waited := now.Sub(a.CreatedAt).Round(time.Minute)
-	text := fmt.Sprintf("⏰ <b>Still waiting for your answer</b> · %s\nThe agent cannot go on until you answer the prompt above.",
-		format.Escape(waitedText(waited)))
+// the reminder before it (oldChat, oldMsg). text "" is the usual reminder.
+func (d *daemon) sendReminder(th store.Thread, a store.Alert, n int, now time.Time, oldChat, oldMsg int64, text string) {
+	if text == "" {
+		waited := now.Sub(a.CreatedAt).Round(time.Minute)
+		text = fmt.Sprintf("⏰ <b>Still waiting for your answer</b> · %s\nThe agent cannot go on until you answer the prompt above.",
+			format.Escape(waitedText(waited)))
+	}
 	alert, chat, topic, reply, silent := a.ID, th.ChatID, th.MessageThreadID, a.TGMessageID, th.Muted
 	d.spawn(func() {
 		if oldMsg != 0 {

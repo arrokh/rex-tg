@@ -163,6 +163,9 @@ func (d *daemon) topicMessage(u telegram.Update, m *telegram.Message) {
 	if d.newFolderText(u, m, true) {
 		return
 	}
+	if d.alertNote(u, m, th) {
+		return
+	}
 	r := inbound.RouteText(m.Text, true, d.botUser)
 	switch r.Kind {
 	case inbound.RouteCommand:

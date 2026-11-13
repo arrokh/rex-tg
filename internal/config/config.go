@@ -117,8 +117,12 @@ type Config struct {
 		SendFiles []string `toml:"send_files"`
 		// Stream shows the agent's text while it writes, as a Telegram draft
 		// (sendMessageDraft): word by word for pi, block by block for Claude
-		// Code and Codex. On by default.
+		// Code and Codex. Off by default.
 		Stream bool `toml:"stream"`
+		// StreamInterval is the least time between two drafts of a topic.
+		// MinStreamInterval is the fastest: Telegram allows about one
+		// message a second in a chat, and drafts share that budget.
+		StreamInterval Duration `toml:"stream_interval"`
 	} `toml:"display"`
 	// Alerts holds the [alerts] table: reminders of permission prompts and
 	// questions that wait for an answer.
@@ -181,9 +185,11 @@ func Default(home string) Config {
 		Answer{"Esc", []string{"escape"}},
 	)
 	c.Agents.Claude.Launch = []string{"claude"}
+	// No "always" answer: in Codex 0.167 "p" on a network prompt allows a
+	// host for good, and "a" is "always" on an edit prompt. A screen without
+	// numbered answers gets only the answers that cannot make a lasting rule.
 	c.Agents.Codex = base(
 		Answer{"Yes", []string{"y"}},
-		Answer{"Always", []string{"p"}},
 		Answer{"No", []string{"escape"}},
 	)
 	c.Agents.Codex.Launch = []string{"codex"}
@@ -196,7 +202,8 @@ func Default(home string) Config {
 	c.Alerts.Reminders = 3
 	c.Display.SendImages = true
 	c.Display.SendFiles = []string{"pdf", "csv", "tsv", "html", "htm", "xlsx", "docx", "pptx"}
-	c.Display.Stream = true
+	c.Display.Stream = false // off: at its fastest it changes once a second
+	c.Display.StreamInterval = Duration{MinStreamInterval}
 	c.Display.ProgressDelay = secs(2)
 	c.Display.ProgressEditInterval = secs(2)
 
@@ -239,6 +246,9 @@ func Load(path, home string) (Config, error) {
 	}
 	return c, nil
 }
+
+// MinStreamInterval is the fastest display.stream_interval.
+const MinStreamInterval = time.Second
 
 // fileExtRe is a file extension in display.send_files, without the dot.
 var fileExtRe = regexp.MustCompile(`^[a-z0-9]{1,10}$`)
@@ -318,6 +328,9 @@ func (c Config) validate() error {
 		if !filepath.IsAbs(f) {
 			return fmt.Errorf("rex.new_folders %q must be an absolute path (or start with ~/)", f)
 		}
+	}
+	if c.Display.StreamInterval.Duration < MinStreamInterval {
+		return fmt.Errorf("display.stream_interval %v: at least %v (Telegram allows about one message a second in a chat)", c.Display.StreamInterval.Duration, MinStreamInterval)
 	}
 	for _, x := range c.Display.SendFiles {
 		if !fileExtRe.MatchString(x) {

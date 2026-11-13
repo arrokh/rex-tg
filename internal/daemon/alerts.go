@@ -37,7 +37,9 @@ func lastLines(screen string, n int) []string {
 }
 
 // screenHash is the SHA-256 of the prompt lines. Blank lines and trailing
-// spaces do not count.
+// spaces do not count, and neither does the time on Claude Code's countdown
+// ("automatically block this request in 1:59"), which changes every second:
+// else every tap on such a prompt would find it changed.
 func screenHash(lines []string) string {
 	var b strings.Builder
 	for _, l := range lines {
@@ -45,6 +47,7 @@ func screenHash(lines []string) string {
 		if strings.TrimSpace(l) == "" {
 			continue
 		}
+		l = deadlineRe.ReplaceAllString(l, "automatically block this request in <time>")
 		b.WriteString(l)
 		b.WriteByte('\n')
 	}
@@ -52,18 +55,34 @@ func screenHash(lines []string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// parseOptions finds numbered options on the screen. The digit is the key.
-func parseOptions(lines []string) []store.AlertOption {
+// parseOptions finds numbered options on the screen: the last list that is
+// numbered from 1, since the prompt's answers are at the bottom. The digit is
+// the key,
+// unless shortcuts is set and the answer prints its own key, such as
+// Codex's "1. Yes, proceed (y)" or "3. No, … (esc)" (prompts.go).
+func parseOptions(lines []string, shortcuts bool) []store.AlertOption {
 	var out []store.AlertOption
 	seen := map[string]bool{}
 	for _, l := range lines {
 		m := optionRe.FindStringSubmatch(l)
-		if m == nil || seen[m[1]] {
+		if m == nil {
+			continue
+		}
+		if m[1] == "1" && seen["1"] {
+			// A list numbered from 1 again: the earlier one was text above
+			// the prompt, such as a numbered line of the command or a diff.
+			out, seen = nil, map[string]bool{}
+		}
+		if seen[m[1]] {
 			continue
 		}
 		seen[m[1]] = true
 		label := m[1] + " " + strings.TrimSpace(m[2])
-		out = append(out, store.AlertOption{Label: format.Truncate(label, alertMaxBtn), Keys: []string{m[1]}})
+		key := m[1]
+		if k := shortcutKey(m[2]); shortcuts && k != "" {
+			key = k
+		}
+		out = append(out, store.AlertOption{Label: format.Truncate(label, alertMaxBtn), Keys: []string{key}})
 	}
 	return out
 }
@@ -150,7 +169,7 @@ func (d *daemon) alertDone(threadID int64) {
 	}
 	pane, ok, err := d.st.PaneByConversation(d.ctx, th.CurrentConversationID)
 	if err != nil || !ok || pane.State != "blocked" {
-		d.closeAlerts(th, store.AlertGone)
+		d.promptEnded(th)
 	}
 }
 
@@ -169,7 +188,7 @@ func (d *daemon) createAlert(th store.Thread, kind string) {
 		d.log.Warn("alert: capture", "err", err)
 	}
 	lines := lastLines(screen, alertLines)
-	opts := parseOptions(lines)
+	opts := parseOptions(lines, kind == store.AlertPermission)
 	if len(opts) == 0 {
 		for _, a := range d.cfg.Input(conv.Runtime).Answers {
 			opts = append(opts, store.AlertOption{Label: a.Label, Keys: a.Keys})
@@ -189,6 +208,15 @@ func (d *daemon) createAlert(th store.Thread, kind string) {
 		head = "❓ <b>The agent asks a question</b>"
 	}
 	text := head
+	if left, rough, ok := parseDeadline(lines); ok {
+		// The prompt counts down on the screen: the time left is from now.
+		dl := newDeadline(d.now(), left, rough, runtimeName(conv.Runtime))
+		text += "\n" + deadlineLine(dl)
+		d.emit(evAlertDeadline{alert: id, d: dl})
+	}
+	if kind == store.AlertPermission {
+		text += "\n<i>Reply with text to answer No and send it as a note.</i>"
+	}
 	if len(lines) > 0 {
 		text += "\n" + preBlock(lastLines(format.Redact(screen), alertLines), alertMaxText)
 	}
@@ -245,45 +273,46 @@ func (d *daemon) removeButtons(chatID, messageID int64) {
 	})
 }
 
-// answerAlert presses option idx of an alert (flow 5). It runs in a worker.
+// answerAlert presses option idx of an alert (flow 5), and reports whether
+// it pressed the keys. It runs in a worker.
 // tapped is the message whose button was pressed (0 for /approve and /deny):
 // a tap right after the alert was posted can come before the alert's message
 // id is saved, and the buttons must go all the same. respond tells the user
 // the result; isErr marks a refusal.
-func (d *daemon) answerAlert(alertID int64, idx int, tapped int64, respond func(text string, isErr bool)) {
+func (d *daemon) answerAlert(alertID int64, idx int, tapped int64, respond func(text string, isErr bool)) bool {
 	ctx := d.ctx
 	// Claim the alert first: a second tap (or /approve) while the keys are
 	// being sent must not press them again.
 	if _, busy := d.answering.LoadOrStore(alertID, struct{}{}); busy {
 		respond("Already sending an answer.", false)
-		return
+		return false
 	}
 	defer d.answering.Delete(alertID)
 	al, err := d.st.Alert(ctx, alertID)
 	if err != nil || al.State != store.AlertOpen {
 		respond("This prompt is gone.", true)
-		return
+		return false
 	}
 	th, err := d.st.Thread(ctx, al.ThreadID)
 	if err != nil {
 		respond("This prompt is gone.", true)
-		return
+		return false
 	}
 	if idx < 0 || idx >= len(al.Options) {
 		respond("Unknown answer.", true)
-		return
+		return false
 	}
 	f, pane, err := d.facts(ctx, th)
 	if err != nil {
 		respond("Could not read the pane: Rex is not reachable.", true)
-		return
+		return false
 	}
 	f.PromptOpen = true
 	if f.PaneExists {
 		screen, err := d.rx.Capture(ctx, pane.Session, pane.Block)
 		if err != nil {
 			respond("Could not read the screen.", true)
-			return
+			return false
 		}
 		f.AlertMatches = screenHash(lastLines(screen, alertLines)) == al.ScreenHash
 	}
@@ -297,20 +326,21 @@ func (d *daemon) answerAlert(alertID int64, idx int, tapped int64, respond func(
 			d.removeButtons(th.ChatID, msg)
 			respond("This prompt is gone.", true)
 			d.emit(evAlertStale{th.ID}) // a newer prompt may show now
-			return
+			return false
 		}
 		respond("⛔ Not sent: "+reason+".", true)
-		return
+		return false
 	}
 	opt := al.Options[idx]
 	if err := d.rx.SendKeys(ctx, pane.Session, pane.Block, opt.Keys...); err != nil {
 		d.log.Warn("alert: send keys", "err", err)
 		respond("Could not press the keys.", true)
-		return
+		return false
 	}
 	if err := d.st.SetAlertState(ctx, al.ID, store.AlertAnswered); err != nil {
 		d.log.Warn("alert: save state", "err", err)
 	}
 	d.removeButtons(th.ChatID, msg)
 	respond("Sent: "+opt.Label, false)
+	return true
 }

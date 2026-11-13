@@ -138,7 +138,7 @@ Doctor checks:
 - `typing…` shows while the agent works, in the topic you used last.
 - The progress message appears after 2 seconds without an answer. It shows the latest commentary and the recent tool calls. It never shows tool output, unless `/verbose full` is on.
 - At the end of the turn, the tool rows stay in a collapsed quote under the summary line.
-- While the agent writes, the text shows at the bottom of the topic as a draft, Telegram's preview of a message being written. pi's text grows word by word. Claude Code and Codex show each finished block, because they write nothing earlier. A draft never becomes a message: the answer replaces it. Final mode shows no drafts. Set `stream = false` to turn drafts off.
+- While the agent writes, the text shows at the bottom of the topic as a draft, Telegram's preview of a message being written. pi's text grows word by word. Claude Code and Codex show each finished block, because they write nothing earlier. A draft never becomes a message: the answer replaces it. Final mode shows no drafts. Drafts are off by default; set `stream = true` to turn them on. `stream_interval` sets how often the draft changes: `1s` is the default and the fastest, because drafts share Telegram's budget of about one message a second in a chat; a larger value such as `"3s"` leaves more of it to answers.
 - Images named in a final answer come by themselves, as photos, up to 10 per answer. Set `send_images = false` to turn this off.
 - Other files named in a final answer (`pdf`, `csv`, `tsv`, `html`, `htm`, `xlsx`, `docx`, `pptx`) come only when you ask: a silent `📎 Files in this answer` message lists them with a button each. A tap sends that file as a document, once. Change the types with `send_files` (`[]` turns the offers off).
 - Work on the Mac: when you type in the pane on the Mac, the topic gets one silent notice, `💻 In use on the Mac`, instead of the prompts and replies. The notice shows the latest prompt and whether the agent is working or done. `📄 Last answer` posts the newest answer. Write in the topic to go on in Telegram: from then on, replies come as usual. Permission prompts still come.
@@ -147,9 +147,20 @@ Doctor checks:
 ### Permission prompts
 
 - Tap a button to send its key to the pane. The buttons go away when the prompt ends. A button of an old prompt is refused.
-- `/approve` and `/deny` answer the open prompt too.
+- `/approve` and `/deny` answer the open prompt too. `/deny` presses Esc, which both Claude Code and Codex read as "no, wait for me"; it never presses an answer that allows, makes a lasting rule, or starts something else.
 - Reminders: when a prompt waits for 10 minutes, the topic gets `⏰ Still waiting for your answer`, as a reply to the prompt. More reminders come 10 minutes after the one before, at most 3, and each one replaces the one before. They go away when the prompt ends. Set `[alerts] remind_after` and `reminders` to change this, and `remind_after = "0s"` to turn them off.
 - Questions that allow free text get a `✍ Other…` button. Your next message becomes the answer. This is not tested yet (spike S2).
+- Time limits: a Claude Code safety check blocks the request by itself after a while (`automatically block this request in 2:00`). The alert then says `⏳ Answer within 2:00 (by 07:00:57)`, one reminder comes 30 seconds before, and if the time runs out the topic says `⌛ Blocked`.
+- Reply to a prompt with text to answer No with a note: rex-tg refuses it with Esc, then types your text as your next message, when the agent waits for it. A reply that starts with yes, ok, ya, iya, lanjut, or gas presses nothing: tap Yes for that. It works like Claude Code's "Tab to amend" for No, and Codex's "No, and tell Codex what to do differently". For Yes with a note, tap Yes and send the note as a message.
+- Codex prints the key of each answer, such as `(y)` or `(esc)`; its buttons press that key.
+- A Claude Code question with several answers to tick, or several questions at once, needs the Mac: a button only ticks an answer there.
+
+| Agent | Buttons | Reply with text |
+| --- | --- | --- |
+| Claude Code | `1 Yes`, `2 Yes, and don't ask again …`, `3 No`, `Esc` | No (Esc) + your note |
+| Claude Code question | one per answer, `Esc` | Esc + your text |
+| Codex | `Yes, proceed` (y), `don't ask again` (p), `No …` (Esc) | No (Esc) + your note |
+| pi | pi asks nothing before it acts | — |
 
 ### Files and photos
 
@@ -231,10 +242,6 @@ label = "Yes"
 keys = ["y"]
 
 [[agents.codex.answers]]
-label = "Always"
-keys = ["p"]
-
-[[agents.codex.answers]]
 label = "No"
 keys = ["escape"]
 
@@ -248,7 +255,8 @@ progress_edit_interval = "2s"           # Least time between two edits of the pr
 rich_messages = false                   # Send final answers as Telegram rich messages.
 send_images = true                      # Send the image files that a final answer names.
 send_files = ["pdf", "csv", "tsv", "html", "htm", "xlsx", "docx", "pptx"]  # Other file types that a final answer offers, with a button to send each.
-stream = true                           # Show the agent's text while it writes, as a Telegram draft.
+stream = false                          # Show the agent's text while it writes, as a Telegram draft.
+stream_interval = "1s"                  # Least time between two drafts of a topic. 1s is the fastest: Telegram allows about one message a second in a chat.
 
 [alerts]
 remind_after = "10m"                    # Remind of an unanswered prompt after this, and again each time it passes. "0s" turns reminders off.

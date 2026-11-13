@@ -55,12 +55,13 @@ func writeLive(t *testing.T, dir, session, text string) {
 	}
 }
 
-// While the agent writes, its topic shows the text as a draft: pi's text as
+// With drafts on (display.stream; off by default), while the agent writes,
+// its topic shows the text as a draft: pi's text as
 // it grows, then a commentary block (the way Claude Code and Codex stream).
 // The answer ends the drafts, and none comes after it. A turn held for the
 // Mac gets no draft.
 func TestDraftsShowTheTextBeingWritten(t *testing.T) {
-	e, p, thread := macHoldTopic(t, "pi-draft")
+	e, p, thread := piTopicCfg(t, "pi-draft", func(e *env) { e.cfg.Display.MacNotice, e.cfg.Display.Stream = true, true })
 	u := e.say(thread, "explain the parser")
 	e.waitFor("the paste", func() bool { return len(e.pastes()) == 1 })
 	e.waitFor("Enter", func() bool { return len(e.keys()) == 1 })
@@ -126,6 +127,7 @@ func TestDraftsShowTheTextBeingWritten(t *testing.T) {
 func draftTopic(t *testing.T, id string, keep time.Duration) (*env, *piLog, int64) {
 	t.Helper()
 	e := newEnv(t)
+	e.cfg.Display.Stream = true
 	e.seedOwner()
 	p := e.newPi(id)
 	p.User("start")
@@ -168,4 +170,16 @@ func TestDraftsStopWhenTelegramRefusesThem(t *testing.T) {
 	e.never("a fourth draft", 300*time.Millisecond, func() bool { return len(e.drafts(thread)) > 3 })
 	p.Final("the answer")
 	e.waitText(thread, "the answer")
+}
+
+// Drafts are off by default: a running turn gets none.
+func TestNoDraftsByDefault(t *testing.T) {
+	e, p, thread := piTopic(t, "pi-nodraft")
+	u := e.say(thread, "go on")
+	e.waitFor("Enter", func() bool { return len(e.keys()) == 1 })
+	p.User("go on")
+	e.waitFor("👍", func() bool { m, _ := e.message(u); return m.Reaction == "👍" })
+	writeLive(t, e.cfg.LiveDir(), p.ID, "some text being written ")
+	p.write(fmt.Sprintf(`{"type":"message","id":"c-1","timestamp":%q,"message":{"role":"assistant","content":[{"type":"text","text":"Let me look."},{"type":"toolCall","id":"t1","name":"bash","arguments":{"command":"ls"}}],"stopReason":"toolUse"}}`, now()))
+	e.never("a draft", 400*time.Millisecond, func() bool { return len(e.drafts(thread)) > 0 })
 }

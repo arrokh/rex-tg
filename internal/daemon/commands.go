@@ -541,26 +541,27 @@ func (d *daemon) approveDeny(th store.Thread, upd int64, approve bool) {
 		}
 		idx = append(idx, i)
 	}
-	if len(idx) == 0 {
+	if len(idx) == 0 && approve {
 		d.replyTopic(th, tag, "This prompt has no answer to press. Use /esc.")
 		return
 	}
-	pick := idx[0]
-	if !approve {
-		pick = idx[len(idx)-1]
-	}
-	// Choose by label when it says yes or no. Codex's "No" presses Esc, and
-	// its last other option is "Always", which must never answer /deny.
-	want := "yes"
-	if !approve {
-		want = "no"
-	}
-	for i, o := range al.Options {
-		if answerWord(o.Label) == want {
-			pick = i
-			if approve {
+	var pick int
+	if approve {
+		// The first answer that says yes, else the first one.
+		pick = idx[0]
+		for i, o := range al.Options {
+			if answerWord(o.Label) == "yes" {
+				pick = i
 				break
 			}
+		}
+	} else {
+		// Never the last answer on a guess: on a menu without a No it may
+		// be "Allow and don't ask me again" (Codex). denyAnswer refuses.
+		var ok bool
+		if pick, ok = denyAnswer(al); !ok {
+			d.replyTopic(th, tag, "This prompt has no answer that refuses it. Use /esc.")
+			return
 		}
 	}
 	d.answerAlert(al.ID, pick, 0, func(text string, _ bool) { d.replyTopic(th, tag, format.Escape(text)) })

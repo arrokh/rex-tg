@@ -27,6 +27,10 @@ func TestDefaults(t *testing.T) {
 	if c.Rex.ScanInterval.Duration != 30*time.Second || c.Rex.NewSession != "rex-tg" {
 		t.Errorf("rex = %+v", c.Rex)
 	}
+	// Drafts are off; turned on, they go at the fastest speed.
+	if c.Display.Stream || c.Display.StreamInterval.Duration != MinStreamInterval {
+		t.Errorf("stream %v every %v, want off, every %v", c.Display.Stream, c.Display.StreamInterval.Duration, MinStreamInterval)
+	}
 	// cux runs claude as its child, so a pane with cux in front is Claude Code.
 	if got := strings.Join(c.Agents.ClaudeArgv0, " "); got != "claude cux" {
 		t.Errorf("claude_argv0 = %q", got)
@@ -67,7 +71,8 @@ func TestDefaults(t *testing.T) {
 		t.Error("pi has no answers")
 	}
 	cx := c.Input(agents.Codex).Answers
-	if len(cx) != 3 || cx[0].Keys[0] != "y" || cx[1].Keys[0] != "p" || cx[2].Keys[0] != "escape" {
+	// No "always" answer: a guessed lasting rule must not be one tap away.
+	if len(cx) != 2 || cx[0].Keys[0] != "y" || cx[1].Keys[0] != "escape" {
 		t.Errorf("codex answers = %+v", cx)
 	}
 	if got := c.Input("nope"); got.WhileWorking != "" {
@@ -118,7 +123,8 @@ backfill = 5
 show_mac_prompts = false
 progress_delay = "3s"
 send_files = [".PDF", " csv "]
-stream = false
+stream = true
+stream_interval = "2s"
 
 [input]
 queue_expiry = "1h"
@@ -163,7 +169,7 @@ dir = "~/st"
 	if c.Input(agents.Codex).Answers[0].Keys[0] != "y" {
 		t.Error("codex default lost")
 	}
-	if strings.Join(c.Display.SendFiles, ",") != "pdf,csv" || c.Display.Stream {
+	if strings.Join(c.Display.SendFiles, ",") != "pdf,csv" || !c.Display.Stream || c.Display.StreamInterval.Duration != 2*time.Second {
 		t.Errorf("send files %q, stream %v", c.Display.SendFiles, c.Display.Stream)
 	}
 	if c.Display.Mode != "final" || c.Display.Backfill != 5 || c.Display.ShowMacPrompts || c.Display.ProgressDelay.Duration != 3*time.Second {
@@ -203,6 +209,7 @@ func TestLoadErrors(t *testing.T) {
 		{"empty new folder", "[rex]\nnew_folders = [\"\"]\n", "rex.new_folders"},
 		{"a path as a file type", "[display]\nsend_files = [\"a/pdf\"]\n", "display.send_files"},
 		{"an empty file type", "[display]\nsend_files = [\"\"]\n", "display.send_files"},
+		{"drafts too fast", "[display]\nstream_interval = \"500ms\"\n", "display.stream_interval"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

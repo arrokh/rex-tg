@@ -25,6 +25,9 @@ func (d *daemon) housekeeping(now time.Time) {
 		d.log.Info("housekeeping: removed old uploads", "count", n)
 	}
 	d.pruneFileOffers(now)
+	// pi's text files of messages that never ended (pi was killed); the
+	// live loop removes them too, but only while drafts are on.
+	removeOlder(d.cfg.LiveDir(), now.Add(-liveStale))
 }
 
 // removeOlder deletes regular files under root that changed before cutoff,

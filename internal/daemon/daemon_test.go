@@ -478,15 +478,16 @@ func TestPermissionAlert(t *testing.T) {
 		t.Errorf("open alerts left: %+v", als)
 	}
 
-	// The next alert is answered with /deny: the last non-Esc option.
+	// The next alert is answered with /deny: Esc, the refusal both agents
+	// read the same way (denyAnswer).
 	e.setStatus("working", "")
 	e.waitPaneState("working")
 	e.setStatus("blocked", "permission")
 	e.waitFor("a fourth alert", func() bool { return len(alertMessages(e, thread)) == 4 })
 	e.say(thread, "/deny")
 	e.waitFor("the deny key", func() bool { return len(e.keys()) == 2 })
-	if got := e.keys()[1]; got != "3" {
-		t.Errorf("keys = %v, want the second to be 3", e.keys())
+	if got := e.keys()[1]; got != "escape" {
+		t.Errorf("keys = %v, want the second to be escape", e.keys())
 	}
 }
 
@@ -1289,7 +1290,7 @@ func TestCodexAlertUsesConfiguredAnswersAndDenyIsNo(t *testing.T) {
 			labels = append(labels, b.Text)
 		}
 	}
-	if got := strings.Join(labels, "|"); got != "Yes|Always|No" {
+	if got := strings.Join(labels, "|"); got != "Yes|No" {
 		t.Errorf("buttons = %q", got)
 	}
 	e.say(thread, "/deny")
