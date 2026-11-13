@@ -372,9 +372,12 @@ func (d *daemon) handle(ev any) {
 	case evTopicCreated:
 		d.onTopicCreated(e)
 	case evQueueText:
+		if e.ctl != nil {
+			d.keepPending(-e.orig, *e.ctl) // the row's id; kept before the row, so a stop between loses neither
+		}
 		queued := d.queueText(e.threadID, e.orig, e.tgMsg, e.text, e.kind, e.action)
-		if queued && e.ctl != nil {
-			d.ctlPending[-e.orig] = *e.ctl // the row's id
+		if !queued && e.ctl != nil {
+			d.controlTyped(-e.orig, false)
 		}
 		if e.note != nil {
 			d.noteQueued(e.threadID, e.note, queued)
@@ -529,6 +532,7 @@ func (d *daemon) closeThread(threadID int64) {
 				d.log.Warn("close topic: refuse queued message", "err", err)
 			}
 			d.dropWaitNotice(q.UpdateID)
+			d.controlTyped(q.UpdateID, false)
 			delete(d.actions, q.UpdateID)
 			delete(d.waitNoticed, q.UpdateID)
 			delete(d.vimNoticed, q.UpdateID)

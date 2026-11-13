@@ -1,11 +1,15 @@
 package daemon
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"hash/fnv"
+	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"rex-tg/internal/agents"
 	"rex-tg/internal/format"
@@ -245,18 +249,81 @@ type ctlSet struct {
 	name, value string
 }
 
-// controlTyped keeps the value of a control command that was typed (core).
-// It reports whether the row was a control command.
+// controlTyped keeps the value of a control command that was typed (core),
+// and forgets the pending command either way (typed false: refused,
+// expired, cancelled, or failed). It reports whether the row was one.
 func (d *daemon) controlTyped(row int64, typed bool) bool {
 	p, ok := d.ctlPending[row]
 	if !ok {
 		return false
 	}
 	delete(d.ctlPending, row)
+	if err := d.st.Delete(d.ctx, ctlPendingKey(row)); err != nil {
+		d.log.Warn("control: forget the pending command", "err", err)
+	}
 	if typed {
 		d.ctlMerge(p.conv, map[string]string{p.name: p.value}, false)
 	}
 	return true
+}
+
+// ctlPendingKey keeps a queued control command in the store, so a stop
+// between queuing and typing does not lose the value it sets.
+func ctlPendingKey(row int64) string { return fmt.Sprintf("ctl_pending:%d", row) }
+
+// keepPending records a queued control command (core).
+func (d *daemon) keepPending(row int64, p ctlSet) {
+	d.ctlPending[row] = p
+	b, err := json.Marshal(struct {
+		Conv  int64  `json:"conv"`
+		Name  string `json:"name"`
+		Value string `json:"value"`
+	}{p.conv, p.name, p.value})
+	if err == nil {
+		err = d.st.Set(d.ctx, ctlPendingKey(row), string(b))
+	}
+	if err != nil {
+		d.log.Warn("control: keep the pending command", "err", err)
+	}
+}
+
+// loadPending restores the control commands that were queued before a stop
+// and are still waiting (startup); the others are forgotten.
+func (d *daemon) loadPending(ctx context.Context) {
+	keys, err := d.st.KeysWithPrefix(ctx, "ctl_pending:")
+	if err != nil {
+		return
+	}
+	for _, k := range keys {
+		var row int64
+		if _, err := fmt.Sscanf(k, "ctl_pending:%d", &row); err != nil {
+			_ = d.st.Delete(ctx, k)
+			continue
+		}
+		in, found, err := d.st.InboundByID(ctx, row)
+		v, ok, gerr := d.st.Get(ctx, k)
+		var p struct {
+			Conv  int64  `json:"conv"`
+			Name  string `json:"name"`
+			Value string `json:"value"`
+		}
+		// Only rows that still wait: a row that was being typed at the stop
+		// becomes unknown (RecoverTyping), and its value is not counted.
+		if err != nil || !found || gerr != nil || !ok || json.Unmarshal([]byte(v), &p) != nil || in.State != store.InboundQueued {
+			_ = d.st.Delete(ctx, k)
+			continue
+		}
+		d.ctlPending[row] = ctlSet{conv: p.Conv, name: p.Name, value: p.Value}
+	}
+}
+
+// controlStale reports a queued control command whose session is gone from
+// the topic: another session took the pane since it was queued (another
+// agent, or the same one after /clear or a resume), so its value would go to
+// a session it was not meant for (core).
+func (d *daemon) controlStale(th store.Thread, row int64) bool {
+	p, ok := d.ctlPending[row]
+	return ok && p.conv != 0 && th.CurrentConversationID != p.conv
 }
 
 // maxControlButtons caps the buttons of a card.
@@ -349,7 +416,7 @@ func (d *daemon) controlButton(upd int64, cb *telegram.CallbackQuery, parts []st
 		d.answerCallback(cb.ID, "This card was used already. Send /"+name+" again.", false)
 		return
 	}
-	if err := d.st.Set(d.ctx, claim, "1"); err != nil {
+	if err := d.st.Set(d.ctx, claim, strconv.FormatInt(d.now().Unix(), 10)); err != nil { // the time, for housekeeping
 		d.answerCallback(cb.ID, "", false)
 		return
 	}
@@ -394,4 +461,41 @@ func (d *daemon) controlsLine(conv store.Conversation) string {
 		}
 	}
 	return strings.Join(parts, " · ")
+}
+
+// cardClaimAge is how long a used card's claim is kept: a tap on a card that
+// old says the card was used. After it, a tap counts like a tap on a new
+// card, still checked against the card's choices (their hash).
+const cardClaimAge = 7 * 24 * time.Hour
+
+// pruneControlRecords drops the store's control records that are no longer
+// needed (housekeeping, a worker): the claims of used cards older than
+// cardClaimAge, and the known values of conversations that are gone.
+func (d *daemon) pruneControlRecords(now time.Time) {
+	if keys, err := d.st.KeysWithPrefix(d.ctx, "cf_card:"); err == nil {
+		for _, k := range keys {
+			v, ok, err := d.st.Get(d.ctx, k)
+			if err != nil || !ok {
+				continue
+			}
+			at, perr := strconv.ParseInt(v, 10, 64)
+			if perr != nil || at < 1e9 { // "1": a claim from before the time was kept
+				at = 0
+			}
+			if now.Sub(time.Unix(at, 0)) > cardClaimAge {
+				_ = d.st.Delete(d.ctx, k)
+			}
+		}
+	}
+	if keys, err := d.st.KeysWithPrefix(d.ctx, "ctl:"); err == nil {
+		for _, k := range keys {
+			var conv int64
+			if _, err := fmt.Sscanf(k, "ctl:%d", &conv); err != nil {
+				continue
+			}
+			if _, err := d.st.Conversation(d.ctx, conv); errors.Is(err, store.ErrNotFound) {
+				_ = d.st.Delete(d.ctx, k)
+			}
+		}
+	}
 }

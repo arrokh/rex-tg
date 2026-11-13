@@ -55,6 +55,15 @@ func (s *Sender) Progress(threadID int64, op ProgressOp) {
 	s.Wake()
 }
 
+// finishQueued reports whether the next queued operation of the topic is a
+// Finish.
+func (s *Sender) finishQueued(tid int64) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	q := s.prog[tid]
+	return len(q) > 0 && q[0].kind == Finish
+}
+
 // requeue puts op back at the front of its topic's queue after a delay.
 // Edits behind it are merged into it, and a stale edit is dropped.
 func (s *Sender) requeue(tid int64, op *progOp, delay time.Duration) {
@@ -94,6 +103,15 @@ func (s *Sender) runProgress(ctx context.Context, tid int64, op *progOp) {
 	pr := &progRun{s: s, ctx: ctx, bg: bg, th: th, row: row, has: has, op: op}
 	switch op.kind {
 	case Show:
+		if !has && op.attempts == 0 && op.notBefore.IsZero() && s.finishQueued(tid) {
+			// The turn ended before its progress message could go out (the
+			// Show was starved behind answers). Posting it now would show
+			// "Working…" below newer messages, so post nothing; the Finish
+			// behind it finds no row and does nothing. This Show was never
+			// sent (a sent or retried one is not dropped), and the sender
+			// runs one operation at a time, so no send is in flight.
+			return
+		}
 		pr.show()
 	case Edit:
 		pr.edit()

@@ -1,6 +1,7 @@
 package daemon_test
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -55,6 +56,7 @@ func TestReplyToAnAlertIsANote(t *testing.T) {
 	e.setScreen(permScreen)
 	e.setStatus("blocked", "permission")
 	alert := e.waitText(thread, "Permission needed")
+	e.waitAlertSaved(thread)
 	e.tg.PushReply(chatID, thread, ownerID, alert.ID, "", "use trash instead of rm")
 	e.waitFor("the refusal", func() bool { return len(e.keys()) == 1 })
 	if got := e.keys()[0]; got != "escape" {
@@ -79,6 +81,7 @@ func TestYesReplyToAnAlertPressesNothing(t *testing.T) {
 	e.setScreen(permScreen)
 	e.setStatus("blocked", "permission")
 	alert := e.waitText(thread, "Permission needed")
+	e.waitAlertSaved(thread)
 	e.tg.PushReply(chatID, thread, ownerID, alert.ID, "", "yes, go ahead")
 	e.waitText(thread, "Nothing pressed")
 	if len(e.keys()) != 0 || len(e.pastes()) != 0 {
@@ -104,4 +107,19 @@ func TestTapOnACountdownPrompt(t *testing.T) {
 			t.Fatalf("the tap was refused: %q", s)
 		}
 	}
+}
+
+// waitAlertSaved waits until the open alert of a topic knows its Telegram
+// message: a person replies seconds after the alert shows, a test at once.
+func (e *env) waitAlertSaved(thread int64) {
+	e.t.Helper()
+	st := e.peek()
+	th, ok, err := st.ThreadByTopic(context.Background(), chatID, thread)
+	if err != nil || !ok {
+		e.t.Fatalf("thread: %v %v", ok, err)
+	}
+	e.waitFor("the alert's message saved", func() bool {
+		als, _ := st.OpenAlerts(context.Background(), th.ID)
+		return len(als) > 0 && als[len(als)-1].TGMessageID != 0
+	})
 }

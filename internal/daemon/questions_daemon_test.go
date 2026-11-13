@@ -138,6 +138,7 @@ func TestReplyToAQuestionIsTheAnswer(t *testing.T) {
 	e.setScreen(qSingle)
 	e.setStatus("blocked", "permission")
 	q := e.waitText(thread, "Which size?")
+	e.waitAlertSaved(thread)
 	e.tg.PushReply(chatID, thread, ownerID, q.ID, "", "medium, please")
 	e.tg.PushReply(chatID, thread, ownerID, q.ID, "", "medium, please") // a second reply, at once
 	e.waitFor("the field's digit", func() bool { return len(e.keys()) == 1 })
