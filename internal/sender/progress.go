@@ -34,13 +34,13 @@ func (s *Sender) Progress(threadID int64, op ProgressOp) {
 	switch op.Kind {
 	case Edit:
 		if last != nil {
-			if last.kind != Finish {
+			if last.kind != Finish && last.kind != Remove {
 				last.html = op.HTML
 			}
 			s.mu.Unlock()
 			return
 		}
-	case Finish:
+	case Finish, Remove:
 		if last != nil && last.kind == Edit {
 			q = q[:len(q)-1]
 		}
@@ -61,7 +61,7 @@ func (s *Sender) finishQueued(tid int64) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	q := s.prog[tid]
-	return len(q) > 0 && q[0].kind == Finish
+	return len(q) > 0 && (q[0].kind == Finish || q[0].kind == Remove)
 }
 
 // requeue puts op back at the front of its topic's queue after a delay.
@@ -71,7 +71,7 @@ func (s *Sender) requeue(tid int64, op *progOp, delay time.Duration) {
 	defer s.mu.Unlock()
 	op.notBefore = s.now().Add(delay)
 	q := s.prog[tid]
-	if op.kind == Edit && len(q) > 0 && (q[0].kind == Edit || q[0].kind == Finish) {
+	if op.kind == Edit && len(q) > 0 && (q[0].kind == Edit || q[0].kind == Finish || q[0].kind == Remove) {
 		return
 	}
 	if op.kind != Edit {
@@ -119,6 +119,8 @@ func (s *Sender) runProgress(ctx context.Context, tid int64, op *progOp) {
 		pr.repost()
 	case Finish:
 		pr.finish()
+	case Remove:
+		pr.remove()
 	}
 }
 
@@ -341,6 +343,19 @@ func (p *progRun) finish() {
 	default:
 		p.drop()
 	}
+}
+
+// remove deletes the progress message of the turn that is running and
+// forgets its row. A kept summary belongs to an earlier turn and stays; a
+// message whose send has an unknown outcome has no number to delete.
+func (p *progRun) remove() {
+	if !p.has || p.rowFinished() {
+		return
+	}
+	if p.row.State == store.ProgressShown && p.row.TGMessageID != 0 {
+		p.s.deleteMessage(p.th, p.row.TGMessageID)
+	}
+	p.drop()
 }
 
 // deleteMessage deletes a message as an idempotent job, retried with backoff.

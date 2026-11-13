@@ -51,7 +51,12 @@ type Config struct {
 	// while nothing else changes: the hourglass turns and the timer moves.
 	// It replaces the growing TimerInterval steps. Zero turns it off.
 	AnimateInterval time.Duration
-	AnswerGrace     time.Duration // default 5s
+	// SummaryAfter keeps the summary of a turn that ended with its answer
+	// only when the turn took this long or longer; a shorter one deletes
+	// its progress message and leaves just the answer. An error, a stop,
+	// or an interrupted turn always keeps its summary. Zero keeps all.
+	SummaryAfter time.Duration
+	AnswerGrace  time.Duration // default 5s
 	// StoppedGrace is the wait for the last lines of an agent that stopped.
 	// Its lines were written before it exited, so they are read by the time
 	// the stop is seen; a short wait is enough. Default 2s.
@@ -126,6 +131,10 @@ type RepostProgress struct{ HTML string }
 // come twice for one turn when a late answer corrects the summary.
 type FinishProgress struct{ HTML string }
 
+// RemoveProgress asks to delete the progress message: a short turn that
+// ended with its answer leaves no summary (Config.SummaryAfter).
+type RemoveProgress struct{}
+
 // Typing asks for a "typing" chat action.
 type Typing struct{}
 
@@ -150,6 +159,7 @@ func (ShowProgress) isAction()   {}
 func (EditProgress) isAction()   {}
 func (RepostProgress) isAction() {}
 func (FinishProgress) isAction() {}
+func (RemoveProgress) isAction() {}
 func (Typing) isAction()         {}
 func (MacNotice) isAction()      {}
 func (MacBack) isAction()        {}
@@ -201,7 +211,8 @@ type Tracker struct {
 
 	shown         bool
 	lastEdit      time.Time
-	spin          int // the spinner's step, one more with each edit
+	spin          int  // the spinner's step, one more with each edit
+	removed       bool // the turn's progress message was deleted (SummaryAfter)
 	dirty         bool
 	pendingRepost bool
 	finishHeld    bool   // the finish waits for EditInterval
@@ -539,12 +550,32 @@ func (t *Tracker) finish(out []Action, now time.Time) []Action {
 }
 
 func (t *Tracker) emitFinish(out []Action, now time.Time) []Action {
+	if t.shortWithAnswer() {
+		t.lastHTML, t.lastEdit, t.finishHeld, t.removed = "", now, false, true
+		return append(out, RemoveProgress{})
+	}
 	h := t.summaryHTML()
 	t.lastHTML, t.lastEdit, t.finishHeld = h, now, false
 	return append(out, FinishProgress{HTML: h})
 }
 
+// shortWithAnswer tells a turn that ended with its answer in less than
+// SummaryAfter: its summary would only fill the topic.
+func (t *Tracker) shortWithAnswer() bool {
+	if t.cfg.SummaryAfter <= 0 || !t.answered {
+		return false
+	}
+	switch t.endKind {
+	case "error", string(StateStopped):
+		return false
+	}
+	return t.endedAt.Sub(t.start) < t.cfg.SummaryAfter
+}
+
 func (t *Tracker) finishIfChanged(out []Action, now time.Time) []Action {
+	if t.removed {
+		return out // the progress message is gone; the answer stands alone
+	}
 	if t.finishHeld {
 		return out // the held finish is rendered when it is emitted
 	}

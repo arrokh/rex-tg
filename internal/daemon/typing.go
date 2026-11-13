@@ -36,7 +36,7 @@ const (
 type prepResult struct {
 	kind   prepKind
 	reason string
-	notice string // the waiting notice's text (prepWait)
+	notice string // what the message waits for, for the waiting notice (prepWait)
 	pane   store.Pane
 	rt     agents.Runtime
 	conv   int64 // the session the checks were made for
@@ -66,26 +66,39 @@ func steerable(in store.Inbound) bool {
 	return !strings.HasPrefix(b, "/") && !strings.HasPrefix(b, "!")
 }
 
-// The waiting notice says what the message waits for.
+// What the waiting notice says a message waits for.
 const (
-	waitPromptText = "⏳ Waiting until the prompt is answered."
-	waitTakeText   = "⏳ Waiting for the agent to take your last message."
-	waitReadyText  = "⏳ Waiting until the agent can take it."
+	waitIdle   = "until the agent is idle."
+	waitPrompt = "until the prompt is answered."
+	waitTake   = "for the agent to take your last message."
+	waitReady  = "until the agent is ready."
 )
 
-// waitNotice is the text of the waiting notice of a message that waits for
-// reason. A message that would not steer waits until the agent is idle.
+// waitNotice is what a message that waits for reason waits for. A message
+// that would not steer waits until the agent is idle.
 func waitNotice(reason string, canSteer bool) string {
 	if !canSteer {
-		return waitNoticeText
+		return waitIdle
 	}
 	switch reason {
 	case registry.ReasonBlocked, reasonPromptShown:
-		return waitPromptText
+		return waitPrompt
 	case registry.ReasonJustTyped:
-		return waitTakeText
+		return waitTake
 	}
-	return waitReadyText
+	return waitReady
+}
+
+// waitNoticeFor is the text of the topic's one waiting notice: what the
+// oldest message waits for, and how many messages wait.
+func waitNoticeFor(what string, n int) string {
+	if what == "" {
+		what = waitIdle
+	}
+	if n > 1 {
+		return fmt.Sprintf("⏳ %d messages wait %s", n, what)
+	}
+	return "⏳ Waiting " + what
 }
 
 // reasonPromptShown: an alert is open while the agent's state still says
@@ -358,9 +371,17 @@ func (d *daemon) onPrepared(e evPrepared) {
 		// A short wait gets no notice: a message that the agent takes
 		// within seconds (a busy window, a prompt answered) would only
 		// flash one.
+		// One notice for the topic: the oldest waiting message has it, and
+		// it counts the messages behind it.
+		n := d.waitingCount(tid)
+		text := waitNoticeFor(e.res.notice, n)
+		if d.waitNoticed[e.in.UpdateID] || e.in.Reason == reasonWaitNoticed {
+			d.updateWaitNotice(e.in.UpdateID, text, n)
+		}
 		if !d.waitNoticed[e.in.UpdateID] && e.in.Reason != reasonWaitNoticed && d.now().Sub(e.in.CreatedAt) >= d.timing.WaitNotice {
 			d.waitNoticed[e.in.UpdateID] = true
-			d.postWaitNotice(th, e.in.UpdateID, e.res.notice)
+			d.waitTexts[e.in.UpdateID] = text
+			d.postWaitNotice(th, e.in.UpdateID, text, n)
 			if err := d.st.SetInboundState(d.ctx, e.in.UpdateID, store.InboundQueued, reasonWaitNoticed, d.now()); err != nil {
 				d.log.Warn("waiting: state", "err", err)
 			}
@@ -382,11 +403,33 @@ func (d *daemon) onPrepared(e evPrepared) {
 	}
 }
 
-func waitMarkup(updateID int64) *telegram.InlineKeyboardMarkup {
+// waitMarkup is the buttons of the waiting notice. They act on every
+// waiting message of the topic, so with several they say so.
+func waitMarkup(updateID int64, n int) *telegram.InlineKeyboardMarkup {
+	send, cancel := "⚡ Send now", "✖ Cancel"
+	if n > 1 {
+		send, cancel = "⚡ Send all now", "✖ Cancel all"
+	}
 	return &telegram.InlineKeyboardMarkup{InlineKeyboard: [][]telegram.InlineKeyboardButton{{
-		{Text: "⚡ Send now", CallbackData: fmt.Sprintf("s:%d", updateID)},
-		{Text: "✖ Cancel", CallbackData: fmt.Sprintf("c:%d", updateID)},
+		{Text: send, CallbackData: fmt.Sprintf("s:%d", updateID)},
+		{Text: cancel, CallbackData: fmt.Sprintf("c:%d", updateID)},
 	}}}
+}
+
+// waitingCount is the number of messages that wait in a topic's queue, not
+// counting the parts that are being joined (core).
+func (d *daemon) waitingCount(threadID int64) int {
+	qs, err := d.st.QueuedInbound(d.ctx, threadID)
+	if err != nil {
+		return 1
+	}
+	n := 0
+	for _, q := range qs {
+		if _, joining := d.joining[q.UpdateID]; !joining {
+			n++
+		}
+	}
+	return max(n, 1)
 }
 
 // forget drops what the core keeps for a message that reached a final state,
@@ -395,6 +438,7 @@ func (d *daemon) forget(updateID int64) {
 	d.dropWaitNotice(updateID)
 	delete(d.actions, updateID)
 	delete(d.waitNoticed, updateID)
+	delete(d.waitTexts, updateID)
 	delete(d.vimNoticed, updateID)
 }
 
@@ -497,7 +541,7 @@ func (d *daemon) promptShown(pane store.Pane) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	return parsePromptView(lastLines(screen, alertLines), true).ok, nil
+	return screenHasPrompt(lastLines(screen, alertLines), nil), nil
 }
 
 // typeInto pastes the text, waits, and presses the submit key. The safety

@@ -310,39 +310,72 @@ func (d *daemon) threadOfMessage(m *telegram.Message) (store.Thread, bool) {
 	return th, err == nil && ok && th.Status != store.ThreadClosed
 }
 
-// sendNowButton is `⚡ Send now`: it types the message without waiting.
+// sendNowButton is `⚡ Send now` on the topic's waiting notice: it types
+// every waiting message of the topic without waiting, in order.
 func (d *daemon) sendNowButton(cb *telegram.CallbackQuery, id int64) {
 	th, ok := d.threadOfMessage(cb.Message)
 	if !ok || !d.stillQueued(th.ID, id) {
 		d.answerCallback(cb.ID, "That message was already handled.", false)
 		return
 	}
-	d.actions[id] = inbound.ActSendNow
+	n := 0
+	for _, q := range d.waitingRows(th.ID) {
+		d.actions[q] = inbound.ActSendNow
+		n++
+	}
 	d.dirty[th.ID] = true
 	delete(d.nextPrep, th.ID)
-	d.answerCallback(cb.ID, "Sending…", false)
+	if n > 1 {
+		d.answerCallback(cb.ID, fmt.Sprintf("Sending %d messages…", n), false)
+	} else {
+		d.answerCallback(cb.ID, "Sending…", false)
+	}
 	d.removeButtons(cb.Message.Chat.ID, cb.Message.MessageID)
 }
 
-// cancelButton is `✖ Cancel`: the waiting message is not sent.
+// waitingRows are the ids of a topic's waiting messages, oldest first, not
+// counting the parts that are being joined (core).
+func (d *daemon) waitingRows(threadID int64) []int64 {
+	qs, err := d.st.QueuedInbound(d.ctx, threadID)
+	if err != nil {
+		return nil
+	}
+	var out []int64
+	for _, q := range qs {
+		if _, joining := d.joining[q.UpdateID]; !joining {
+			out = append(out, q.UpdateID)
+		}
+	}
+	return out
+}
+
+// cancelButton is `✖ Cancel` on the topic's waiting notice: no waiting
+// message of the topic is sent.
 func (d *daemon) cancelButton(cb *telegram.CallbackQuery, id int64) {
 	th, ok := d.threadOfMessage(cb.Message)
 	if !ok || !d.stillQueued(th.ID, id) {
 		d.answerCallback(cb.ID, "That message was already handled.", false)
 		return
 	}
-	if err := d.st.SetInboundState(d.ctx, id, store.InboundDone, reasonCancelled, d.now()); err != nil {
-		d.log.Warn("cancel: state", "err", err)
-	}
-	d.controlTyped(id, false)
 	d.keepWaitNotice(id) // the tapped notice becomes "✖ Cancelled" below
-	d.forget(id)
-	delete(d.extra, id)
+	rows := d.waitingRows(th.ID)
+	for _, q := range rows {
+		if err := d.st.SetInboundState(d.ctx, q, store.InboundDone, reasonCancelled, d.now()); err != nil {
+			d.log.Warn("cancel: state", "err", err)
+		}
+		d.controlTyped(q, false)
+		d.forget(q)
+		delete(d.extra, q)
+	}
+	text := "✖ Cancelled"
+	if len(rows) > 1 {
+		text = fmt.Sprintf("✖ Cancelled %d messages", len(rows))
+	}
 	d.answerCallback(cb.ID, "Cancelled", false)
 	chat, msg := cb.Message.Chat.ID, cb.Message.MessageID
 	d.spawn(func() {
 		_ = d.snd.Call(sender.PriorityEdit, func(ctx context.Context, tg *telegram.Client) error {
-			_, err := tg.EditMessageText(ctx, telegram.EditMessageTextParams{ChatID: chat, MessageID: msg, Text: "✖ Cancelled"})
+			_, err := tg.EditMessageText(ctx, telegram.EditMessageTextParams{ChatID: chat, MessageID: msg, Text: text})
 			return err
 		})
 	})

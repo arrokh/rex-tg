@@ -92,7 +92,7 @@ var (
 // footerLine tells a line of key hints, which the buttons replace.
 func footerLine(l string) bool {
 	l = strings.ToLower(l)
-	for _, w := range []string{"esc to cancel", "enter to select", "to navigate", "tab to amend", "tab amend",
+	for _, w := range []string{"esc to cancel", "enter to select", "to navigate", "tab to amend", "tab amend", "to add notes",
 		"-- insert --", "ctrl+g", "press enter to confirm", "enter to confirm", "esc to go back"} {
 		if strings.Contains(l, w) {
 			return true
@@ -111,12 +111,49 @@ func stripCursor(l string) (string, bool) {
 	return l, false
 }
 
+// cutPreview removes the preview box that Claude Code draws to the right of
+// a question's answers when they have previews: from the row of its top
+// corner (┌, after two spaces) to the row of its bottom corner (└ in the
+// same column), each row is cut at that column. Lines above and below, such
+// as a long question, stay whole.
+func cutPreview(lines []string) []string {
+	top, col := -1, -1
+	for i, l := range lines {
+		r := []rune(l)
+		for c := 2; c < len(r); c++ {
+			if r[c] == '┌' && r[c-1] == ' ' && r[c-2] == ' ' && strings.TrimSpace(string(r[:c])) != "" {
+				top, col = i, c
+				break
+			}
+		}
+		if top >= 0 {
+			break
+		}
+	}
+	if top < 0 {
+		return lines
+	}
+	out := append([]string(nil), lines...)
+	for i := top; i < len(out); i++ {
+		r := []rune(out[i])
+		bottom := len(r) > col && r[col] == '└'
+		if len(r) > col {
+			out[i] = strings.TrimRight(string(r[:col]), " ")
+		}
+		if bottom {
+			break
+		}
+	}
+	return out
+}
+
 // parsePromptView reads a prompt from the bottom lines of a screen. It finds
 // the last list of numbered answers, takes the prompt's lines above it (up to
 // a rule, the agent's output, or maxQuestionLines), and the descriptions,
 // the text field, and the "Next" row below.
 func parsePromptView(lines []string, shortcuts bool) promptView {
 	var v promptView
+	lines = cutPreview(lines)
 	clean := make([]string, len(lines))
 	for i, l := range lines {
 		clean[i] = unbox(l)
@@ -143,6 +180,10 @@ func parsePromptView(lines []string, shortcuts bool) promptView {
 		}
 		switch {
 		case t == "" || isBorder(l) || ruleRe.MatchString(t) || footerLine(t):
+			continue
+		case t == "Chat about this":
+			// Without a number (a question with previews): the arrows reach
+			// it, no digit does, so it gets no button.
 			continue
 		case optionRe.MatchString(clean[i]):
 			m := optionRe.FindStringSubmatch(clean[i])
@@ -192,7 +233,8 @@ func parsePromptView(lines []string, shortcuts bool) promptView {
 		switch {
 		case t == "" || footerLine(t):
 			n++
-		case strings.Contains(t, "←") && strings.Contains(t, "→") && strings.ContainsAny(t, "☐☒✔"):
+		case strings.Contains(t, "←") && strings.Contains(t, "→") && strings.ContainsAny(t, "☐☒✔"),
+			strings.HasPrefix(t, "☐ ") || strings.HasPrefix(t, "☒ "): // one question: its tab alone
 			f := strings.Fields(strings.Trim(t, "←→ "))
 			v.tabs = strings.Join(f, " ")
 			n++

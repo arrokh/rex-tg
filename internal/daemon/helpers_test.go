@@ -74,6 +74,7 @@ func newEnvSerial(t *testing.T) *env {
 	// The tests count edits and check answers as HTML: no animation, and no
 	// rich messages unless a test turns them on.
 	cfg.Display.ProgressAnimation = config.Duration{}
+	cfg.Display.SummaryAfter = config.Duration{} // tests check the summaries
 	cfg.Display.RichMessages = false
 	cfg.InputSettings.JoinWindow = config.Duration{Duration: 50 * time.Millisecond}
 	cfg.InputSettings.JoinWindowLong = config.Duration{Duration: 100 * time.Millisecond}

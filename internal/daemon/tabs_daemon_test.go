@@ -56,20 +56,33 @@ func TestTabFollowsTheTopicName(t *testing.T) {
 		return slices.Equal(e.tabRenames(), []string{"pane one"})
 	})
 
-	// Someone gives the tab another label: the next check puts the name back.
-	e.setTab("stale")
-	skew.Add(int64(31 * time.Second))
-	e.waitFor("the tab follows again", func() bool {
-		return slices.Equal(e.tabRenames(), []string{"pane one", "pane one"})
-	})
-
 	// With the right label, a check renames nothing.
-	e.setTab("pane one")
 	lists := e.countRex("window", "ls")
+	e.setTab("pane one")
 	skew.Add(int64(31 * time.Second))
 	e.waitFor("a name check", func() bool { return e.countRex("window", "ls") > lists })
-	if got := e.tabRenames(); len(got) != 2 {
-		t.Errorf("tab renames = %q, want 2", got)
+	if got := e.tabRenames(); len(got) != 1 {
+		t.Errorf("tab renames = %q, want 1", got)
+	}
+
+	// Someone renames the tab (you, or an agent with rex window rename): the
+	// name stays, and the topic takes it.
+	e.setTab("[x] preps")
+	skew.Add(int64(31 * time.Second))
+	topic := func() string {
+		for _, tp := range e.tg.Topics(chatID) {
+			if tp.ThreadID == thread {
+				return tp.Name
+			}
+		}
+		return ""
+	}
+	e.waitFor("the topic follows the tab", func() bool { return topic() == "preps [x]" })
+	skew.Add(int64(31 * time.Second))
+	lists = e.countRex("window", "ls")
+	e.waitFor("another name check", func() bool { return e.countRex("window", "ls") > lists })
+	if got := e.tabRenames(); len(got) != 1 {
+		t.Errorf("tab renames = %q: the tab's new name was undone", got)
 	}
 }
 
@@ -105,7 +118,7 @@ func TestTabShowsThatTheAgentStopped(t *testing.T) {
 }
 
 // An agent in the session for /new renames it (Rex tells agents to name
-// their session): rex-tg still knows the session by its ID, keeps naming its
+// their session): rex-tg still knows the session by its ID, still finds its
 // tabs, and names the session back at the next name check.
 func TestRenamedNewSessionIsNamedBack(t *testing.T) {
 	e := newEnv(t)
@@ -135,7 +148,14 @@ func TestRenamedNewSessionIsNamedBack(t *testing.T) {
 		}
 		return false
 	})
-	e.waitFor("the tab still follows its topic", func() bool {
-		return slices.Equal(e.tabRenames(), []string{"pane one", "pane one"})
+	// rex-tg still finds its tab in the renamed session: the tab's new label
+	// (given outside rex-tg) names the topic.
+	e.waitFor("the topic follows its tab", func() bool {
+		for _, tp := range e.tg.Topics(chatID) {
+			if tp.ThreadID == thread {
+				return tp.Name == "stale"
+			}
+		}
+		return false
 	})
 }

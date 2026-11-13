@@ -1080,3 +1080,34 @@ func TestHeadlineDropsMarkdownMarks(t *testing.T) {
 		t.Errorf("headline = %q", first)
 	}
 }
+
+// TestShortTurnLeavesNoSummary: with SummaryAfter, a turn that ends with its
+// answer sooner deletes its progress message; a longer one, an error, and a
+// stop keep the summary.
+func TestShortTurnLeavesNoSummary(t *testing.T) {
+	cfg := turn.Config{SummaryAfter: 2 * time.Minute}
+	x := newH(t, cfg, progress)
+	x.ev(prompt("p", "go"), 0)
+	x.ev(call("c", "t", "Read", agents.ToolRead, "a"), 1)
+	x.tick(2)
+	if got := types(x.ev(text("a", agents.Final, "Done."), 30)); got != "Post,RemoveProgress" {
+		t.Fatalf("short turn: %s", got)
+	}
+	if got := x.ev(text("a2", agents.Final, "Done, corrected."), 31); strings.Contains(types(got), "Progress") {
+		t.Errorf("a late answer brought the summary back: %s", types(got))
+	}
+
+	x = newH(t, cfg, progress)
+	x.ev(prompt("p", "go"), 0)
+	x.tick(2)
+	if got := types(x.ev(text("a", agents.Final, "Done."), 150)); got != "Post,FinishProgress" {
+		t.Fatalf("long turn: %s", got)
+	}
+
+	x = newH(t, cfg, progress)
+	x.ev(prompt("p", "go"), 0)
+	x.tick(2)
+	if got := types(x.ev(text("e", agents.Error, "boom"), 10)); !strings.HasSuffix(got, "FinishProgress") {
+		t.Fatalf("error: %s", got)
+	}
+}

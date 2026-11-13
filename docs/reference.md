@@ -92,7 +92,7 @@ Doctor checks:
 - An agent marked `(guess)` has no hook report yet. rex-tg took the newest transcript in the agent's folder that changed after the agent started.
 - An agent marked `(waiting for session)` has no known session file yet. rex-tg learns it at the agent's next prompt or turn end.
 - A topic is named after its Rex pane when you named the pane, else after the agent's session name. The name follows changes of both.
-- A name starts with a letter or digit, because Telegram draws a topic's icon from its first character. pi's `[folder][kind]` tags before a session name go: the folder tag is dropped, and other tags move to the end. Markdown marks (`**`, `` ` ``) and leading symbols go too.
+- A name starts with a letter or digit, because Telegram draws a topic's icon from its first character. Stopped topics (🔴) get the same cleanup. pi's `[folder][kind]` tags before a session name go: the folder tag is dropped, and other tags move to the end. Markdown marks (`**`, `` ` ``) and leading symbols go too.
 - A new session in the same pane, such as after the agent's `/clear`, takes over the topic. The bot posts a divider, such as `── claude · new session (clear) ──`.
 - After a Rex restart, the topic follows the session when the agent resumes in its pane.
 - When an agent exits or its pane closes, the topic shows `🔴 agent stopped`, a running turn ends, and the topic's name gets a 🔴. A tab in the `/new` session gets the 🔴 too, until the agent runs again. Messages you send there are refused, with a reason.
@@ -103,7 +103,7 @@ Doctor checks:
 - Tap the agent, then tap a folder or send a path such as `~/work/app`. cux is one of the agents when it is installed.
 - The folder buttons, at most 6: the folders in `[rex] new_folders` first, in their order, then the folder of this topic's agent, then the folders where agents ran recently, newest first. A folder that no longer exists is left out.
 - Every tab goes into one Rex session, `rex-tg` (`[rex] new_session`). rex-tg makes the session when it is missing. If an agent in it renames the session, rex-tg names it back within 30 seconds.
-- A tab is named after its folder and agent, such as `app · pi`. The tab always follows its topic name: at link time, and at the 30-second name check when its label differs. When the topic has only the folder name, the tab keeps the `<folder> · <agent>` form. Two tabs with one name get ` #2`, ` #3`. Tabs in other Rex sessions are never renamed.
+- A tab is named after its folder and agent, such as `app · pi`. The tab follows its topic name: at link time, and at the 30-second name check when its label differs. When you (or an agent, with `rex window rename`) rename the tab, rex-tg keeps that name, and the topic takes it at the next name check. When the topic has only the folder name, the tab keeps the `<folder> · <agent>` form. Two tabs with one name get ` #2`, ` #3`. Tabs in other Rex sessions are never renamed.
 - The agent starts as if you typed its name in a terminal, so your `~/.zshrc` applies.
 - If the agent asks something before it starts, such as "trust this folder?", the question comes to the chat with a button per answer. A button moves the cursor there and presses Enter. rex-tg checks the screen after each key.
 - In a topic, `/new` also starts another agent. `//new` sends `/new` to the agent.
@@ -112,8 +112,9 @@ Doctor checks:
 
 - A message you send while the agent works joins the current run at once, as typing on the Mac does. Claude Code reads it after its current tool. Set `[input] while_busy = "wait"` to wait until the agent is idle instead.
 - A message still waits while a prompt is open, or for a moment right after another message was typed. Agent commands (`//compact`, `/model` buttons), shell commands (`!ls`), and the note of a prompt answer always wait until the agent is idle.
+- When you answer a prompt, on the Mac or in Telegram, the waiting messages go in as soon as the agent goes on. Claude Code and Codex send no signal for an answer, so rex-tg sees it when the agent's transcript goes on and its screen shows no prompt any more.
 - While the agent works, rex-tg reads the screen right before it types. If a prompt is on the screen, it waits instead of typing into it.
-- A message that waits 3 seconds or more gets a notice that says what it waits for, such as `⏳ Waiting until the prompt is answered.`, with `⚡ Send now` and `✖ Cancel`. The notice goes away when the message is typed (👀, then 👍) or refused (👎).
+- Messages that wait share one notice, on the oldest one, after it waited 3 seconds. It says what they wait for and how many wait, such as `⏳ 2 messages wait until the prompt is answered.`, with `⚡ Send all now` and `✖ Cancel all` (`⚡ Send now` and `✖ Cancel` for one). The notice goes away when the message is typed (👀, then 👍) or refused (👎).
 - Waiting messages go in the order you sent them. Each one is its own turn.
 - `⚡ Send now` types a waiting message at once. All three agents steer: the message joins the current run.
 - Telegram splits long messages into parts. rex-tg joins parts that arrive close together into one prompt. The window is 300 ms, or 1500 ms for long messages.
@@ -142,6 +143,7 @@ Doctor checks:
 - `typing…` shows while the agent works, in the topic you used last.
 - The progress message appears after 2 seconds without an answer. It shows the latest commentary and the recent tool calls. It never shows tool output, unless `/verbose full` is on.
 - The progress message stays the last message of a running turn. When an alert, a notice, or your own message comes below it, it moves down. While a prompt waits for your answer, the alert stays last.
+- At the end of a turn, the progress message becomes a `✅ Done` summary only when the turn took 2 minutes or more (`[display] summary_after`). A shorter turn that ends with an answer leaves just the answer, so many short turns do not fill the topic. An error, a stop, or an interrupted turn always keeps its summary.
 - Its first icon is an hourglass (⏳ ⌛) that turns every 3 seconds while the agent works, and the timer moves with it, so you can see that the turn is still running. Set `[display] progress_animation` to change the pace, or to `"0s"` to stop it; then the icon turns only when the message changes anyway.
 - Its timer moves on while the agent thinks or a long tool runs: every 10 seconds at first, then less often, at most once a minute later in a long turn. It stops while rex-tg waits for your answer.
 - At the end of the turn, the tool rows stay in a collapsed quote under the summary line.
@@ -263,6 +265,7 @@ mac_notice = true                       # Hold turns typed on the Mac behind one
 progress_delay = "2s"                   # Wait before the progress message appears.
 progress_edit_interval = "2s"           # Least time between two edits of the progress message.
 progress_animation = "3s"              # How often the progress message turns its hourglass and moves its timer. "0s" turns it off; at least 2s.
+summary_after = "2m"                    # Keep the "Done" summary only for turns this long or longer; shorter ones leave just the answer. "0s" keeps every summary.
 rich_messages = true                    # Send final answers as Telegram rich messages: Telegram renders tables and code itself.
 send_images = true                      # Send the image files that a final answer names.
 send_files = ["pdf", "csv", "tsv", "html", "htm", "xlsx", "docx", "pptx"]  # Other file types that a final answer offers, with a button to send each.

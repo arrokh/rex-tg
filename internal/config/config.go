@@ -110,6 +110,10 @@ type Config struct {
 		// turns it off: then the timer moves every 10 s at first and less
 		// often later. Default 3s.
 		ProgressAnimation Duration `toml:"progress_animation"`
+		// SummaryAfter keeps the "✅ Done" summary of a turn that ended with
+		// its answer only when the turn took at least this long; a shorter
+		// turn leaves just its answer. "0s" keeps every summary. Default 2m.
+		SummaryAfter Duration `toml:"summary_after"`
 		// RichMessages sends final answers with Telegram's sendRichMessage
 		// (Bot API 10.1) instead of HTML parts, so Telegram renders tables
 		// and code itself. On by default.
@@ -223,6 +227,7 @@ func Default(home string) Config {
 	c.Display.ProgressDelay = secs(2)
 	c.Display.ProgressEditInterval = secs(2)
 	c.Display.ProgressAnimation = secs(3)
+	c.Display.SummaryAfter = secs(120)
 	c.Display.RichMessages = true
 
 	c.InputSettings.QueueExpiry = Duration{30 * time.Minute}
@@ -368,6 +373,9 @@ func (c Config) validate() error {
 	}
 	if c.Display.MessageLength < MinMessageLength || c.Display.MessageLength > MaxMessageLength {
 		return fmt.Errorf("display.message_length %d: want %d to %d characters", c.Display.MessageLength, MinMessageLength, MaxMessageLength)
+	}
+	if c.Display.SummaryAfter.Duration < 0 {
+		return fmt.Errorf("display.summary_after %v: \"0s\" or more", c.Display.SummaryAfter.Duration)
 	}
 	if a := c.Display.ProgressAnimation.Duration; a != 0 && a < MinProgressAnimation {
 		return fmt.Errorf("display.progress_animation %v: \"0s\" (off) or at least %v", a, MinProgressAnimation)

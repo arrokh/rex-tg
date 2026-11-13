@@ -133,12 +133,39 @@ func (d *daemon) attach(c registry.Change) {
 
 // desiredName is the topic name for a session (see topicName). It may read
 // the transcript, so it runs in a worker.
-func (d *daemon) desiredName(conv store.Conversation) string {
+func (d *daemon) desiredName(th store.Thread, conv store.Conversation) string {
 	label := ""
 	if p, ok, err := d.st.PaneByConversation(d.ctx, conv.ID); err == nil && ok {
 		label = p.Label
 	}
-	return topicName(label, conv.Runtime, conv.CWD, d.convTitle(conv))
+	return topicName(d.nameLabel(th, label), conv.Runtime, conv.CWD, d.convTitle(conv))
+}
+
+// Keys of a topic's tab names (kv): the label rex-tg gave the tab last, and
+// a name that someone else gave it.
+func tabSetKey(thread int64) string  { return fmt.Sprintf("tab_set:%d", thread) }
+func tabUserKey(thread int64) string { return fmt.Sprintf("tab_user:%d", thread) }
+
+// nameLabel is the name a topic and its tab are named after: a name that you
+// (or an agent, with rex window rename) gave the tab, else the pane's label.
+func (d *daemon) nameLabel(th store.Thread, paneLabel string) string {
+	if u, ok, err := d.st.Get(d.ctx, tabUserKey(th.ID)); err == nil && ok && strings.TrimSpace(u) != "" {
+		return u
+	}
+	return paneLabel
+}
+
+// evRename asks the core to rename a topic now (a name source changed).
+type evRename struct{ thread int64 }
+
+func (d *daemon) onRename(e evRename) {
+	th, err := d.st.Thread(d.ctx, e.thread)
+	if err != nil || th.Status == store.ThreadClosed {
+		return
+	}
+	if conv, err := d.st.Conversation(d.ctx, th.CurrentConversationID); err == nil {
+		d.rename(th, conv)
+	}
 }
 
 // nameSyncInterval is how often topic names are compared with their pane and
@@ -180,9 +207,13 @@ func (d *daemon) rename(th store.Thread, conv store.Conversation) {
 		if th.Status == store.ThreadOffline {
 			// The session left its pane, so the pane's name is not known any
 			// more: keep the name and mark it.
-			name = statusName(th, strings.TrimPrefix(th.Name, offlineMark))
+			old := strings.TrimPrefix(th.Name, offlineMark)
+			if t := tidyName(old, folderBase(conv.CWD)); t != "" {
+				old = shortName(t, maxTopicName) // a name from before tidyName
+			}
+			name = statusName(th, old)
 		} else {
-			name = d.desiredName(conv)
+			name = d.desiredName(th, conv)
 		}
 		if name == th.Name {
 			d.syncTab(th, conv) // the tab may differ although the topic does not
@@ -196,6 +227,7 @@ func (d *daemon) rename(th store.Thread, conv store.Conversation) {
 			if err := d.st.SetThreadName(d.ctx, th.ID, name); err != nil {
 				d.log.Warn("rename topic", "err", err)
 			}
+			d.log.Info("topic renamed", "thread", th.ID)
 			d.syncTab(th, conv)
 		case telegram.ClassThreadNotFound:
 			d.emit(evSender{sender.Event{Kind: sender.ThreadGone, ThreadID: th.ID}}) // the user deleted it
@@ -297,6 +329,24 @@ func (d *daemon) syncTab(th store.Thread, conv store.Conversation) {
 		return
 	}
 	current := windows[k].Label
+	set, hasSet, _ := d.st.Get(d.ctx, tabSetKey(th.ID))
+	if hasSet && current != set && strings.TrimSpace(current) != "" && th.Status != store.ThreadOffline {
+		// Someone else named the tab (you, or an agent with rex window
+		// rename): the name stays, and the topic takes it.
+		name := cleanLabel(strings.TrimPrefix(tabSuffix.ReplaceAllString(current, ""), offlineMark))
+		if paneName(name) == "" { // "shell", "zsh": no name that anyone chose
+			_ = d.st.Set(d.ctx, tabSetKey(th.ID), current)
+			return
+		}
+		if err := d.st.Set(d.ctx, tabUserKey(th.ID), name); err != nil {
+			d.log.Warn("tab name: keep", "err", err)
+			return
+		}
+		_ = d.st.Set(d.ctx, tabSetKey(th.ID), current)
+		d.log.Info("tab renamed outside rex-tg; the topic follows it", "thread", th.ID)
+		d.emit(evRename{thread: th.ID})
+		return
+	}
 	var label string
 	if th.Status == store.ThreadOffline {
 		label = offlineTabName(current)
@@ -307,14 +357,23 @@ func (d *daemon) syncTab(th store.Thread, conv store.Conversation) {
 				others = append(others, w.Label)
 			}
 		}
-		label = uniqueTabName(tabName(p.Label, conv.Runtime, conv.CWD, d.convTitle(conv), current), others)
+		if u, ok, _ := d.st.Get(d.ctx, tabUserKey(th.ID)); ok && strings.TrimSpace(u) != "" {
+			label = uniqueTabName(u, others) // the name someone gave it, as it was typed
+		} else {
+			label = uniqueTabName(tabName(p.Label, conv.Runtime, conv.CWD, d.convTitle(conv), current), others)
+		}
 	}
 	if label == "" || label == current {
+		if !hasSet || set != current {
+			_ = d.st.Set(d.ctx, tabSetKey(th.ID), current) // what the tab is named now, as rex-tg wants
+		}
 		return
 	}
 	if err := d.rx.RenameWindow(d.ctx, p.Session, window, label); err != nil {
 		d.log.Warn("rename tab", "window", window, "err", err)
+		return
 	}
+	_ = d.st.Set(d.ctx, tabSetKey(th.ID), label)
 }
 
 // topicOffline shows in the topic that its agent stopped: a notice that says
