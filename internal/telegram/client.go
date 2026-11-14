@@ -58,6 +58,8 @@ type Client struct {
 	fallback        bool
 	log             *slog.Logger
 	fo              *failover // nil unless a proxy and a fallback are set
+	holds           holds     // methods that wait for a long 429 (hold.go)
+	now             func() time.Time
 }
 
 // OnMessage sets a function that gets the chat and the number of every
@@ -144,6 +146,10 @@ func WithFallback(on bool) Option { return func(c *Client) { c.fallback = on } }
 // WithLogger sets the logger of route switches (default: none).
 func WithLogger(l *slog.Logger) Option { return func(c *Client) { c.log = l } }
 
+// WithClock sets the clock that times the hold of a method after a long 429
+// (default time.Now). Tests use it.
+func WithClock(now func() time.Time) Option { return func(c *Client) { c.now = now } }
+
 // WithHTTPClient sets the HTTP client. Timeouts are applied through contexts.
 func WithHTTPClient(hc *http.Client) Option {
 	return func(c *Client) {
@@ -179,6 +185,7 @@ func New(token string, opts ...Option) *Client {
 		base:            DefaultBaseURL,
 		timeout:         DefaultTimeout,
 		downloadTimeout: DefaultDownloadTimeout,
+		now:             time.Now,
 	}
 	for _, o := range opts {
 		o(c)
@@ -243,12 +250,16 @@ func (c *Client) unknown(method, format string, args ...any) error {
 // With a fallback route, a request that was not sent is tried once more on
 // the other route at once: nothing was posted, so this cannot send it twice.
 // Any other failure is returned as it is.
-func (c *Client) call(ctx context.Context, method string, timeout time.Duration, contentType string, body []byte, out any) error {
+func (c *Client) call(ctx context.Context, method string, timeout time.Duration, contentType string, body []byte, out any) (err error) {
+	if herr := c.held(method); herr != nil {
+		return herr
+	}
+	defer func() { c.noteLimit(err) }()
 	if c.fo == nil {
 		return c.attempt(ctx, c.hc, method, timeout, contentType, body, out)
 	}
 	route, hc := c.fo.current()
-	err := c.attempt(ctx, hc, method, timeout, contentType, body, out)
+	err = c.attempt(ctx, hc, method, timeout, contentType, body, out)
 	c.fo.report(ctx, route, err)
 	if Classify(err) != ClassNotSent || ctx.Err() != nil {
 		return err
@@ -377,17 +388,24 @@ func (c *Client) GetUpdates(ctx context.Context, offset int64, timeoutSec int, a
 // SendMessage sends a text message.
 func (c *Client) SendMessage(ctx context.Context, p SendMessageParams) (Message, error) {
 	body := struct {
-		ChatID              int64                 `json:"chat_id"`
-		MessageThreadID     int64                 `json:"message_thread_id,omitempty"`
-		Text                string                `json:"text"`
-		ParseMode           string                `json:"parse_mode,omitempty"`
-		DisableNotification bool                  `json:"disable_notification,omitempty"`
-		ReplyMarkup         *InlineKeyboardMarkup `json:"reply_markup,omitempty"`
-		ReplyParameters     *replyParameters      `json:"reply_parameters,omitempty"`
-		LinkPreviewOptions  linkPreview           `json:"link_preview_options"`
+		ChatID              int64            `json:"chat_id"`
+		MessageThreadID     int64            `json:"message_thread_id,omitempty"`
+		Text                string           `json:"text"`
+		ParseMode           string           `json:"parse_mode,omitempty"`
+		DisableNotification bool             `json:"disable_notification,omitempty"`
+		ReplyMarkup         any              `json:"reply_markup,omitempty"`
+		ReplyParameters     *replyParameters `json:"reply_parameters,omitempty"`
+		LinkPreviewOptions  linkPreview      `json:"link_preview_options"`
 	}{ChatID: p.ChatID, MessageThreadID: p.MessageThreadID, Text: p.Text, ParseMode: p.ParseMode,
-		DisableNotification: p.DisableNotification, ReplyMarkup: p.ReplyMarkup,
-		LinkPreviewOptions: linkPreview{true}}
+		DisableNotification: p.DisableNotification, LinkPreviewOptions: linkPreview{true}}
+	// Only a nil interface is left out of the JSON, so a nil pointer is
+	// never stored in it.
+	switch {
+	case p.ReplyMarkup != nil:
+		body.ReplyMarkup = p.ReplyMarkup
+	case p.Keyboard != nil:
+		body.ReplyMarkup = p.Keyboard
+	}
 	if p.ReplyToMessageID != 0 {
 		body.ReplyParameters = &replyParameters{MessageID: p.ReplyToMessageID, AllowSendingWithoutReply: true}
 	}

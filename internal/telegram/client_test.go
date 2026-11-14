@@ -82,6 +82,38 @@ func TestSendMessageFields(t *testing.T) {
 	}
 }
 
+// A reply keyboard goes out as reply_markup when there is no inline
+// keyboard; an inline keyboard wins.
+func TestSendMessageReplyKeyboard(t *testing.T) {
+	s, c := setup(t)
+	ctx := context.Background()
+	kb := &telegram.ReplyKeyboardMarkup{Keyboard: [][]telegram.KeyboardButton{{{Text: "/rt"}, {Text: "/screen"}}}, IsPersistent: true, ResizeKeyboard: true}
+	if _, err := c.SendMessage(ctx, telegram.SendMessageParams{ChatID: chat, Text: "keys", Keyboard: kb}); err != nil {
+		t.Fatal(err)
+	}
+	rm, _ := s.Calls("sendMessage")[0].Params["reply_markup"].(map[string]any)
+	if rm["is_persistent"] != true || rm["resize_keyboard"] != true || rm["inline_keyboard"] != nil {
+		t.Fatalf("reply_markup = %v", rm)
+	}
+	got := s.Messages(chat)[0]
+	if got.Markup != nil || got.Keyboard == nil || got.Keyboard.Keyboard[0][1].Text != "/screen" {
+		t.Fatalf("stored = %+v", got)
+	}
+	inline := &telegram.InlineKeyboardMarkup{InlineKeyboard: [][]telegram.InlineKeyboardButton{{{Text: "Go", CallbackData: "go"}}}}
+	if _, err := c.SendMessage(ctx, telegram.SendMessageParams{ChatID: chat, Text: "both", ReplyMarkup: inline, Keyboard: kb}); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.Messages(chat)[1]; got.Markup == nil || got.Keyboard != nil {
+		t.Fatalf("both: stored = %+v", got)
+	}
+	if _, err := c.SendMessage(ctx, telegram.SendMessageParams{ChatID: chat, Text: "none"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := s.Calls("sendMessage")[2].Params["reply_markup"]; ok {
+		t.Fatal("reply_markup sent without a keyboard")
+	}
+}
+
 func TestEditMessageText(t *testing.T) {
 	s, c := setup(t)
 	ctx := context.Background()
@@ -347,7 +379,7 @@ func TestRetryAfter(t *testing.T) {
 		if !errors.As(err, &api) {
 			t.Fatalf("err = %v", err)
 		}
-		if api.Code != 429 || api.RetryAfter != 7*time.Second || api.Method != "sendMessage" {
+		if api.Code != 429 || api.RetryAfter != 7*time.Second || api.Method != "sendMessage" || api.Held {
 			t.Fatalf("api = %+v", api)
 		}
 	}
@@ -356,6 +388,41 @@ func TestRetryAfter(t *testing.T) {
 	}
 	if got := len(s.Messages(chat)); got != 1 {
 		t.Fatalf("messages = %d", got)
+	}
+}
+
+// A 429 with a long wait holds its method: the client refuses it without
+// asking Telegram until the wait ends, and the other methods still go.
+func TestLongWaitHoldsTheMethod(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0)
+	s, c := setup(t, telegram.WithClock(func() time.Time { return now }))
+	ctx := context.Background()
+	s.FailNext("sendRichMessage", 1, 429, "Too Many Requests: retry after 3600", 3600)
+	for i := 0; i < 2; i++ {
+		_, err := c.SendRichMessage(ctx, chat, 0, "hi", false, nil)
+		var api *telegram.APIError
+		if !errors.As(err, &api) || api.Code != 429 || !api.Held || api.RetryAfter <= telegram.HoldAfter {
+			t.Fatalf("call %d: %v", i, err)
+		}
+		if telegram.Classify(err) != telegram.ClassRateLimited {
+			t.Fatalf("class = %v", telegram.Classify(err))
+		}
+	}
+	if n := len(s.Calls("sendRichMessage")); n != 1 {
+		t.Fatalf("calls during the hold = %d, want 1", n)
+	}
+	if hs := c.Holds(); len(hs) != 1 || hs[0].Method != "sendRichMessage" || !hs[0].Until.Equal(now.Add(time.Hour)) {
+		t.Fatalf("holds = %+v", hs)
+	}
+	if _, err := c.SendMessage(ctx, telegram.SendMessageParams{ChatID: chat, Text: "other"}); err != nil {
+		t.Fatalf("another method: %v", err)
+	}
+	now = now.Add(time.Hour)
+	if _, err := c.SendRichMessage(ctx, chat, 0, "hi", false, nil); err != nil {
+		t.Fatalf("after the wait: %v", err)
+	}
+	if len(c.Holds()) != 0 {
+		t.Fatalf("holds after the wait = %+v", c.Holds())
 	}
 }
 

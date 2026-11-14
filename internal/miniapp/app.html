@@ -229,14 +229,23 @@
     padding: 6px 4px 6px 0; cursor: pointer; min-height: 34px;
   }
   /* One natural scroll. The bottom padding keeps the last rows clear of the
-     home indicator, and of Telegram's MainButton on the New agent tab. */
+     home indicator, and of the start bar on the New agent tab. */
   body.ctlbody {
     min-height: var(--tg-viewport-stable-height, 100dvh);
     padding-top: var(--sai-top, 0px);
     padding-left: max(16px, var(--sai-left, 0px)); padding-right: max(16px, var(--sai-right, 0px));
     padding-bottom: calc(28px + env(safe-area-inset-bottom, 0px) + var(--sai-bottom, 0px));
   }
-  body.ctlbody.has-mb.on-new { padding-bottom: calc(104px + env(safe-area-inset-bottom, 0px) + var(--sai-bottom, 0px)); }
+  body.ctlbody.on-new { padding-bottom: calc(92px + max(env(safe-area-inset-bottom, 0px), var(--sai-bottom, 0px))); }
+  /* The New agent tab's start bar: the page's own, solid, at the bottom.
+     It replaces Telegram's MainButton, whose bar is see-through on iOS. */
+  .startbar {
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 5; background: var(--bg);
+    border-top: 1px solid color-mix(in srgb, var(--hint) 18%, transparent);
+    padding: 10px max(16px, var(--sai-right, 0px)) calc(10px + max(env(safe-area-inset-bottom, 0px), var(--sai-bottom, 0px))) max(16px, var(--sai-left, 0px));
+  }
+  .startbar .btn { display: block; width: 100%; min-height: 46px; border-radius: 12px; font-size: 16px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  body.on-new .toasts { bottom: calc(80px + max(env(safe-area-inset-bottom, 0px), var(--sai-bottom, 0px))); }
   body.ctlbody.on-new .top { padding: 6px 0; margin-bottom: 4px; }
   .card { scroll-margin: 200px 0 100px; }
   .view-topics[hidden] { display: none; }
@@ -335,14 +344,15 @@
   .card-skel { height: 54px; } .row-skel { height: 38px; margin: 4px 0; }
   @keyframes shimmer { to { background-position: -200% 0; } }
   /* New agent */
-  .acards { display: flex; flex-wrap: wrap; gap: 8px; }
+  /* the agents as pills in one row: they wrap only when they do not fit */
+  .acards { display: flex; flex-wrap: wrap; gap: 6px; }
   .acard {
-    flex: 1 1 calc(50% - 8px); min-width: 120px; min-height: 58px; padding: 8px 12px; border-radius: 12px; border: none; background: var(--code); color: var(--fg);
-    display: flex; flex-direction: column; align-items: flex-start; justify-content: center; gap: 2px; cursor: pointer; text-align: left;
-    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--hint) 20%, transparent); font: inherit;
+    flex: 1 0 auto; min-height: 36px; padding: 0 14px; border-radius: 18px; border: none; background: var(--code); color: var(--fg);
+    display: flex; align-items: center; justify-content: center; cursor: pointer;
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--hint) 20%, transparent); font: inherit; -webkit-tap-highlight-color: transparent;
   }
-  .acard .an { font-weight: 650; font-size: 0.9375rem; }
-  .acard.on { box-shadow: inset 0 0 0 2px var(--btn); background: color-mix(in srgb, var(--btn) 14%, var(--code)); }
+  .acard .an { font-weight: 600; font-size: 0.875rem; white-space: nowrap; }
+  .acard.on { background: var(--btn); color: var(--btn-fg); box-shadow: none; }
   .fchips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
   .fchips .chip { height: 34px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
   .explorer { padding: 8px; border-radius: 12px; background: var(--code); }
@@ -392,7 +402,6 @@
   .ftail { flex: 0 0 auto; max-width: 100%; white-space: nowrap; font-weight: 600; overflow: hidden; text-overflow: ellipsis; }
   .fx { flex: none; width: 44px; height: 44px; border: none; background: none; color: var(--hint); font-size: 15px; cursor: pointer; }
   .rmore { margin: 8px 4px 0; }
-  .btn.sticky { position: sticky; bottom: calc(12px + env(safe-area-inset-bottom, 0px)); z-index: 2; box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25); }
   .explorer .btn.wide { margin: 0 0 8px; }
   @media (prefers-reduced-motion: reduce) { .card.pulse { animation: none; } }
   /* bottom sheet */

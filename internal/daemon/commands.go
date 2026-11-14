@@ -58,7 +58,7 @@ const (
 func (d *daemon) mainCommand(r inbound.Route, chat, thread int64, inTopic bool) {
 	switch r.Command {
 	case "start":
-		d.say(chat, thread, "Already paired. /help lists the commands.", nil)
+		d.sayKeys(chat, thread, "Already paired. /help lists the commands.")
 	case "agents":
 		mac := d.macThreads()
 		d.spawn(func() { d.sendAgents(chat, thread, mac) })
@@ -76,12 +76,8 @@ func (d *daemon) mainCommand(r inbound.Route, chat, thread int64, inTopic bool) 
 	case "unpause":
 		d.setPaused(false)
 		d.say(chat, thread, "▶️ Typing is on again.", nil)
-	case "help":
-		text := mainHelp
-		if inTopic {
-			text = topicHelp + "\n\n" + mainHelp
-		}
-		d.say(chat, thread, text, nil)
+	case "help": // a topic answers /help itself (topicCommand)
+		d.sayKeys(chat, thread, mainHelp)
 	case inbound.CmdTopicOnly:
 		d.say(chat, thread, "Use this inside a topic.", nil)
 	default:
@@ -329,8 +325,16 @@ func (d *daemon) statusText() string {
 	if d.paused.Load() {
 		typing = "paused"
 	}
-	return fmt.Sprintf("<b>rex-tg is running</b>\nTopics: %d live, %d offline\nQueued messages: %d\nTyping: %s\nRex: %s",
+	text := fmt.Sprintf("<b>rex-tg is running</b>\nTopics: %d live, %d offline\nQueued messages: %d\nTyping: %s\nRex: %s",
 		live, offline, queued, typing, format.Escape(rexLine))
+	// A long 429 from Telegram holds one method; it shows here until it ends.
+	for _, h := range d.tg.Holds() {
+		text += fmt.Sprintf("\n⏸ Telegram asked to wait: <code>%s</code> until %s", format.Escape(h.Method), h.Until.Local().Format("15:04"))
+		if h.Method == "sendRichMessage" {
+			text += " (answers come as plain messages)"
+		}
+	}
+	return text
 }
 
 // --- topic commands ---

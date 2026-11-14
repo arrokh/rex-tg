@@ -13,13 +13,16 @@ type APIError struct {
 	Code        int
 	Description string
 	RetryAfter  time.Duration
+	// Held is set on a 429 whose method the client now holds (HoldAfter):
+	// a long wait from Telegram, or the client's own refusal during it.
+	Held bool
 }
 
 // Error implements error.
 func (e *APIError) Error() string {
 	s := fmt.Sprintf("telegram %s: %d %s", e.Method, e.Code, e.Description)
 	if e.RetryAfter > 0 {
-		s += fmt.Sprintf(" (retry after %s)", e.RetryAfter)
+		s += fmt.Sprintf(" (retry after %s)", e.RetryAfter.Round(time.Second))
 	}
 	return s
 }

@@ -91,6 +91,10 @@ Your text goes to the agent. Text that starts with `/` also goes to the agent (f
 
 To send an agent a command that has a bot command's name, use two slashes: `//help` sends `/help` to the agent, and `//model` sends the agent's own `/model`.
 
+### Buttons under the message box
+
+Four buttons sit under the message box: `/rt`, `/screen`, `/files`, and `/changes`. A tap sends that command, so a button never goes to the agent as a prompt. Tap ⊞ in the message box to show or hide them. After an update that changes them, rex-tg posts a short note with the buttons in the main chat and in each open topic. `/help` brings them back. Details: [docs/reference.md](docs/reference.md#buttons-under-the-message-box).
+
 ### What you see
 
 - **While the agent works,** your message joins the current run at once, like typing on the Mac. Set `[input] while_busy = "wait"` to keep it until the agent is idle.

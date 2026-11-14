@@ -79,7 +79,13 @@ func (s *Sender) judge(err error, threadID int64) verdict {
 // sendText sends one text message. HTML that Telegram cannot parse is sent
 // again as plain text; that is safe because nothing was posted.
 func (s *Sender) sendText(ctx context.Context, threadID, chatID, topicID int64, text string, html, silent bool, markup *telegram.InlineKeyboardMarkup) (int64, verdict, error) {
-	p := telegram.SendMessageParams{ChatID: chatID, MessageThreadID: topicID, Text: text, DisableNotification: silent, ReplyMarkup: markup}
+	return s.sendTextKeys(ctx, threadID, chatID, topicID, text, html, silent, markup, nil)
+}
+
+// sendTextKeys is sendText with a reply keyboard (kb), sent when markup is
+// nil.
+func (s *Sender) sendTextKeys(ctx context.Context, threadID, chatID, topicID int64, text string, html, silent bool, markup *telegram.InlineKeyboardMarkup, kb *telegram.ReplyKeyboardMarkup) (int64, verdict, error) {
+	p := telegram.SendMessageParams{ChatID: chatID, MessageThreadID: topicID, Text: text, DisableNotification: silent, ReplyMarkup: markup, Keyboard: kb}
 	if html {
 		p.ParseMode = "HTML"
 	}
@@ -134,6 +140,13 @@ func (s *Sender) sendRich(ctx context.Context, p store.Part, silent bool) (int64
 	m, err := s.tg.SendRichMessage(ctx, p.ChatID, p.MessageThreadID, p.Content, silent, markup)
 	switch telegram.Classify(err) {
 	case telegram.ClassParseEntities, telegram.ClassBadRequest:
+	case telegram.ClassRateLimited:
+		// A long wait for rich messages: the answer goes out the other way
+		// now. Nothing was posted, so this cannot send it twice.
+		var api *telegram.APIError
+		if !errors.As(err, &api) || !api.Held {
+			return m.MessageID, s.judge(err, p.ThreadID), err
+		}
 	default:
 		return m.MessageID, s.judge(err, p.ThreadID), err
 	}
@@ -312,7 +325,11 @@ func (s *Sender) sendPart(ctx context.Context, p store.Part) {
 		if markup == nil && s.markup != nil {
 			markup = s.markup(p)
 		}
-		id, v, serr = s.sendText(ctx, p.ThreadID, p.ChatID, p.MessageThreadID, p.Content, p.Format == store.FormatHTML, silent, markup)
+		var kb *telegram.ReplyKeyboardMarkup
+		if markup == nil && s.keyboard != nil {
+			kb = s.keyboard(p)
+		}
+		id, v, serr = s.sendTextKeys(ctx, p.ThreadID, p.ChatID, p.MessageThreadID, p.Content, p.Format == store.FormatHTML, silent, markup, kb)
 	case store.FormatRich:
 		id, v, serr = s.sendRich(ctx, p, silent)
 	case store.FormatDocument:

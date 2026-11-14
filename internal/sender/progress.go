@@ -69,6 +69,8 @@ func (s *Sender) finishQueued(tid int64) bool {
 func (s *Sender) requeue(tid int64, op *progOp, delay time.Duration) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	delay = max(delay, s.held) // a held method: wait for it (pauseFor)
+	s.held = 0
 	op.notBefore = s.now().Add(delay)
 	q := s.prog[tid]
 	if op.kind == Edit && len(q) > 0 && (q[0].kind == Edit || q[0].kind == Finish || q[0].kind == Remove) {

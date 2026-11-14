@@ -72,6 +72,13 @@ Setup: a real bot made with @BotFather, Threaded Mode turned on, rex-tg installe
 - Earlier renames did show (the "personal" and "explore-lovina" topics), probably because the app had loaded its topics again since.
 - Change made: the reply of a rename that Telegram accepted says that the app may show the old name until it reloads its topics. Only the name given to `createForumTopic` shows for sure.
 
+## A 429 that stopped every reply for over an hour (2026-11-14)
+
+- At 17:23 every send stopped: answers, progress edits, the agents board. The user's messages still reached the panes (getUpdates worked), so the topic showed the messages without a reply or a reaction.
+- A goroutine dump showed the sender asleep in one bucket pause with 88 minutes left. Only a 429 `retry_after` pauses the bucket that long. The 429 was not logged, so its method is not known.
+- After a restart, one held answer (a rich message) went out, and the next one met a 429 again at once.
+- Changes made: every 429 is logged with its method and wait. A wait of 5 min or more holds only its method; the rest goes on (design section 9.3). A rich answer goes out as a normal message during a hold on rich messages. `/status` shows the held methods.
+
 ## Still to check
 
 - `closeForumTopic` in the private chat. rex-tg uses it only when linking a new topic fails, so normal use does not reach it.

@@ -151,6 +151,21 @@ type InlineKeyboardButton struct {
 	WebApp       *WebAppInfo `json:"web_app,omitempty"` // opens a Mini App (private chats only)
 }
 
+// ReplyKeyboardMarkup is a keyboard of buttons that Telegram shows in place
+// of the user's keyboard. A tap sends the button's text as the user's own
+// message. Only a sent message can carry it: an edit takes inline keyboards
+// only.
+type ReplyKeyboardMarkup struct {
+	Keyboard       [][]KeyboardButton `json:"keyboard"`
+	IsPersistent   bool               `json:"is_persistent,omitempty"`   // shown until replaced or removed
+	ResizeKeyboard bool               `json:"resize_keyboard,omitempty"` // as low as the buttons need
+}
+
+// KeyboardButton is one button of a reply keyboard.
+type KeyboardButton struct {
+	Text string `json:"text"`
+}
+
 // WebAppInfo is the address of a Mini App that a button opens.
 type WebAppInfo struct {
 	URL string `json:"url"`
@@ -179,6 +194,7 @@ type SendMessageParams struct {
 	ParseMode           string // "HTML" or ""
 	DisableNotification bool
 	ReplyMarkup         *InlineKeyboardMarkup
+	Keyboard            *ReplyKeyboardMarkup // sent only when ReplyMarkup is nil
 	ReplyToMessageID    int64
 }
 
