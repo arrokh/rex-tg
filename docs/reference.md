@@ -237,6 +237,21 @@ Text that starts with `/` goes to the agent, except the commands below and the m
 - When any of them has changes, a `📝 View changes` button opens them in the Mini App. There you pick one of the three, see the changed files as a folder tree, and tap a file to see its diff.
 - It needs the Mini App. Set `[miniapp] changes = false` to turn it off.
 
+### `/rt` (control panel)
+
+- `/rt` answers with a `🎛 Open control panel` button. It works in the main chat and in a topic. `//rt` in a topic sends `/rt` to the agent.
+- The panel lists the agents in Rex panes, the ones that wait for you first, like `/agents`. Each card shows the state, the agent and its folder, the session's name, and the Rex session and pane. It reads the list again every 5 seconds while it is open.
+- For each agent:
+  - `↗ Open topic` goes to its topic. An agent without a topic has `Open topic` instead, which makes one, like a tap in `/agents`.
+  - `✏️ Rename topic` names the topic, like `/rename` in it. `auto` names it after the session again.
+  - `✏️ Rename pane` gives the pane a new name in Rex (`rex block rename`). A topic is named after its pane, so the topic takes the new name too, unless you named the topic yourself.
+  - `🔌 Unlink` stops mirroring the session, like `/unlink`. The topic stays as history. The panel asks first.
+- `New agent` starts an agent in a new Rex tab, like `/new`. Pick the agent, then a folder: one of the folders that `/new` offers, or one that you find with the folder explorer. The explorer starts in your home folder and never leaves it. It shows folders only, not files, and a link to a folder only when the folder is inside your home folder too. `Show hidden` also shows names that start with a dot. The panel starts an agent only in a folder inside your home folder, or in one that `/new` offers; use `/new <agent> <folder>` for any other folder. The progress and the new topic come to the main chat.
+- `Pause typing` and `Resume` do what `/pause` and `/unpause` do. The main chat gets the same note.
+- Each tap acts at most once. The page sends a random id with each action, and rex-tg keeps the ids for a day, so a request that the network repeats does nothing a second time. When rex-tg cannot say yet how an action ended (it was busy, or the action still runs), the panel says so. Tap again to ask: the page sends the same id, so the action does not run twice.
+- The panel reads with the same signature as every page (24 hours). An action needs a signature from the last hour, so init data that leaked can change less. Close the panel and open it again with `/rt` when it says so.
+- It needs the Mini App.
+
 ### Files and photos
 
 - Photos and files are downloaded up to `max_upload_mb` (20 MB). They are saved under the state folder, and their path is typed into the pane with your caption.
@@ -378,6 +393,8 @@ The Mini App shows what does not fit a chat message. Its pages open from buttons
 - `📂 Browse files`, from `/files`: the agent's folder as a tree, read-only. Tap a folder to open or close it in place, and a file to read it; `‹ Files` or Telegram's back button goes back to the tree as you left it. `Collapse all` closes every folder, and `↻` loads the tree again. Markdown files are rendered, other text is shown as it is, with secrets removed, and pictures (PNG, JPEG, GIF, WebP up to 4 MB) are shown. Of a long text file, the first 512 KB are shown; a binary file shows only its size. The browser never leaves the folder: a path with `..` stays inside it, and a link that points out of it does not open. It hides `.git`, files that git ignores (such as `.env` and `node_modules`), and files with names of keys and credentials (`.env*`, `*.pem`, `*.key`, `id_rsa*`, `credentials.json`, and the like, in any case; `.env.example` is shown). In a folder that is not a git repository, it also hides every name that starts with a dot. A link to a hidden file does not open either. Folders with more than 2000 entries show the first 2000.
 - `📝 View changes`, from `/changes`: the changes of the agent's git repository. Three tabs pick what to compare: `Uncommitted` (since the last commit), `This branch` (since the branch left the main branch), and `Last turn`. A tab without anything to compare is dimmed, and tapping it says why. The view opens on the first tab that has changes. The changed files show as a tree, with a letter for each: `M` changed, `A` added, `D` deleted, `U` new and not tracked, `T` turned into a link or back, `!` in conflict. Tap a file for its diff, with the old and the new line numbers. `‹` and `›` go to the previous or next file, and `Wrap` wraps long lines. The view reads git each time it opens, so it shows the changes as they are now. It hides what the file browser hides: ignored files are not listed, and a file with the name of a key or credential is listed with 🔒 but its changes are not shown. Secrets are removed from every diff. A list shows at most 2000 files, and a diff at most 1 MB. Pictures that changed are shown as they are now.
 
+- `🎛 Open control panel`, from `/rt`: the agents and their topics, with actions on them, and a folder explorer to start a new agent ([`/rt`](#rt-control-panel)). The control panel acts: it opens and unlinks topics, renames topics and panes, starts agents, and pauses typing. It never types into a pane. There is one control panel page.
+
 Every page has a bar at the top. `A−` and `A+` make the text smaller or bigger, and the percentage between them sets it back to 100%. ☀/🌙 switches between light and dark; tapping back to Telegram's own scheme follows Telegram again. The page keeps your choices on the phone.
 
 The Mini App needs a public HTTPS address that reaches this Mac. It is off until `url` is set. With Tailscale:
@@ -400,7 +417,7 @@ Pages are reachable only through Telegram's signed requests, and only for the ow
 
 Funnel makes the server reachable from the internet, so keep `listen` on `127.0.0.1`. To turn the Mini App off, set `url = ""` and restart rex-tg. `tailscale funnel reset` removes every Funnel setting of this Mac.
 
-Answers are kept for 30 days, changes for 14, live screens, file browsers and changes views for 7 days after the last `/screen`, `/files` or `/changes` that sent their button, and at most 500 pages in all. While the Mini App's server is not running, answers come whole in the chat.
+Answers are kept for 30 days, changes for 14, live screens, file browsers, changes views and the control panel for 7 days after the last `/screen`, `/files`, `/changes` or `/rt` that sent their button, and at most 500 pages in all. While the Mini App's server is not running, answers come whole in the chat.
 
 ### Tables and rich messages
 

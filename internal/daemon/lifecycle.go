@@ -24,6 +24,7 @@ const typingUnknownNotice = "⚠️ Your message may be in the input box without
 // show a different menu per topic, so it holds both sets.
 var botCommands = []telegram.BotCommand{
 	{Command: "agents", Description: "List the agents in Rex panes"},
+	{Command: "rt", Description: "Open the rex-tg control panel"},
 	{Command: "new", Description: "Start an agent in a new Rex tab"},
 	{Command: "topics", Description: "List topics and their states"},
 	{Command: "status", Description: "Daemon health"},

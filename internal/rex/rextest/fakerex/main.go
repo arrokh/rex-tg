@@ -110,7 +110,16 @@ func main() {
 	if r.DelayMS > 0 {
 		waitOrExitWhenOrphaned(time.Duration(r.DelayMS) * time.Millisecond)
 	}
-	fmt.Fprint(os.Stdout, r.Stdout)
+	out := r.Stdout
+	if r.Exit == 0 && len(stripped) >= 2 && stripped[0] == "block" {
+		switch {
+		case stripped[1] == "rename" && len(stripped) == 6: // block rename -s SESSION BLOCK LABEL
+			setBlockLabel(dir, stripped[4], stripped[5])
+		case stripped[1] == "ls":
+			out = relabelBlocks(dir, out)
+		}
+	}
+	fmt.Fprint(os.Stdout, out)
 	fmt.Fprint(os.Stderr, r.Stderr)
 	if r.EchoStdin {
 		fmt.Fprint(os.Stderr, string(stdin))
@@ -203,4 +212,49 @@ func logCall(dir string, c call) {
 	}
 	defer f.Close()
 	_, _ = f.Write(append(b, '\n'))
+}
+
+// A `block rename` that the scenario answers with success changes the label
+// that `block ls` prints for that block. The labels are kept in the file
+// block-labels.json next to the scenario.
+func setBlockLabel(dir, block, label string) {
+	labels := readBlockLabels(dir)
+	labels[block] = label
+	b, _ := json.Marshal(labels)
+	_ = writeAtomic(filepath.Join(dir, "block-labels.json"), b)
+}
+
+func readBlockLabels(dir string) map[string]string {
+	labels := map[string]string{}
+	if b, err := os.ReadFile(filepath.Join(dir, "block-labels.json")); err == nil {
+		_ = json.Unmarshal(b, &labels)
+	}
+	return labels
+}
+
+// relabelBlocks applies the renamed labels to the blocks of a `block ls`
+// answer.
+func relabelBlocks(dir, out string) string {
+	labels := readBlockLabels(dir)
+	if len(labels) == 0 {
+		return out
+	}
+	var doc struct {
+		Blocks []map[string]any `json:"blocks"`
+	}
+	if json.Unmarshal([]byte(out), &doc) != nil {
+		return out
+	}
+	for _, b := range doc.Blocks {
+		if id, _ := b["block_id"].(string); id != "" {
+			if l, ok := labels[id]; ok {
+				b["label"] = l
+			}
+		}
+	}
+	res, err := json.Marshal(doc)
+	if err != nil {
+		return out
+	}
+	return string(res)
 }

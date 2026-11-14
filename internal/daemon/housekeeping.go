@@ -33,6 +33,7 @@ func (d *daemon) housekeeping(now time.Time) {
 	d.pruneFileOffers(now)
 	d.prunePages(now)
 	d.pruneControlRecords(now)
+	d.pruneActRecords(now)
 	// pi's text files of messages that never ended (pi was killed); the
 	// live loop removes them too, but only while drafts are on.
 	removeOlder(d.cfg.LiveDir(), now.Add(-liveStale))

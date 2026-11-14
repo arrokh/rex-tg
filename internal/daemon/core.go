@@ -123,6 +123,7 @@ type rexClient interface {
 	Blocks(ctx context.Context, session string) ([]rex.Block, error)
 	Windows(ctx context.Context, session string) ([]rex.Window, error)
 	RenameWindow(ctx context.Context, session, window, label string) error
+	RenameBlock(ctx context.Context, session, block, label string) error
 	RenameSession(ctx context.Context, session, label string) error
 }
 

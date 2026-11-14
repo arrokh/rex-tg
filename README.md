@@ -59,6 +59,7 @@ With Threaded Mode, every message is in a topic. A topic that is not linked to a
 | --- | --- |
 | `/agents` | Lists the agents in Rex panes, the ones that wait for you first. The list updates by itself; pin it. Tap an agent to open its topic. |
 | `/new` | Starts an agent in a new Rex tab. Pick the agent and a folder. `/new pi ~/work/app` does it in one step. |
+| `/rt` | Opens rex-tg's control panel in the Mini App. There you see the agents, open or unlink their topics, rename a topic or a pane, start an agent in a folder that you pick, and pause typing. |
 | `/topics` | Lists the topics and their states. |
 | `/status` | Shows the daemon's health. |
 | `/pause`, `/unpause` | Stops or allows all typing into panes. Use `/pause` if you lose your phone. |

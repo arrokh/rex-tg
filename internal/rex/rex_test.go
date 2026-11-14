@@ -145,6 +145,31 @@ func TestRenameWindow(t *testing.T) {
 	}
 }
 
+func TestRenameBlock(t *testing.T) {
+	c, f := newClient(t)
+	f.On([]string{"block", "rename"}, "", 0)
+	ctx := context.Background()
+	if err := c.RenameBlock(ctx, "session:s", "block:b", "api server"); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"--autostart=false", "block", "rename", "-s", "session:s", "block:b", "api server"}
+	if args := lastArgs(t, f); !reflect.DeepEqual(args, want) {
+		t.Fatalf("args %q, want %q", args, want)
+	}
+	for name, err := range map[string]error{
+		"option as name": c.RenameBlock(ctx, "session:s", "block:b", "-x"),
+		"no pane":        c.RenameBlock(ctx, "session:s", "", "x"),
+		"no session":     c.RenameBlock(ctx, "", "block:b", "x"),
+	} {
+		if err == nil {
+			t.Errorf("%s: no error", name)
+		}
+	}
+	if n := len(f.Calls()); n != 1 {
+		t.Fatalf("%d rex calls, want 1", n)
+	}
+}
+
 // A name that starts with "-" would be read as an option, so it never
 // reaches rex; neither does a relative folder or an empty command.
 func TestNewTabRejectsWhatRexWouldMisread(t *testing.T) {

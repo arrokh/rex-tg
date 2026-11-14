@@ -67,7 +67,7 @@ func TestRouteTextAllCommands(t *testing.T) {
 			t.Errorf("topic /%s: %+v", c, r)
 		}
 	}
-	for _, c := range []string{"start", "agents", "new", "topics", "status", "pause", "unpause", "help"} {
+	for _, c := range []string{"start", "agents", "new", "topics", "status", "pause", "unpause", "rt", "help"} {
 		if r := inbound.RouteText("/"+c, false, "b"); r.Kind != inbound.RouteCommand || r.Command != c {
 			t.Errorf("main /%s: %+v", c, r)
 		}

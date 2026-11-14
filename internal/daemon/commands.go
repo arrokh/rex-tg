@@ -27,6 +27,7 @@ const (
 		"/new - start a coding agent in a new Rex tab\n" +
 		"/topics - topics and their states\n" +
 		"/status - daemon health\n" +
+		"/rt - the control panel: agents, topics, new agents (Mini App)\n" +
 		"/pause - stop typing into panes\n" +
 		"/unpause - allow typing again\n" +
 		"/help - this list"
@@ -61,6 +62,8 @@ func (d *daemon) mainCommand(r inbound.Route, chat, thread int64, inTopic bool) 
 	case "agents":
 		mac := d.macThreads()
 		d.spawn(func() { d.sendAgents(chat, thread, mac) })
+	case "rt":
+		d.panelCommand(chat, thread)
 	case "new":
 		d.newCommand(chat, thread, inTopic, r.Args)
 	case "topics":
