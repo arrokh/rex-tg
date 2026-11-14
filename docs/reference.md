@@ -108,10 +108,11 @@ Text that starts with `/` goes to the agent, except the commands below and the m
 
 ### Buttons under the message box
 
-rex-tg adds a keyboard of four buttons under the message box: `/rt`, `/screen`, `/files`, and `/changes`. It is the same in every topic and in the main chat. Telegram shows it in place of your normal keyboard; tap ⊞ in the message box to switch between the two.
+rex-tg adds a keyboard of four buttons under the message box: 🎛 Panel, 🖥 Screen, 📂 Files, and 📝 Changes. They run `/rt`, `/screen`, `/files`, and `/changes`. The keyboard is the same in every topic and in the main chat. Telegram shows it in place of your normal keyboard; tap ⊞ in the message box to switch between the two.
 
-- A tap sends the button's text as your message. Each button is a command, so it never goes to the agent as a prompt.
-- In the main chat, `/screen`, `/files`, and `/changes` answer "Use this inside a topic." `/rt` works everywhere.
+- A tap sends the button's label as your message. rex-tg reads these four labels as their commands, so a button never goes to the agent as a prompt. The same text typed by hand counts as a tap too.
+- In the main chat, 🖥 Screen, 📂 Files, and 📝 Changes answer "Use this inside a topic." 🎛 Panel works everywhere.
+- The first version of the keyboard showed the commands themselves (`/rt` and so on). Those buttons still work until the new ones replace them.
 - Only a new message can carry the keyboard. rex-tg sends it with the pairing answer, with the first message of each new topic, and with every `/help` answer.
 - On the first start after an update that adds or changes the buttons, rex-tg posts one short silent note to the main chat and to every open topic. The note carries the keyboard, so a topic that existed before the update shows the buttons without `/help`. A closed topic gets no note. Each topic gets the note at most once, also after a restart.
 - It is not yet known whether each Telegram app keeps one keyboard for the whole chat or one per topic. So every open topic gets its own note.
@@ -189,8 +190,9 @@ rex-tg adds a keyboard of four buttons under the message box: `/rt`, `/screen`, 
 - The progress message appears after 2 seconds without an answer. It shows the latest commentary and the recent tool calls. It never shows tool output, unless `/verbose full` is on.
 - The progress message stays the last message of a running turn. When an alert, a notice, or your own message comes below it, it moves down. While a prompt waits for your answer, the alert stays last.
 - At the end of a turn, the progress message becomes a `✅ Done` summary only when the turn took 2 minutes or more (`[display] summary_after`). A shorter turn that ends with an answer leaves just the answer, so many short turns do not fill the topic. An error, a stop, or an interrupted turn always keeps its summary.
-- Its first icon is an hourglass (⏳ ⌛) that turns every 3 seconds while the agent works, and the timer moves with it, so you can see that the turn is still running. Set `[display] progress_animation` to change the pace, or to `"0s"` to stop it; then the icon turns only when the message changes anyway.
-- Its timer moves on while the agent thinks or a long tool runs: every 10 seconds at first, then less often, at most once a minute later in a long turn. It stops while rex-tg waits for your answer.
+- Its first icon is an hourglass (⏳ ⌛). By default it turns only when the message changes. Set `[display] progress_animation` (for example `"5s"`) to turn it on a fixed pace while the agent works. The progress edits share one budget (below), so a fast animation on many topics slows down instead.
+- The progress edits of the chat share one budget of 20 edits per minute (burst 3). The final summary edit is not counted. An edit over the budget waits, and newer edits of its topic merge into it. After a 429 from Telegram (a flood wait), the budget runs at half its rate for one hour.
+- With the animation off (the default), its timer moves on while the agent thinks or a long tool runs: every 10 seconds at first, then less often, at most once a minute later in a long turn. It stops while rex-tg waits for your answer.
 - At the end of the turn, the tool rows stay in a collapsed quote under the summary line.
 - A long answer comes as several messages of about 1500 characters, split at paragraphs and headings like a chat, never inside a code block, and without `(1/2)` numbers. Only the first one makes a sound. `message_length` sets the size (300 to 4000; 4000 splits only when Telegram's limit needs it). An answer that would take more than 6 messages comes in fuller ones, up to 4000 characters each. In rex-tg's own format, an answer longer than 16000 characters comes as a `.md` file.
 - While the agent writes, the text shows at the bottom of the topic as a draft, Telegram's preview of a message being written. pi's text grows word by word. Claude Code and Codex show each finished block, because they write nothing earlier. A draft never becomes a message: the answer replaces it. Final mode shows no drafts. Drafts are off by default; set `stream = true` to turn them on. `stream_interval` sets how often the draft changes: `1s` is the default and the fastest, because drafts share Telegram's budget of about one message a second in a chat; a larger value such as `"3s"` leaves more of it to answers.
@@ -354,8 +356,8 @@ backfill = 3                            # Final answers to post when a topic ope
 show_mac_prompts = true                 # Post prompts that you type in the pane on the Mac (when mac_notice is off).
 mac_notice = true                       # Hold turns typed on the Mac behind one notice, until you write in Telegram.
 progress_delay = "2s"                   # Wait before the progress message appears.
-progress_edit_interval = "2s"           # Least time between two edits of the progress message.
-progress_animation = "3s"              # How often the progress message turns its hourglass and moves its timer. "0s" turns it off; at least 2s.
+progress_edit_interval = "5s"           # Least time between two edits of the progress message.
+progress_animation = "0s"              # How often the progress message turns its hourglass and moves its timer. "0s" (default) turns it off; at least 2s.
 summary_after = "2m"                    # Keep the "Done" summary only for turns this long or longer; shorter ones leave just the answer. "0s" keeps every summary.
 rich_messages = true                    # Send final answers as Telegram rich messages: Telegram renders tables and code itself.
 send_images = true                      # Send the image files that a final answer names.
@@ -439,7 +441,7 @@ A code block with a line longer than 80 characters does not fit a phone. It stay
 
 A table that is wider than a phone (more than 40 characters) becomes a list: one block per row, with the first cell in bold and `Column: value` for the others. A narrower table stays a monospace grid.
 
-Final answers go out in Telegram's rich message format (`[display] rich_messages`, on by default), so Telegram renders tables, code, and headings itself. An answer of up to 32768 characters goes as one rich message. If Telegram rejects one, rex-tg sends the answer again in its own format (Telegram HTML, with the tables as above): as one message when it is up to 4000 characters, else as a `.md` file. Set `rich_messages = false` to always use rex-tg's own format. There, an answer longer than 16000 characters comes as a `.md` file. With the Mini App set up, an answer longer than `answer_preview` shows its start instead (see [Mini App](#mini-app)).
+Final answers go out in Telegram's rich message format (`[display] rich_messages`, on by default), so Telegram renders tables, code, and headings itself. An answer of up to 32768 characters goes as one rich message. If Telegram rejects one with a 400 error, rex-tg sends the answer again in its own format (Telegram HTML, with the tables as above): as one message when it is up to 4000 characters, else as a `.md` file. A rate limit (429) does not change the format: the answer waits, and it goes out as a rich message. Set `rich_messages = false` to always use rex-tg's own format. There, an answer longer than 16000 characters comes as a `.md` file. With the Mini App set up, an answer longer than `answer_preview` shows its start instead (see [Mini App](#mini-app)).
 
 ## Voice notes
 
@@ -508,7 +510,7 @@ To delete the token: `security delete-generic-password -s rex-tg -a bot-token`. 
 | Mini App page does not open | Check that `[miniapp] url` is the Funnel's `https://` address with the Funnel's port, and that the Funnel runs (`tailscale funnel status`). `mini app: serving` in the log means the server runs. See [Mini App](#mini-app). |
 | The log says `mini app: listen` | The `[miniapp] listen` address is in use or not valid. The buttons still show, but their pages do not open. Set `listen`, then restart rex-tg. |
 | Telegram says the bot was blocked | Unblock the bot in Telegram. |
-| Your messages reach the agent, but no replies come | Telegram may have asked rex-tg to wait (429 Too Many Requests). The log says `Telegram rate limit` with the method and the wait. A wait of 5 minutes or more holds only its method, shown in `/status` as `⏸ Telegram asked to wait`: during a wait for rich messages, answers come as normal messages. A shorter wait pauses all sending. Nothing is lost; the waiting messages go out when the wait ends. |
+| Your messages reach the agent, but no replies come | Telegram may have asked rex-tg to wait (429 Too Many Requests). The log says `Telegram rate limit` with the method and the wait. A wait of 5 minutes or more holds the whole chat. `/status` shows it as `⏸ Telegram asked rex-tg to wait until HH:MM`. When the wait ends, the main chat gets a note with its start and end, and the held messages go out. A restart does not end the wait. A shorter wait pauses all sending. Nothing is lost. |
 | `doctor` reports unknown line types | The agent changed its transcript format. rex-tg ignores those lines. The adapter may need an update. Once a rex-tg update knows a type, doctor stops reporting it. |
 | "Not sent: the pane now runs ..." | The agent no longer runs in the pane. Start it again, or open another agent with `/agents`. |
 

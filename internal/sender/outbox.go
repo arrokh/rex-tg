@@ -140,13 +140,6 @@ func (s *Sender) sendRich(ctx context.Context, p store.Part, silent bool) (int64
 	m, err := s.tg.SendRichMessage(ctx, p.ChatID, p.MessageThreadID, p.Content, silent, markup)
 	switch telegram.Classify(err) {
 	case telegram.ClassParseEntities, telegram.ClassBadRequest:
-	case telegram.ClassRateLimited:
-		// A long wait for rich messages: the answer goes out the other way
-		// now. Nothing was posted, so this cannot send it twice.
-		var api *telegram.APIError
-		if !errors.As(err, &api) || !api.Held {
-			return m.MessageID, s.judge(err, p.ThreadID), err
-		}
 	default:
 		return m.MessageID, s.judge(err, p.ThreadID), err
 	}

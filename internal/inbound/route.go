@@ -40,6 +40,38 @@ var topicCommands = setOf("info", "screen", "files", "changes", "approve", "deny
 
 var mainCommands = setOf("start", "agents", "new", "topics", "status", "pause", "unpause", "rt", "help")
 
+// Button is one button of the reply keyboard: its label, and the command
+// that a tap runs.
+type Button struct {
+	Label   string
+	Command string
+}
+
+// Buttons are the reply keyboard's buttons, in their order. A tap sends the
+// label as the user's message, and RouteText reads it as the command, so a
+// button never goes to the agent as text.
+var Buttons = []Button{
+	{"🎛 Panel", "rt"},
+	{"🖥 Screen", "screen"},
+	{"📂 Files", "files"},
+	{"📝 Changes", "changes"},
+}
+
+// buttonCommands maps a label, without emoji variation selectors, to its
+// command. The first keyboard's labels were the commands themselves
+// ("/screen"), so a keyboard that an app still shows keeps working.
+var buttonCommands = func() map[string]string {
+	m := map[string]string{}
+	for _, b := range Buttons {
+		m[noVariation(b.Label)] = b.Command
+	}
+	return m
+}()
+
+// noVariation drops emoji variation selectors (U+FE0F), which an app may add
+// to or leave out of an emoji.
+func noVariation(s string) string { return strings.ReplaceAll(s, "\uFE0F", "") }
+
 func setOf(names ...string) map[string]bool {
 	m := make(map[string]bool, len(names))
 	for _, n := range names {
@@ -92,6 +124,9 @@ func RouteText(text string, inTopic bool, botUsername string) Route {
 	t := strings.TrimSpace(text)
 	if t == "" {
 		return Route{Kind: RouteIgnore}
+	}
+	if c, ok := buttonCommands[noVariation(t)]; ok {
+		t = "/" + c // a tap on a keyboard button
 	}
 	if !strings.HasPrefix(t, "/") {
 		if inTopic {

@@ -4,37 +4,39 @@ import (
 	"context"
 	"strings"
 
+	"rex-tg/internal/inbound"
 	"rex-tg/internal/store"
 	"rex-tg/internal/telegram"
 )
 
 // The reply keyboard: four buttons under the message box, the same in every
-// topic and in the main chat. A tap sends the button's text as the user's
-// message, so each button is a command: a command is never typed into a pane.
+// topic and in the main chat (inbound.Buttons). A tap sends the button's
+// label as the user's message, and inbound.RouteText reads it as its
+// command, so a button is never typed into a pane.
 // Telegram keeps the keyboard until another one replaces it. Whether a
 // client keeps one keyboard per topic or one for the whole chat is not
 // settled, so each place that should show it gets it, without the user doing
 // anything: after an update that changes the buttons, the main chat and every
 // open topic get one short note that carries it; a new topic gets it with its
 // first message; and /help brings it back anywhere.
-var replyKeyboard = &telegram.ReplyKeyboardMarkup{
-	Keyboard: [][]telegram.KeyboardButton{{
-		{Text: "/rt"}, {Text: "/screen"}, {Text: "/files"}, {Text: "/changes"},
-	}},
-	IsPersistent:   true,
-	ResizeKeyboard: true,
-}
+var replyKeyboard = func() *telegram.ReplyKeyboardMarkup {
+	var row []telegram.KeyboardButton
+	for _, b := range inbound.Buttons {
+		row = append(row, telegram.KeyboardButton{Text: b.Label})
+	}
+	return &telegram.ReplyKeyboardMarkup{Keyboard: [][]telegram.KeyboardButton{row}, IsPersistent: true, ResizeKeyboard: true}
+}()
 
 // keyboardVersion names the buttons above. A new value posts the keyboard
 // note to the main chat once more, after an update that changes the buttons.
-const keyboardVersion = "1"
+const keyboardVersion = "2" // 2: labels such as "🖥 Screen" instead of "/screen"
 
 const keyboardKey = "reply_keyboard"
 
-const keyboardTopicNote = "⌨️ Buttons for /rt, /screen, /files and /changes are now under the message box. " +
+const keyboardTopicNote = "⌨️ Buttons under the message box: 🎛 Panel (/rt), 🖥 Screen, 📂 Files, and 📝 Changes. " +
 	"Tap ⊞ in the message box to show or hide them."
 
-const keyboardNote = "⌨️ Buttons for /rt, /screen, /files and /changes are now under the message box. " +
+const keyboardNote = "⌨️ Buttons under the message box: 🎛 Panel (/rt), 🖥 Screen, 📂 Files, and 📝 Changes. " +
 	"Tap ⊞ in the message box to show or hide them. /help brings them back."
 
 // keyboardTopicKey is the outbox key of a topic's keyboard note. The outbox

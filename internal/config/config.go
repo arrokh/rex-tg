@@ -110,9 +110,10 @@ type Config struct {
 		ProgressDelay        Duration `toml:"progress_delay"`
 		ProgressEditInterval Duration `toml:"progress_edit_interval"`
 		// ProgressAnimation edits the progress message this often while the
-		// agent works, so its hourglass turns and its timer moves. "0s"
-		// turns it off: then the timer moves every 10 s at first and less
-		// often later. Default 3s.
+		// agent works, so its hourglass turns and its timer moves. Off ("0s")
+		// by default: then the timer moves every 10 s at first and less often
+		// later. Edits every few seconds in several topics made Telegram hold
+		// the chat for about 95 minutes (2026-11-14).
 		ProgressAnimation Duration `toml:"progress_animation"`
 		// SummaryAfter keeps the "✅ Done" summary of a turn that ended with
 		// its answer only when the turn took at least this long; a shorter
@@ -263,8 +264,8 @@ func Default(home string) Config {
 	c.Display.StreamInterval = Duration{MinStreamInterval}
 	c.Display.MessageLength = 1500
 	c.Display.ProgressDelay = secs(2)
-	c.Display.ProgressEditInterval = secs(2)
-	c.Display.ProgressAnimation = secs(3)
+	c.Display.ProgressEditInterval = secs(5)
+	c.Display.ProgressAnimation = secs(0)
 	c.Display.SummaryAfter = secs(120)
 	c.Display.RichMessages = true
 

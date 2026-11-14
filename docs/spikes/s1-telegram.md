@@ -77,7 +77,26 @@ Setup: a real bot made with @BotFather, Threaded Mode turned on, rex-tg installe
 - At 17:23 every send stopped: answers, progress edits, the agents board. The user's messages still reached the panes (getUpdates worked), so the topic showed the messages without a reply or a reaction.
 - A goroutine dump showed the sender asleep in one bucket pause with 88 minutes left. Only a 429 `retry_after` pauses the bucket that long. The 429 was not logged, so its method is not known.
 - After a restart, one held answer (a rich message) went out, and the next one met a 429 again at once.
-- Changes made: every 429 is logged with its method and wait. A wait of 5 min or more holds only its method; the rest goes on (design section 9.3). A rich answer goes out as a normal message during a hold on rich messages. `/status` shows the held methods.
+- After the upgrade at 18:06 (v0.3.3, which held one method at a time), sendRichMessage, sendMessage, and editMessageText each answered 429 with the same time left: about 51 min 45 s. The wait ended at about 18:58. The times fit one wait for the whole chat, not one wait per method.
+- An audit of the requests found that about 75% were progress edits. They ran at about 1 request a second for about 10 minutes, in 2 or 3 topics with long turns. The audit points to these edits as the cause.
+- Changes made (the final design, design section 9.3):
+  - A 429 with a wait of 5 min or more holds the whole chat. The client refuses every other Bot API call until the wait ends, without asking Telegram. `getUpdates`, `getMe`, `getFile`, the command-menu calls, and the webhook calls still go.
+  - The hold is kept in the store (KV `telegram_hold`), so a restart does not post during the wait.
+  - When the wait ends, the main chat gets one silent note: "⚠️ Telegram held rex-tg's messages from HH:MM to HH:MM, because rex-tg sent too many (429 Too Many Requests). Nothing was lost: the held messages are sent now." The held messages go out when the wait ends, and some may come before the note.
+  - There is no fallback from rich messages to plain messages. A rich answer that meets a 429 waits like any other message. A 400 still sends the answer in rex-tg's own format.
+  - Typing, drafts, and answers to button presses fail at once during a hold. `/status` shows the wait in one line.
+  - Prevention: `display.progress_animation` is off by default (was 3 s), and `display.progress_edit_interval` is 5 s (was 2 s). Progress edits share a budget of 20 per minute for the chat (burst 3). After a 429 from Telegram, the budget runs at half rate for one hour.
+  - Every 429 from Telegram is logged with its method and wait.
+- Open question: Telegram does not say whether a wait covers one method or the whole chat. A Telegram developer wrote that `retry_after` is for one API call (see Sources below). The same time left on three methods does not fit that. rex-tg holds the chat as a precaution. No source shows that a request during a wait makes it longer.
+
+### Sources for the 429 rules
+
+- **Official.** [Telegram Bots FAQ](https://core.telegram.org/bots/faq): "In a single chat, avoid sending more than one message per second. We may allow short bursts that go over this limit, but eventually you'll begin receiving 429 errors." The same FAQ says that a bot cannot send more than 20 messages a minute in a group. It gives no limit for edits in a private chat. The [Bot API reference](https://core.telegram.org/bots/api) defines `retry_after` as "the number of seconds left to wait before the request can be repeated." It does not say whether the wait covers one method or the whole chat.
+- **Telegram developer, not in the docs.** levlam, in [tdlib/telegram-bot-api#946](https://github.com/tdlib/telegram-bot-api/issues/946) (13 Nov 2026). The issue asks whether a bot must handle `retry_after` for all API calls. The answer: "The received retry-after time is for specific API call."
+- **Anecdotal.** A user, in [tdlib/telegram-bot-api#535](https://github.com/tdlib/telegram-bot-api/issues/535) (2024), reported that the `retry_after` window grew with each recurring 429, when using a local Bot API server. A Telegram developer answered that the server gives the same values as api.telegram.org. The user waited out each window, so the report does not show that a request during a wait makes it longer.
+- **Unofficial.** [grammY: flood limits](https://grammy.dev/advanced/flood) says that bots can only do up to 20 message edits a minute in a group chat. It calls this a known limit found outside the official docs.
+
+The budget of 20 edits a minute for progress is rex-tg's own choice (`sender.Options.EditsPerMinute`). The official FAQ and grammY both give 20 a minute for groups. No source gives a limit for edits in a private chat.
 
 ## Still to check
 

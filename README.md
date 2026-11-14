@@ -93,7 +93,7 @@ To send an agent a command that has a bot command's name, use two slashes: `//he
 
 ### Buttons under the message box
 
-Four buttons sit under the message box: `/rt`, `/screen`, `/files`, and `/changes`. A tap sends that command, so a button never goes to the agent as a prompt. Tap ⊞ in the message box to show or hide them. After an update that changes them, rex-tg posts a short note with the buttons in the main chat and in each open topic. `/help` brings them back. Details: [docs/reference.md](docs/reference.md#buttons-under-the-message-box).
+Four buttons sit under the message box: 🎛 Panel (`/rt`), 🖥 Screen (`/screen`), 📂 Files (`/files`), and 📝 Changes (`/changes`). A tap runs that command, so a button never goes to the agent as a prompt. Tap ⊞ in the message box to show or hide them. After an update that changes them, rex-tg posts a short note with the buttons in the main chat and in each open topic. `/help` brings them back. Details: [docs/reference.md](docs/reference.md#buttons-under-the-message-box).
 
 ### What you see
 
