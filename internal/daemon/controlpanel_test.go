@@ -156,11 +156,11 @@ func TestRenameReportText(t *testing.T) {
 		auto bool
 		want string
 	}{
-		{renameReport{topic: true, pane: true, tab: true}, false, "✏️ Renamed the topic, its Rex pane, and its tab to X."},
+		{renameReport{topic: true, pane: true, tab: true}, false, "✏️ Renamed the topic, its Rex pane, and its tab to X. " + staleTopicNote},
 		{renameReport{pane: true, tab: true}, false, "✏️ Renamed the Rex pane and its tab to X."},
-		{renameReport{topic: true, pane: true, tab: true}, true, "✏️ Reset the topic, its Rex pane, and its tab to the automatic name."},
+		{renameReport{topic: true, pane: true, tab: true}, true, "✏️ Reset the topic, its Rex pane, and its tab to the automatic name. " + staleTopicNote},
 		{renameReport{topic: true, pane: true, skips: []string{"its tab (it is shared with another agent)"}}, false,
-			"✏️ Renamed the topic and its Rex pane to X. Not renamed: its tab (it is shared with another agent)."},
+			"✏️ Renamed the topic and its Rex pane to X. Not renamed: its tab (it is shared with another agent). " + staleTopicNote},
 		{renameReport{skips: []string{"its Rex pane and its tab (the agent has no pane now)"}}, false,
 			"Nothing was renamed. Not renamed: its Rex pane and its tab (the agent has no pane now)."},
 	} {

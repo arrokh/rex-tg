@@ -65,6 +65,13 @@ Setup: a real bot made with @BotFather, Threaded Mode turned on, rex-tg installe
 - Step 10: Telegram accepts the reactions: 👀 showed on a typed message, and the 👍 calls of acknowledged messages logged no error.
 - Step 11: `getMyCommands` for the owner's chat returns the 21 rex-tg commands (`rex-tg doctor`).
 
+## Topic renames that the app does not show (2026-11-14)
+
+- `/rename rhasia-scret` in a topic: `editForumTopic` answered `true` both times (09:02 and 10:51), and rex-tg stored the name. An automatic rename at 09:00, to the session's name, had shown. The topic still showed the old name "Create a worktree for API…" in Telegram for iOS, in the topic list and in its header, almost two hours later.
+- This is a known Telegram bug: [tdlib/telegram-bot-api#915](https://github.com/tdlib/telegram-bot-api/issues/915). In a private chat with topics, Telegram saves the new name but makes no "topic edited" service message and sends no update. An app that already knows the topic keeps the old name until it loads its topics again; Telegram for Android keeps it until its local data is cleared. A Telegram developer answered there: "This will be fixed after updates of user apps. There is no way to fix this from the bot's side."
+- Earlier renames did show (the "personal" and "explore-lovina" topics), probably because the app had loaded its topics again since.
+- Change made: the reply of a rename that Telegram accepted says that the app may show the old name until it reloads its topics. Only the name given to `createForumTopic` shows for sure.
+
 ## Still to check
 
 - `closeForumTopic` in the private chat. rex-tg uses it only when linking a new topic fails, so normal use does not reach it.
