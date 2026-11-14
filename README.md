@@ -94,7 +94,7 @@ To send an agent a command that has a bot command's name, use two slashes: `//he
 
 - **While the agent works,** your message joins the current run at once, like typing on the Mac. Set `[input] while_busy = "wait"` to keep it until the agent is idle.
 - **⏳ Waiting:** a prompt is open, so your message waits. `⚡ Send now` types it at once. `✖ Cancel` drops it. A waiting message expires after 30 minutes.
-- **Reactions on your message:** 👀 means typed into the pane. 👍 means the agent got it. 👎 means refused; a reply says why. A message sent while Claude Code works stays 👀 until the turn takes it in, after the tool call that runs.
+- **Reactions on your message:** 👀 means typed into the pane. 👍 means the agent got it. 👎 means refused; a reply says why. A message sent while Claude Code works stays 👀 until the turn takes it in, after the tool call that runs. A slash command for the agent, such as `/restart`, gets its 👍 once it is typed.
 - **Progress:** one message updates while the agent works. When the turn ends, it becomes a summary line if the turn took 2 minutes or more, or if it failed or stopped. A shorter turn leaves just its answer.
 - **Answer:** a new message. A long answer comes as a few chat-sized messages, split at paragraphs, without numbers. With the Mini App set up, a long answer (over 3000 characters by default) shows its start, and `📄 Whole answer` opens the rest.
 - **Quick replies:** buttons under an answer that send a short reply to the agent with one tap, such as `Continue` or `Yes`. Off by default; set them with `[display] quick_replies`.

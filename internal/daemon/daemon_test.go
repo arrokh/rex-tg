@@ -395,7 +395,11 @@ func TestEchoSuppression(t *testing.T) {
 		t.Errorf("the typed prompt was posted back\n%s", e.dump())
 	}
 	row := e.peek()
-	in, err := row.DeliveredSince(context.Background(), thread, time.Now().Add(-time.Hour))
+	th, ok, err := row.ThreadByTopic(context.Background(), chatID, thread)
+	if err != nil || !ok {
+		t.Fatalf("topic: %v %v", ok, err)
+	}
+	in, err := row.DeliveredSince(context.Background(), th.ID, time.Now().Add(-time.Hour))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -428,6 +428,7 @@ Pure helpers for incoming messages.
 type RouteKind int // RouteCommand, RouteAgentText, RouteIgnore
 type Route struct{ Kind RouteKind; Command, Args, Text string }
 func RouteText(text string, inTopic bool, botUsername string) Route // design D15 and section 8.7
+func SlashCommand(text string) bool // "/name …" for the agent: its 👍 comes once typed (design 8.10)
 
 type Action int // ActText, ActSendNow, ActForce, ActKeys, ActPromptAnswer, ActReadOnly
 type Facts struct{ FromOwner, OwnerChat, TopicLive, PaneExists, AgentInFront, PromptOpen, AlertMatches, Paused bool }
