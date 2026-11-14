@@ -84,8 +84,26 @@
   code { background: var(--code); padding: 1px 4px; border-radius: 4px; }
   pre { background: var(--code); padding: 10px 12px; border-radius: 8px; overflow-x: auto; }
   pre code { background: none; padding: 0; }
-  table { border-collapse: collapse; display: block; overflow-x: auto; margin: 8px 0; }
-  th, td { border: 1px solid color-mix(in srgb, var(--hint) 40%, transparent); padding: 4px 8px; text-align: left; vertical-align: top; }
+  /* A table scrolls sideways in its own box, as in Telegram, and the page
+     does not. A column is as wide as its text, up to about 18em; longer
+     text wraps at words, so a cell never shrinks to one letter a line. */
+  .tscroll {
+    width: fit-content; max-width: 100%; margin: 10px 0; overflow-x: auto;
+    overscroll-behavior-x: contain; -webkit-overflow-scrolling: touch;
+    border: 1px solid color-mix(in srgb, var(--hint) 35%, transparent); border-radius: 10px;
+  }
+  table { border-collapse: collapse; margin: 8px 0; }
+  .tscroll table { width: max-content; margin: 0; }
+  th, td {
+    border: 1px solid color-mix(in srgb, var(--hint) 35%, transparent);
+    padding: 7px 10px; text-align: left; vertical-align: top; line-height: 1.4;
+  }
+  th { background: var(--code); font-weight: 650; }
+  .tscroll tr > :first-child { border-left: none; }
+  .tscroll tr > :last-child { border-right: none; }
+  .tscroll tr:first-child > * { border-top: none; }
+  .tscroll tbody tr:last-child > *, .tscroll table > tr:last-child > * { border-bottom: none; }
+  .cell { max-width: min(18em, 72vw); overflow-wrap: break-word; }
   blockquote { margin: 8px 0; padding-left: 12px; border-left: 3px solid var(--hint); color: var(--hint); }
   .diff { font: 0.75rem/1.5 ui-monospace, Menlo, monospace; }
   .diff .file { margin: 0 0 16px; border: 1px solid color-mix(in srgb, var(--hint) 35%, transparent); border-radius: 8px; overflow-x: auto; }

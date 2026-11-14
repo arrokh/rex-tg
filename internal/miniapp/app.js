@@ -102,6 +102,26 @@
     return e;
   }
 
+  // scrollTables puts each table of rendered text in its own box that
+  // scrolls sideways, and each cell's text in a block that caps the
+  // column's width (a cell itself takes no max-width). See .tscroll.
+  function scrollTables(root) {
+    var tables = root.querySelectorAll("table");
+    for (var i = 0; i < tables.length; i++) {
+      var t = tables[i];
+      if (t.parentNode.classList.contains("tscroll")) { continue; }
+      var box = el("div", "tscroll");
+      t.parentNode.insertBefore(box, t);
+      box.appendChild(t);
+      var cells = t.querySelectorAll("th, td");
+      for (var j = 0; j < cells.length; j++) {
+        var c = el("div", "cell");
+        while (cells[j].firstChild) { c.appendChild(cells[j].firstChild); }
+        cells[j].appendChild(c);
+      }
+    }
+  }
+
   function note(msg) {
     page.className = "note";
     page.textContent = msg;
@@ -452,6 +472,7 @@
           if (d.html) {
             var c = el("div", "");
             c.innerHTML = d.html; // rendered and escaped by rex-tg
+            scrollTables(c);
             body.appendChild(c);
           }
         })
@@ -1934,6 +1955,7 @@
       if (p.kind === "control") { controlPanel(); return; }
       page.className = "";
       page.innerHTML = p.html; // rendered and escaped by rex-tg
+      scrollTables(page);
     })
     .catch(function (e) {
       note(e.message || "This page could not be loaded.");

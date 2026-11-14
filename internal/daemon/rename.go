@@ -373,8 +373,17 @@ func (r renameReport) text(name string, auto bool) string {
 	if len(r.skips) > 0 {
 		b.WriteString(" Not renamed: " + strings.Join(r.skips, "; ") + ".")
 	}
+	if r.topic {
+		b.WriteString(" " + staleTopicNote)
+	}
 	return strings.TrimSpace(b.String())
 }
+
+// staleTopicNote follows a topic rename that Telegram accepted. In a private
+// chat, Telegram keeps the new name but sends the apps no notice of it, so an
+// app that already shows the topic can keep the old name until it reloads
+// its topics. No call of the bot changes that (tdlib/telegram-bot-api#915).
+const staleTopicNote = "Telegram has the new name, but your Telegram app may show the old one until it reloads its topics (a Telegram bug)."
 
 // joinWords is "a", "a and b", or "a, b, and c".
 func joinWords(w []string) string {
