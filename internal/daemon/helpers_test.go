@@ -171,6 +171,10 @@ var testTiming = daemon.Timing{
 	DeadlineWarn:  400 * time.Millisecond,
 	AlertFollow:   100 * time.Millisecond,
 	LongPoll:      time.Second, // the shortest that Telegram takes
+	// The control panel's waits are never reached in the daemon tests.
+	ControlCoreWait: 5 * time.Second,
+	ControlOpenWait: 5 * time.Second,
+	ControlRunWait:  6 * time.Second,
 }
 
 // start runs the daemon in a goroutine.

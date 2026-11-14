@@ -1,7 +1,7 @@
 // Package miniapp serves rex-tg's Telegram Mini App: pages that are too big
 // for a chat message, such as an agent's long answer or the changes of a
-// turn, the live screen of a topic's pane, the files of its folder, and the
-// changes of its repository. The
+// turn, the live screen of a topic's pane, the files of its folder, the
+// changes of its repository, and the control panel (control.go). The
 // daemon keeps the pages and reads the screens; this package checks who
 // asks and renders them.
 //
@@ -34,7 +34,7 @@ import (
 
 // Page is what the Mini App shows.
 type Page struct {
-	Kind   string    `json:"kind"`             // KindAnswer, KindDiff, KindScreen, KindFiles or KindChanges
+	Kind   string    `json:"kind"`             // KindAnswer, KindDiff, KindScreen, KindFiles, KindChanges or KindControl
 	Title  string    `json:"title"`            // a short title
 	Text   string    `json:"text"`             // Markdown (an answer) or a unified diff
 	Thread int64     `json:"thread,omitempty"` // the topic of a screen, files or changes page
@@ -78,6 +78,8 @@ type Server struct {
 	changes func() bool          // whether the changes view is on (nil: off)
 	turn    func(Page) TurnRange // the last turn of a changes page's topic (nil: none)
 	redact  func(string) string  // cleans a file's text before it is shown
+	control Control              // the control panel (nil: off)
+	home    string               // where the control panel's folder explorer starts
 	now     func() time.Time
 	log     *slog.Logger
 	// refusedAt is when a refusal was last logged: the address is public,
@@ -194,7 +196,9 @@ var (
 // Handler serves /app (the page shell), /app.js, the terminal library,
 // /api/page?id=…,
 // /api/screen?id=…, /api/files?id=…&path=… and
-// /api/changes?id=…&base=…[&path=…&new=1]
+// /api/changes?id=…&base=…[&path=…&new=1], and the control panel's
+// /api/control?id=…, /api/control/folders?id=…&path=…[&hidden=1] and
+// POST /api/control/do?id=…
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /app", func(w http.ResponseWriter, r *http.Request) {
@@ -220,6 +224,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/screen", s.liveScreen)
 	mux.HandleFunc("GET /api/files", s.fileView)
 	mux.HandleFunc("GET /api/changes", s.changesView)
+	mux.HandleFunc("GET /api/control", s.controlState)
+	mux.HandleFunc("GET /api/control/folders", s.controlFolders)
+	mux.HandleFunc("POST /api/control/do", s.controlDo)
 	return mux
 }
 
@@ -273,7 +280,7 @@ func (s *Server) page(w http.ResponseWriter, r *http.Request) {
 	switch p.Kind {
 	case KindDiff:
 		body = RenderDiff(p.Text)
-	case KindScreen, KindFiles, KindChanges: // the page asks for its content itself
+	case KindScreen, KindFiles, KindChanges, KindControl: // the page asks for its content itself
 	default:
 		body = RenderAnswer(p.Text)
 	}

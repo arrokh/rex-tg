@@ -246,6 +246,16 @@ func (f *Fake) Calls() []Call {
 	return calls
 }
 
+// BlockLabels returns the labels that `rex block rename` gave, by block id.
+// `block ls` prints them in place of the scripted ones.
+func (f *Fake) BlockLabels() map[string]string {
+	labels := map[string]string{}
+	if b, err := os.ReadFile(filepath.Join(f.dir, "block-labels.json")); err == nil {
+		_ = json.Unmarshal(b, &labels)
+	}
+	return labels
+}
+
 // EventsPID returns the process ID of the last `rex events` run, or 0.
 func (f *Fake) EventsPID() int {
 	b, err := os.ReadFile(filepath.Join(f.dir, "events.pid"))

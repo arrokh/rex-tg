@@ -417,6 +417,19 @@ func (c *Client) RenameWindow(ctx context.Context, session, window, label string
 	return err
 }
 
+// RenameBlock gives a pane a new name. It runs `rex block rename -s SESSION
+// BLOCK LABEL`.
+func (c *Client) RenameBlock(ctx context.Context, session, block, label string) error {
+	switch {
+	case session == "" || badName(block):
+		return &Error{Command: "block rename", Err: fmt.Errorf("invalid pane %q", block)}
+	case badName(label):
+		return &Error{Command: "block rename", Err: fmt.Errorf("invalid pane name %q", label)}
+	}
+	_, err := c.run(ctx, "block rename", nil, "block", "rename", "-s", session, block, label)
+	return err
+}
+
 // RenameSession gives a session a new name. It runs `rex session rename
 // SESSION LABEL`.
 func (c *Client) RenameSession(ctx context.Context, session, label string) error {
