@@ -33,6 +33,7 @@ type ControlState struct {
 	Starters []Starter      `json:"starters"` // the agents that "New agent" can start
 	Folders  []Folder       `json:"folders"`  // folders for a new agent: the pinned ones, then recent ones
 	Home     Folder         `json:"home"`     // where the folder explorer starts
+	Topics   []TopicRow     `json:"topics"`   // every topic that is not closed, live or offline
 	Files    bool           `json:"files"`    // OpPage PageFiles is on ([miniapp] files)
 	Changes  bool           `json:"changes"`  // OpPage PageChanges is on ([miniapp] changes)
 	At       string         `json:"at"`       // when it was read, "15:04:05"
@@ -50,6 +51,8 @@ type ControlAgent struct {
 	Folder  string        `json:"folder,omitempty"`  // its working folder, with ~ for the home folder
 	Title   string        `json:"title,omitempty"`   // the session's title, redacted
 	Session string        `json:"session,omitempty"` // the Rex session the pane is in
+	Tab     string        `json:"tab,omitempty"`     // the name of the Rex tab the pane is in
+	Block   string        `json:"block"`             // the pane's id in Rex (OpNew's result names it)
 	Ready   bool          `json:"ready"`             // the session is known, so a topic can open
 	Mac     bool          `json:"mac,omitempty"`     // you work in the pane on the Mac
 	Topic   *ControlTopic `json:"topic,omitempty"`   // its topic, when it has one that is not closed
@@ -64,6 +67,23 @@ type ControlTopic struct {
 	Custom bool   `json:"custom"` // a name you gave it: "auto" names it after the session again
 }
 
+// TopicRow is a topic of the Topics tab, with the Rex session, tab, and pane
+// of its agent: the panel keeps the three in step.
+type TopicRow struct {
+	Thread    int64  `json:"thread"`
+	Name      string `json:"name"`
+	Status    string `json:"status"`               // "live" or "offline" (the agent stopped)
+	Link      string `json:"link"`                 // https://t.me/<bot>/<topic>
+	Custom    bool   `json:"custom"`               // a name you gave it (/rename)
+	Agent     string `json:"agent"`                // "Claude Code", "pi", "Codex"
+	Folder    string `json:"folder,omitempty"`     // the session's folder, with ~
+	Pane      int64  `json:"pane,omitempty"`       // the live pane's id in rex-tg (0: none now)
+	Session   string `json:"session,omitempty"`    // the Rex session of that pane
+	Tab       string `json:"tab,omitempty"`        // the Rex tab of that pane
+	PaneLabel string `json:"pane_label,omitempty"` // the pane's own name in Rex
+	Since     string `json:"since,omitempty"`      // how long ago its session last showed activity: "3h"
+}
+
 // Starter is an agent that the control panel can start.
 type Starter struct {
 	Key  string `json:"key"`  // pi, claude, cux, codex
@@ -75,6 +95,9 @@ type Folder struct {
 	Path  string `json:"path"`
 	Shown string `json:"shown"`
 	Git   bool   `json:"git,omitempty"` // in a folder list: it is the top folder of a git repository
+	// Pinned: in ControlState.Folders, a folder of [rex] new_folders. The
+	// others are recent folders, which OpForgetFolder removes.
+	Pinned bool `json:"pinned,omitempty"`
 }
 
 // FolderList is one folder of the folder explorer.
@@ -93,6 +116,14 @@ const (
 	OpPage   = "page"   // Pane, Kind: a Mini App page of the agent's topic (PageScreen, PageFiles, PageChanges)
 	OpNew    = "new"    // Agent, Path: start an agent in a new Rex tab, like /new
 	OpUnlink = "unlink" // Thread: like /unlink in the topic
+	// OpForgetFolder (Path) drops a recent folder from the panel's and /new's
+	// folder lists. It comes back when an agent runs there again.
+	OpForgetFolder = "forget_folder"
+	// OpForgetFolders drops every recent folder (the pinned ones stay).
+	OpForgetFolders = "forget_folders"
+	// OpCleanTopics unlinks every topic whose agent stopped (offline), like
+	// /unlink in each.
+	OpCleanTopics = "clean_topics"
 )
 
 // Pages that OpPage opens: what /screen's live screen, /files, and /changes
@@ -127,6 +158,9 @@ type ControlResult struct {
 	// Page is the id of a Mini App page to go to (OpPage): the page opens
 	// it as app?p=<Page>, in the same Mini App.
 	Page string `json:"page,omitempty"`
+	// Block is the Rex pane that OpNew started: the agent with this Block
+	// is the new one, once it shows in the list.
+	Block string `json:"block,omitempty"`
 }
 
 // Control is the daemon's side of the control panel.
@@ -185,6 +219,11 @@ func (a ControlAction) Check() error {
 		if a.Thread <= 0 {
 			return errors.New("no topic")
 		}
+	case OpForgetFolder:
+		if !filepath.IsAbs(a.Path) || len(a.Path) > maxPathBytes || strings.ContainsRune(a.Path, 0) {
+			return errors.New("no folder")
+		}
+	case OpForgetFolders, OpCleanTopics:
 	default:
 		return errors.New("unknown action")
 	}

@@ -15,6 +15,7 @@ import (
 	"rex-tg/internal/config"
 	"rex-tg/internal/rex"
 	"rex-tg/internal/store"
+	"rex-tg/internal/telegram"
 )
 
 // renameRex is an in-memory Rex for the rename tests.
@@ -57,6 +58,8 @@ type renameFixture struct {
 	pane store.Pane
 	conv store.Conversation
 	th   store.Thread
+	edit []string // the names that were sent to Telegram
+	err  error    // the answer of Telegram
 }
 
 // newRenameFixture makes the fixture. own puts the pane in the session of
@@ -120,6 +123,10 @@ func newRenameFixture(t *testing.T, own, shared bool) *renameFixture {
 		t.Fatal(err)
 	}
 	f.th = th
+	d.editTopicFn = func(_ store.Thread, name string) error {
+		f.edit = append(f.edit, name)
+		return f.err
+	}
 	return f
 }
 
@@ -142,7 +149,7 @@ func TestRunRename(t *testing.T) {
 		wantText              string // a part of the report
 	}{
 		{desc: "own session, own tab: syncTab renames it", own: true,
-			wantPanes: []string{"B2=X"}, wantTopic: true, wantTabRep: true, wantText: "Renamed the topic, its Rex pane, and its tab to X."},
+			wantPanes: []string{"B2=X"}, wantTabs: []string{"W1=X"}, wantTopic: true, wantTabRep: true, wantText: "Renamed the topic, its Rex pane, and its tab to X."},
 		{desc: "own session, shared tab: skipped", own: true, shared: true,
 			wantPanes: []string{"B2=X"}, wantTopic: true, wantText: "its tab (it also holds another agent)"},
 		{desc: "user session, shared tab: skipped", shared: true,
@@ -162,6 +169,9 @@ func TestRunRename(t *testing.T) {
 		{desc: "an offline topic keeps its name",
 			tweak: func(f *renameFixture, pl *renamePlan) {
 				f.th.Status = store.ThreadOffline
+				if err := f.d.st.SetThreadStatus(f.d.ctx, f.th.ID, store.ThreadOffline); err != nil {
+					panic(err)
+				}
 				pl.pane = nil
 			},
 			wantText: "the topic (it takes the name when the agent runs again)"},
@@ -180,6 +190,11 @@ func TestRunRename(t *testing.T) {
 		t.Run(c.desc, func(t *testing.T) {
 			f := newRenameFixture(t, c.own, c.shared)
 			pl := f.plan("X", c.auto)
+			if !c.auto { // what planRename keeps
+				if err := f.d.st.Set(f.d.ctx, tabUserKey(f.th.ID), "X"); err != nil {
+					t.Fatal(err)
+				}
+			}
 			if c.tweak != nil {
 				c.tweak(f, &pl)
 			}
@@ -224,5 +239,54 @@ func TestPlanRename(t *testing.T) {
 	}
 	if _, refusal := d.planRename(nil, f.pane.ID, "Billing"); refusal != "That pane is gone." {
 		t.Errorf("a gone pane: %q", refusal)
+	}
+}
+
+// An explicit rename always reaches Telegram, also when the stored name
+// equals the new one (Telegram may still show an older name), and the report
+// says what Telegram answered. A refused name is not stored.
+func TestRenameTopicReachesTelegram(t *testing.T) {
+	api := func(code int, d string) error {
+		return &telegram.APIError{Method: "editForumTopic", Code: code, Description: d}
+	}
+	cases := []struct {
+		desc       string
+		err        error
+		wantStored string // the thread's name afterwards
+		wantText   string
+	}{
+		{"edited", nil, "X", "Renamed the topic"},
+		{"Telegram has the name already", api(400, "Bad Request: TOPIC_NOT_MODIFIED"), "X", "The topic already had that name in Telegram."},
+		{"the topic is gone", api(400, "Bad Request: message thread not found"), "old", "the topic (it is gone from Telegram)"},
+		{"refused", api(400, "Bad Request: nope"), "old", "the topic (Telegram refused it; rex-tg tries again within a minute)"},
+		{"no answer", errors.New("timeout"), "old", "the topic (Telegram did not answer in time; rex-tg tries again within a minute)"},
+	}
+	for _, stored := range []string{"old", "X"} { // the stored name equal to the new one, as in the live bug
+		for _, c := range cases {
+			t.Run(c.desc+"/stored "+stored, func(t *testing.T) {
+				f := newRenameFixture(t, false, false)
+				f.err = c.err
+				if err := f.d.st.SetThreadName(f.d.ctx, f.th.ID, stored); err != nil {
+					t.Fatal(err)
+				}
+				if err := f.d.st.Set(f.d.ctx, tabUserKey(f.th.ID), "X"); err != nil {
+					t.Fatal(err)
+				}
+				rep := f.d.runRename(f.plan("X", false))
+				if len(f.edit) != 1 || f.edit[0] != "X" {
+					t.Errorf("Telegram got %q, want one edit to X", f.edit)
+				}
+				if got := rep.text("X", false); !strings.Contains(got, c.wantText) {
+					t.Errorf("text %q lacks %q", got, c.wantText)
+				}
+				want := c.wantStored
+				if want == "old" {
+					want = stored // not saved: the name stays as it was
+				}
+				if th, _ := f.d.st.Thread(f.d.ctx, f.th.ID); th.Name != want {
+					t.Errorf("stored name %q, want %q", th.Name, want)
+				}
+			})
+		}
 	}
 }

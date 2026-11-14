@@ -210,7 +210,18 @@
     flex: none; font: 600 14px/1 -apple-system, system-ui, sans-serif; color: var(--link); background: none; border: none;
     padding: 6px 4px 6px 0; cursor: pointer; min-height: 34px;
   }
-  body.ctlbody { padding-bottom: 120px; }
+  /* One natural scroll. The bottom padding keeps the last rows clear of the
+     home indicator, and of Telegram's MainButton on the New agent tab. */
+  body.ctlbody {
+    min-height: var(--tg-viewport-stable-height, 100dvh);
+    padding-top: var(--sai-top, 0px);
+    padding-left: max(16px, var(--sai-left, 0px)); padding-right: max(16px, var(--sai-right, 0px));
+    padding-bottom: calc(28px + env(safe-area-inset-bottom, 0px) + var(--sai-bottom, 0px));
+  }
+  body.ctlbody.has-mb.on-new { padding-bottom: calc(104px + env(safe-area-inset-bottom, 0px) + var(--sai-bottom, 0px)); }
+  body.ctlbody.on-new .top { padding: 6px 0; margin-bottom: 4px; }
+  .card { scroll-margin: 200px 0 100px; }
+  .view-topics[hidden] { display: none; }
   .top.stack { flex-wrap: wrap; row-gap: 8px; }
   .ctl-head { flex: 1 0 100%; display: flex; flex-direction: column; gap: 8px; }
   .banner {
@@ -220,10 +231,11 @@
   .banner[hidden], .errbar[hidden], [hidden].ibtn, [hidden].chip { display: none; }
   .segc { display: flex; gap: 3px; padding: 3px; border-radius: 11px; background: var(--code); }
   .segc button {
-    flex: 1; height: 32px; border: none; border-radius: 8px; background: none; color: var(--fg); cursor: pointer;
-    font: 600 14px/1 -apple-system, system-ui, sans-serif; display: flex; align-items: center; justify-content: center; gap: 6px;
+    flex: 1; min-width: 0; height: 32px; padding: 0 4px; white-space: nowrap; border: none; border-radius: 8px; background: none; color: var(--fg); cursor: pointer;
+    font: 600 13px/1 -apple-system, system-ui, sans-serif; display: flex; align-items: center; justify-content: center; gap: 5px;
   }
   .segc button.on { background: var(--bg); box-shadow: 0 1px 3px rgba(0, 0, 0, 0.22); }
+  .cnt[hidden] { display: none; }
   .cnt { min-width: 18px; padding: 2px 5px; border-radius: 9px; font-size: 11px; background: var(--btn); color: var(--btn-fg); }
   .schips { display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; padding-bottom: 1px; }
   .schips::-webkit-scrollbar { display: none; }
@@ -312,7 +324,6 @@
     box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--hint) 20%, transparent); font: inherit;
   }
   .acard .an { font-weight: 650; font-size: 0.9375rem; }
-  .acard .ak { font: 0.75rem ui-monospace, Menlo, monospace; color: var(--hint); }
   .acard.on { box-shadow: inset 0 0 0 2px var(--btn); background: color-mix(in srgb, var(--btn) 14%, var(--code)); }
   .fchips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
   .fchips .chip { height: 34px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
@@ -324,7 +335,7 @@
   .sep { color: var(--hint); flex: none; }
   .etools { display: flex; gap: 6px; align-items: center; margin-bottom: 6px; }
   .etools .txt { height: 36px; font-size: 15px; }
-  .frows { display: flex; flex-direction: column; max-height: 46vh; overflow-y: auto; margin: 0 -2px; }
+  .frows { display: flex; flex-direction: column; margin: 0 -2px; }
   .frow {
     display: flex; align-items: center; gap: 8px; min-height: 42px; padding: 4px 8px; border: none; border-radius: 8px; background: none; color: var(--fg);
     font: 0.9375rem/1.3 -apple-system, system-ui, sans-serif; text-align: left; cursor: pointer; flex: none;
@@ -338,6 +349,34 @@
   .summary { margin: 16px 4px 4px; font-size: 0.9375rem; overflow-wrap: anywhere; }
   .muted { color: var(--hint); }
   .hint { color: var(--hint); font-size: 0.8125rem; margin: 4px 4px 0; }
+  .schips.wrapchips { flex-wrap: wrap; overflow: visible; }
+  .pill { flex: none; padding: 2px 8px; border-radius: 9px; font-size: 0.6875rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em; }
+  .pill.live { background: color-mix(in srgb, var(--ok) 22%, transparent); color: var(--ok); }
+  .pill.stopped { background: color-mix(in srgb, var(--hint) 22%, transparent); color: var(--hint); }
+  .cmap { margin-top: 4px; font-size: 0.8125rem; color: var(--hint); overflow-wrap: anywhere; }
+  .cdetail .hint { margin: 6px 0 0; }
+  .card.starting { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 12px; border-left-color: var(--warn); border-style: dashed; }
+  .card.starting.lost { border-left-color: var(--hint); }
+  .starting .stext { min-width: 0; }
+  .card.pulse { outline: 2px solid var(--btn); outline-offset: 1px; animation: pulse 1.2s ease-out 3; }
+  @keyframes pulse { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--btn) 55%, transparent); } 100% { box-shadow: 0 0 0 14px transparent; } }
+  /* recent folders: a list, not chips */
+  .recent { margin-bottom: 12px; }
+  .rhead { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 0 4px 6px; }
+  .rlabel { font-size: 0.8125rem; color: var(--hint); }
+  .rlist { display: flex; flex-direction: column; border-radius: 12px; background: var(--code); overflow: hidden; }
+  .fitem { display: flex; align-items: center; border-top: 1px solid color-mix(in srgb, var(--hint) 16%, transparent); }
+  .fitem:first-child { border-top: none; }
+  .fitem.on { background: color-mix(in srgb, var(--btn) 14%, var(--code)); box-shadow: inset 3px 0 0 var(--btn); }
+  .fmain { flex: 1; min-width: 0; min-height: 44px; display: flex; align-items: center; gap: 8px; padding: 4px 10px; border: none; background: none; color: var(--fg); text-align: left; cursor: pointer; font: inherit; }
+  .fpath { flex: 1; min-width: 0; display: flex; font: 0.8125rem/1.3 ui-monospace, Menlo, monospace; }
+  .fhead { min-width: 0; flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--hint); }
+  .ftail { flex: 0 0 auto; max-width: 100%; white-space: nowrap; font-weight: 600; overflow: hidden; text-overflow: ellipsis; }
+  .fx { flex: none; width: 44px; height: 44px; border: none; background: none; color: var(--hint); font-size: 15px; cursor: pointer; }
+  .rmore { margin: 8px 4px 0; }
+  .btn.sticky { position: sticky; bottom: calc(12px + env(safe-area-inset-bottom, 0px)); z-index: 2; box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25); }
+  .explorer .btn.wide { margin: 0 0 8px; }
+  @media (prefers-reduced-motion: reduce) { .card.pulse { animation: none; } }
   /* bottom sheet */
   .scrim { position: fixed; inset: 0; z-index: 20; background: rgba(0, 0, 0, 0.45); display: flex; align-items: flex-end; justify-content: center; }
   .sheet {

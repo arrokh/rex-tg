@@ -1,6 +1,7 @@
 package daemon_test
 
 import (
+	"context"
 	"fmt"
 	"slices"
 	"sync/atomic"
@@ -183,6 +184,7 @@ func TestRenameCommandNamesTheTopicAndItsTab(t *testing.T) {
 	e.seedOwner()
 	e.tabSession("pane one")
 	e.fake.On([]string{"block", "rename"}, "", 0)
+	e.fake.FollowWindowRenames() // Rex shows a tab's new name
 	p := e.newPi("pi-rename")
 	p.User("start")
 	p.Final("ready")
@@ -216,6 +218,21 @@ func TestRenameCommandNamesTheTopicAndItsTab(t *testing.T) {
 	}
 	if got := e.tabRenames(); !slices.Equal(got, []string{"explore lovina"}) {
 		t.Errorf("tab renames %q, want one", got)
+	}
+
+	// The same name again still reaches Telegram, which says it has it.
+	edits := len(e.tg.Calls("editForumTopic"))
+	e.say(thread, "/rename explore lovina")
+	e.waitText(thread, "The topic already had that name in Telegram.")
+	if n := len(e.tg.Calls("editForumTopic")); n <= edits {
+		t.Errorf("%d editForumTopic calls after the repeat, want more than %d", n, edits)
+	}
+	// A name that Telegram refuses is not saved, and the reply says so.
+	e.tg.FailNext("editForumTopic", 1, 400, "Bad Request: nope", 0)
+	e.say(thread, "/rename other name")
+	e.waitText(thread, "the topic (Telegram refused it; rex-tg tries again")
+	if th, err := e.peek().Thread(context.Background(), 1); err != nil || th.Name != "explore lovina" {
+		t.Errorf("stored name after a refused rename: %+v %v", th, err)
 	}
 
 	e.setTab("explore lovina")

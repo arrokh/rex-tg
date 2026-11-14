@@ -17,6 +17,7 @@ import (
 	"rex-tg/internal/format"
 	"rex-tg/internal/miniapp"
 	"rex-tg/internal/registry"
+	"rex-tg/internal/rex"
 	"rex-tg/internal/store"
 	"rex-tg/internal/telegram"
 )
@@ -49,6 +50,7 @@ type controlPanel struct {
 	sessMu  sync.Mutex
 	sessAt  time.Time
 	sessLbl map[string]string // Rex session id -> label
+	tabOf   map[string]string // "<session>/<block>" -> the name of its tab
 }
 
 var _ miniapp.Control = (*controlPanel)(nil)
@@ -101,25 +103,42 @@ func (c *controlPanel) onCore(ctx context.Context, f func()) bool {
 	return false
 }
 
-// sessionLabels returns the Rex sessions' names, at most controlSessTTL old.
-func (c *controlPanel) sessionLabels(ctx context.Context) map[string]string {
+// rexNames returns the Rex sessions' names, and the tab (window) name of each
+// pane by "<session>/<block>", at most controlSessTTL old: one list of
+// sessions, panes, and tabs per refresh, however many agents show.
+func (c *controlPanel) rexNames(ctx context.Context) (labels, tabs map[string]string) {
 	c.sessMu.Lock()
 	defer c.sessMu.Unlock()
 	if c.sessLbl != nil && c.d.now().Sub(c.sessAt) < controlSessTTL {
-		return c.sessLbl
+		return c.sessLbl, c.tabOf
 	}
-	sctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	sctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	ss, err := c.d.rx.Sessions(sctx)
 	if err != nil {
-		return c.sessLbl // the old list, or none
+		return c.sessLbl, c.tabOf // the old lists, or none
 	}
-	m := make(map[string]string, len(ss))
+	labels = make(map[string]string, len(ss))
+	tabs = map[string]string{}
 	for _, s := range ss {
-		m[s.ID] = s.Label
+		labels[s.ID] = s.Label
+		blocks, err1 := c.d.rx.Blocks(sctx, s.ID)
+		windows, err2 := c.d.rx.Windows(sctx, s.ID)
+		if err1 != nil || err2 != nil {
+			continue // its panes show without a tab
+		}
+		names := map[string]string{}
+		for _, w := range windows {
+			names[w.ID] = w.Label
+		}
+		for _, b := range blocks {
+			if l, ok := names[b.WindowID]; ok {
+				tabs[s.ID+"/"+b.ID] = l
+			}
+		}
 	}
-	c.sessLbl, c.sessAt = m, c.d.now()
-	return m
+	c.sessLbl, c.tabOf, c.sessAt = labels, tabs, c.d.now()
+	return labels, tabs
 }
 
 // State reads what the panel shows.
@@ -136,7 +155,7 @@ func (c *controlPanel) State(ctx context.Context) (miniapp.ControlState, error) 
 	if c.onCore(ctx, func() { macCh <- d.macThreads() }) {
 		mac = <-macCh
 	}
-	labels := c.sessionLabels(ctx)
+	labels, tabs := c.rexNames(ctx)
 	now := d.now()
 	views = slices.Clone(views)
 	slices.SortStableFunc(views, func(a, b registry.AgentView) int {
@@ -166,6 +185,8 @@ func (c *controlPanel) State(ctx context.Context) (miniapp.ControlState, error) 
 			Folder:  d.tildePath(cwd),
 			Title:   format.Truncate(format.Redact(title), 100),
 			Session: labels[v.Pane.Session],
+			Tab:     tabs[v.Pane.Session+"/"+v.Pane.Block],
+			Block:   v.Pane.Block,
 			Ready:   v.Conversation != nil,
 		}
 		if v.Conversation != nil {
@@ -192,10 +213,57 @@ func (c *controlPanel) State(ctx context.Context) (miniapp.ControlState, error) 
 	for _, s := range d.newAgents() {
 		st.Starters = append(st.Starters, miniapp.Starter{Key: s.key, Name: s.name()})
 	}
-	for _, dir := range d.newFolders(d.ownerChat, 0) {
-		st.Folders = append(st.Folders, miniapp.Folder{Path: dir, Shown: d.tildePath(dir)})
+	for _, f := range d.folderChoices(d.ownerChat, 0, maxPanelFolders) {
+		st.Folders = append(st.Folders, miniapp.Folder{Path: f.path, Shown: d.tildePath(f.path), Pinned: f.pinned})
 	}
+	st.Topics = c.topics(ctx, mac, labels, tabs)
 	return st, nil
+}
+
+// topics lists every topic that is not closed, the newest activity first,
+// each with the Rex session, tab, and pane of its agent when it has a pane.
+func (c *controlPanel) topics(ctx context.Context, mac map[int64]bool, labels, tabs map[string]string) []miniapp.TopicRow {
+	d := c.d
+	rows := []miniapp.TopicRow{}
+	ths, err := d.st.Threads(ctx, store.ThreadLive, store.ThreadOffline)
+	if err != nil {
+		return rows
+	}
+	now := d.now()
+	type row struct {
+		r  miniapp.TopicRow
+		at time.Time
+	}
+	var list []row
+	for _, th := range ths {
+		_, custom, _ := d.st.Get(ctx, tabUserKey(th.ID))
+		status := "live"
+		if th.Status == store.ThreadOffline {
+			status = "offline"
+		}
+		r := miniapp.TopicRow{
+			Thread: th.ID, Name: format.Redact(strings.TrimPrefix(th.Name, offlineMark)), Status: status,
+			Link: d.topicLink(th.MessageThreadID), Custom: custom,
+		}
+		at := th.CreatedAt
+		if conv, err := d.st.Conversation(ctx, th.CurrentConversationID); err == nil {
+			r.Agent, r.Folder = runtimeName(conv.Runtime), d.tildePath(conv.CWD)
+			if cur, ok, err := d.st.Cursor(ctx, conv.Transcript); err == nil && ok && cur.LastEventAt.After(at) {
+				at = cur.LastEventAt
+			}
+			if p, ok, err := d.st.PaneByConversation(ctx, conv.ID); err == nil && ok && p.GoneAt.IsZero() {
+				r.Pane, r.Session, r.Tab = p.ID, labels[p.Session], tabs[p.Session+"/"+p.Block]
+				r.PaneLabel = paneName(p.Label)
+			}
+		}
+		r.Since = agoText(now, at)
+		list = append(list, row{r, at})
+	}
+	slices.SortStableFunc(list, func(a, b row) int { return b.at.Compare(a.at) })
+	for _, x := range list {
+		rows = append(rows, x.r)
+	}
+	return rows
 }
 
 // --- the claim ---
@@ -294,7 +362,11 @@ func (c *controlPanel) dispatch(a miniapp.ControlAction) (miniapp.ControlResult,
 	case miniapp.OpPage:
 		res, wait = c.page(a)
 	case miniapp.OpNew:
-		res = c.newAgent(a)
+		res, wait = c.newAgent(a)
+	case miniapp.OpForgetFolder, miniapp.OpForgetFolders:
+		res, wait = c.forgetFolders(a)
+	case miniapp.OpCleanTopics:
+		res = c.cleanTopics()
 	case miniapp.OpUnlink:
 		res = c.unlink(a)
 	default:
@@ -399,8 +471,8 @@ func (c *controlPanel) rename(a miniapp.ControlAction) (miniapp.ControlResult, <
 	}
 	return miniapp.ControlResult{}, c.background(a.Act, func() miniapp.ControlResult {
 		rep := d.runRename(pl)
-		res := miniapp.ControlResult{OK: rep.topic || rep.pane || rep.tab, Message: plainText(rep.text(pl.name, pl.auto))}
-		if pl.th != nil && rep.topic {
+		res := miniapp.ControlResult{OK: rep.topic || rep.topicSame || rep.pane || rep.tab, Message: plainText(rep.text(pl.name, pl.auto))}
+		if pl.th != nil && (rep.topic || rep.topicSame) {
 			res.Link = d.topicLink(pl.th.MessageThreadID)
 		}
 		return res
@@ -462,32 +534,128 @@ func (c *controlPanel) page(a miniapp.ControlAction) (miniapp.ControlResult, <-c
 	})
 }
 
-// newAgent starts an agent, like /new <agent> <folder> (core).
-func (c *controlPanel) newAgent(a miniapp.ControlAction) miniapp.ControlResult {
+// newAgent starts an agent, like /new <agent> <folder> (core). The result
+// comes once the tab exists, with the pane's Rex block; the wait for the
+// agent, the progress in the main chat, and the topic go on as for /new.
+func (c *controlPanel) newAgent(a miniapp.ControlAction) (miniapp.ControlResult, <-chan miniapp.ControlResult) {
 	d := c.d
 	if d.paused.Load() {
-		return controlFail(plainText(newPausedText))
+		return controlFail(plainText(newPausedText)), nil
 	}
 	ag, ok := findAgent(d.newAgents(), a.Agent)
 	if !ok {
-		return controlFail("There is no such agent.")
+		return controlFail("There is no such agent."), nil
 	}
 	if strings.ContainsAny(a.Path, "\r\n") || !filepath.IsAbs(a.Path) {
-		return controlFail("That is not a folder.")
+		return controlFail("That is not a folder."), nil
 	}
 	dir := filepath.Clean(a.Path)
 	if !isDir(dir) {
-		return controlFail("There is no such folder.")
+		return controlFail("There is no such folder."), nil
 	}
 	if !c.folderAllowed(dir) {
-		return controlFail("That folder is outside your home folder and not one of the folders rex-tg offers.")
+		return controlFail("That folder is outside your home folder and not one of the folders rex-tg offers."), nil
 	}
 	d.newSeq++
 	f := &newFlow{seq: d.newSeq, chat: d.ownerChat, step: newStarting, agent: ag, offered: d.newAgents(), expires: d.now().Add(newExpiry)}
 	token := newToken()
 	d.newFlows[token] = f
-	d.spawn(func() { d.launch(token, 0, d.ownerChat, 0, ag, dir) })
-	return miniapp.ControlResult{OK: true, Message: "Starting " + ag.name() + " in " + d.tildePath(dir) + ". The progress is in the main chat."}
+	type start struct {
+		st   rex.Started
+		fail string
+	}
+	got := make(chan start, 1) // launchWith calls back once
+	d.spawn(func() {
+		d.launchWith(token, 0, d.ownerChat, 0, ag, dir, func(st rex.Started, fail string) { got <- start{st, fail} })
+	})
+	return miniapp.ControlResult{}, c.background(a.Act, func() miniapp.ControlResult {
+		// launchWith calls back once on every path, after Rex answers or
+		// times out. Until then the request is pending: a retry with the same
+		// act gets this result, with the new pane, when it comes.
+		select {
+		case s := <-got:
+			if s.fail != "" {
+				return controlFail(s.fail)
+			}
+			return miniapp.ControlResult{OK: true, Block: s.st.BlockID,
+				Message: "Starting " + ag.name() + " in " + d.tildePath(dir) + ". The progress is in the main chat."}
+		case <-d.ctx.Done():
+			return controlFail("rex-tg stopped while the agent started. Check the list before you try again.")
+		case <-d.ctx.Done():
+			return controlFail("rex-tg is stopping.")
+		}
+	})
+}
+
+// forgetFolders hides one recent folder, or all of them, from the lists of
+// the panel and /new (worker). The folder returns when a session in it is
+// used again. A pinned folder (rex.new_folders) is never hidden.
+func (c *controlPanel) forgetFolders(a miniapp.ControlAction) (miniapp.ControlResult, <-chan miniapp.ControlResult) {
+	d := c.d
+	return miniapp.ControlResult{}, c.background(a.Act, func() miniapp.ControlResult {
+		choices := d.folderChoices(d.ownerChat, 0, maxPanelFolders)
+		hide := func(dir string) bool {
+			return d.st.Set(d.ctx, folderHiddenKey(dir), strconv.FormatInt(d.now().UnixMilli(), 10)) == nil
+		}
+		if a.Op == miniapp.OpForgetFolder {
+			dir := filepath.Clean(a.Path)
+			i := slices.IndexFunc(choices, func(f folderChoice) bool { return f.path == dir })
+			switch {
+			case i < 0:
+				return controlFail("That folder is not in the list.")
+			case choices[i].pinned:
+				return controlFail("That folder is pinned in [rex] new_folders. Remove it from the settings to drop it.")
+			case !hide(dir):
+				return controlFail("Could not forget the folder now. Try again.")
+			}
+			return miniapp.ControlResult{OK: true, Message: "Forgot " + d.tildePath(dir) + ". It comes back when an agent runs there again."}
+		}
+		// Every recent folder, not only the ones the list shows: the next
+		// ones would take their places.
+		pinned := map[string]bool{}
+		for _, f := range choices {
+			if f.pinned {
+				pinned[f.path] = true
+			}
+		}
+		hidden := d.hiddenFolders()
+		recent, err := d.st.RecentFolderUses(d.ctx, maxRecentFolders)
+		if err != nil {
+			return controlFail("Could not read the recent folders now. Try again.")
+		}
+		n := 0
+		for _, u := range recent {
+			if at, ok := hidden[u.Path]; ok && folderHidden(at, u.Started) {
+				continue // forgotten already
+			}
+			if !pinned[u.Path] && hide(u.Path) {
+				n++
+			}
+		}
+		if n == 0 {
+			return controlFail("No recent folders to forget.")
+		}
+		return miniapp.ControlResult{OK: true, Message: fmt.Sprintf("Forgot %d recent folder(s). Pinned folders stay.", n)}
+	})
+}
+
+// cleanTopics unlinks every topic whose agent stopped, as /unlink does (core).
+func (c *controlPanel) cleanTopics() miniapp.ControlResult {
+	d := c.d
+	ths, err := d.st.Threads(d.ctx, store.ThreadOffline)
+	if err != nil {
+		return controlFail("Could not list the topics now. Try again.")
+	}
+	if len(ths) == 0 {
+		return controlFail("No stopped topics.")
+	}
+	for _, th := range ths {
+		d.unlink(th)
+	}
+	if len(ths) == 1 {
+		return miniapp.ControlResult{OK: true, Message: "Unlinked 1 stopped topic."}
+	}
+	return miniapp.ControlResult{OK: true, Message: fmt.Sprintf("Unlinked %d stopped topics.", len(ths))}
 }
 
 // unlink is /unlink in the topic (core).
@@ -550,11 +718,40 @@ func (c *controlPanel) folderAllowed(dir string) bool {
 			return true
 		}
 	}
-	return slices.Contains(d.newFolders(d.ownerChat, 0), dir)
+	return slices.ContainsFunc(d.folderChoices(d.ownerChat, 0, maxPanelFolders), func(f folderChoice) bool { return f.path == dir })
 }
 
 // insideDir tells whether p is root or below it.
 func insideDir(root, p string) bool {
 	root = filepath.Clean(root)
 	return p == root || strings.HasPrefix(p, strings.TrimSuffix(root, string(filepath.Separator))+string(filepath.Separator))
+}
+
+// maxRecentFolders is how many recent folders "Clean up" forgets and
+// housekeeping keeps the records of.
+const maxRecentFolders = 100
+
+// pruneFolderHides drops the forgotten-folder records of folders that are gone
+// from the disk or no longer among the 100 most recent folders (housekeeping,
+// a worker). A record is otherwise kept, so a folder that stays in the lists
+// does not come back by itself: only a newer session brings it back.
+func (d *daemon) pruneFolderHides() {
+	keys, err := d.st.KeysWithPrefix(d.ctx, "folder_hidden:")
+	if err != nil || len(keys) == 0 {
+		return
+	}
+	uses, err := d.st.RecentFolderUses(d.ctx, maxRecentFolders)
+	if err != nil {
+		return
+	}
+	recent := map[string]bool{}
+	for _, u := range uses {
+		recent[u.Path] = true
+	}
+	for _, k := range keys {
+		dir := strings.TrimPrefix(k, "folder_hidden:")
+		if !recent[dir] || !isDir(dir) {
+			_ = d.st.Delete(d.ctx, k)
+		}
+	}
 }

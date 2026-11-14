@@ -246,6 +246,15 @@ func (f *Fake) Calls() []Call {
 	return calls
 }
 
+// FollowWindowRenames makes `rex window rename` change the label that
+// `window ls` prints for that tab, as real Rex does. Without it the tab
+// names stay as scripted.
+func (f *Fake) FollowWindowRenames() {
+	if err := os.WriteFile(filepath.Join(f.dir, "follow-windows"), nil, 0o600); err != nil {
+		f.t.Fatal(err)
+	}
+}
+
 // BlockLabels returns the labels that `rex block rename` gave, by block id.
 // `block ls` prints them in place of the scripted ones.
 func (f *Fake) BlockLabels() map[string]string {

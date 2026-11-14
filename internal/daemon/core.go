@@ -156,6 +156,8 @@ type daemon struct {
 	wg     sync.WaitGroup
 	events chan any
 	regq   *jobQueue
+	// editTopicFn replaces the Telegram call that sets a topic's name (tests).
+	editTopicFn func(th store.Thread, name string) error
 
 	paused     atomic.Bool
 	answering  sync.Map      // alert ids whose answer is being sent

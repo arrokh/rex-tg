@@ -111,12 +111,20 @@ func main() {
 		waitOrExitWhenOrphaned(time.Duration(r.DelayMS) * time.Millisecond)
 	}
 	out := r.Stdout
+	if _, err := os.Stat(filepath.Join(dir, "follow-windows")); err == nil && r.Exit == 0 && len(stripped) >= 2 && stripped[0] == "window" {
+		switch {
+		case stripped[1] == "rename" && len(stripped) == 6: // window rename -s SESSION WINDOW LABEL
+			setLabel(dir, "window-labels.json", stripped[4], stripped[5])
+		case stripped[1] == "ls":
+			out = relabel(dir, "window-labels.json", out, "windows", "window_id")
+		}
+	}
 	if r.Exit == 0 && len(stripped) >= 2 && stripped[0] == "block" {
 		switch {
 		case stripped[1] == "rename" && len(stripped) == 6: // block rename -s SESSION BLOCK LABEL
-			setBlockLabel(dir, stripped[4], stripped[5])
+			setLabel(dir, "block-labels.json", stripped[4], stripped[5])
 		case stripped[1] == "ls":
-			out = relabelBlocks(dir, out)
+			out = relabel(dir, "block-labels.json", out, "blocks", "block_id")
 		}
 	}
 	fmt.Fprint(os.Stdout, out)
@@ -216,39 +224,39 @@ func logCall(dir string, c call) {
 
 // A `block rename` that the scenario answers with success changes the label
 // that `block ls` prints for that block. The labels are kept in the file
-// block-labels.json next to the scenario.
-func setBlockLabel(dir, block, label string) {
-	labels := readBlockLabels(dir)
-	labels[block] = label
+// block-labels.json next to the scenario. A `window rename` does the same
+// for `window ls` (window-labels.json), once the test turned that on
+// (Fake.FollowWindowRenames): tests that script tab names by hand keep them.
+func setLabel(dir, file, id, label string) {
+	labels := readLabels(dir, file)
+	labels[id] = label
 	b, _ := json.Marshal(labels)
-	_ = writeAtomic(filepath.Join(dir, "block-labels.json"), b)
+	_ = writeAtomic(filepath.Join(dir, file), b)
 }
 
-func readBlockLabels(dir string) map[string]string {
+func readLabels(dir, file string) map[string]string {
 	labels := map[string]string{}
-	if b, err := os.ReadFile(filepath.Join(dir, "block-labels.json")); err == nil {
+	if b, err := os.ReadFile(filepath.Join(dir, file)); err == nil {
 		_ = json.Unmarshal(b, &labels)
 	}
 	return labels
 }
 
-// relabelBlocks applies the renamed labels to the blocks of a `block ls`
-// answer.
-func relabelBlocks(dir, out string) string {
-	labels := readBlockLabels(dir)
+// relabel applies the renamed labels to the entries (list, with the id
+// field idKey) of a listing.
+func relabel(dir, file, out, list, idKey string) string {
+	labels := readLabels(dir, file)
 	if len(labels) == 0 {
 		return out
 	}
-	var doc struct {
-		Blocks []map[string]any `json:"blocks"`
-	}
+	var doc map[string][]map[string]any
 	if json.Unmarshal([]byte(out), &doc) != nil {
 		return out
 	}
-	for _, b := range doc.Blocks {
-		if id, _ := b["block_id"].(string); id != "" {
+	for _, e := range doc[list] {
+		if id, _ := e[idKey].(string); id != "" {
 			if l, ok := labels[id]; ok {
-				b["label"] = l
+				e["label"] = l
 			}
 		}
 	}
