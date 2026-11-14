@@ -105,11 +105,39 @@ func TestEffortCommandIsTypedAndChecked(t *testing.T) {
 	e.say(thread, "/info")
 	e.waitText(thread, "Thinking level: <code>medium</code>")
 
-	// //model still goes to the agent unchanged.
-	e.say(thread, "//model x")
+	// //model still goes to the agent unchanged. Like any slash command
+	// typed for the agent (/restart, /compact), it gets its 👍 once typed:
+	// no prompt line would ever confirm it.
+	own := e.say(thread, "//model x")
 	e.waitFor("the agent's own command", func() bool { return len(e.pastes()) == 2 })
 	if got := e.pastes()[1]; got != "/model x" {
 		t.Errorf("pasted %q, want /model x", got)
+	}
+	e.waitFor("the 👍 of the agent's own command", func() bool { m, _ := e.message(own); return m.Reaction == "👍" })
+
+	// A command that rex-tg does not know (Claude Code's /restart) goes to
+	// the agent as it is, gets its 👍 once typed, and its row stays
+	// delivered: no transcript line confirms it.
+	restart := e.say(thread, "/restart")
+	e.waitFor("the restart command", func() bool { return len(e.pastes()) == 3 })
+	if got := e.pastes()[2]; got != "/restart" {
+		t.Errorf("pasted %q, want /restart", got)
+	}
+	e.waitFor("the 👍 of /restart", func() bool { m, _ := e.message(restart); return m.Reaction == "👍" })
+	th, ok, err := e.peek().ThreadByTopic(context.Background(), chatID, thread)
+	if err != nil || !ok {
+		t.Fatalf("topic: %v %v", ok, err)
+	}
+	rows, err := e.peek().DeliveredSince(context.Background(), th.ID, time.Now().Add(-time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, r := range rows {
+		found = found || r.Body == "/restart"
+	}
+	if !found {
+		t.Errorf("the /restart row is not delivered: %+v", rows)
 	}
 }
 

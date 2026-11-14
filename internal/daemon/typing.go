@@ -682,14 +682,6 @@ func (d *daemon) onTyped(e evTyped) {
 	}
 	control := d.controlTyped(e.in.UpdateID, true)
 	d.react(e.in, "👀")
-	if control {
-		// An agent's slash command (/model) usually writes no prompt, so no
-		// echo would give it 👍: typed is done. The row stays delivered,
-		// so an agent that does echo it is still known to come from
-		// Telegram, not the Mac.
-		d.react(e.in, "👍")
-		return
-	}
 	if dl != nil && dl.echoKey != "" {
 		// The agent recorded the prompt before the typing call returned.
 		// The reactions still go out in order: 👀, then 👍.
@@ -697,6 +689,16 @@ func (d *daemon) onTyped(e evTyped) {
 			d.log.Warn("ack inbound", "err", err)
 		}
 		d.react(e.in, "👍")
+		return
+	}
+	if control || inbound.SlashCommand(e.in.Body) {
+		// An agent's slash command (/model, /restart, /compact) usually
+		// writes no prompt, so no echo would give it 👍: typed is done. Any
+		// kind of row counts: a file's caption comes first in its text. The
+		// row stays delivered, so an agent that does echo it is still known
+		// to come from Telegram, not the Mac.
+		d.react(e.in, "👍")
+		delete(d.extra, e.in.UpdateID) // 👍 is its last reaction
 	}
 }
 

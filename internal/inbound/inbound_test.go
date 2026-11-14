@@ -74,6 +74,40 @@ func TestRouteTextAllCommands(t *testing.T) {
 	}
 }
 
+func TestSlashCommand(t *testing.T) {
+	for text, want := range map[string]bool{
+		"/restart":                 true,
+		"  /restart  ":             true,
+		"/compact keep the tests":  true,
+		"/compact\nkeep the tests": true,
+		"/cux:switch 2":            true,
+		"/frontend-design:design":  true,
+		"/skill:my_skill-2 arg":    true,
+		"/compact\tnow":            true,
+		"/restart\r\n":             true,
+		"/Model opus":              true,
+		"/tmp/a.log what is this":  false, // a path
+		"/Users/me":                false,
+		"/README.md what is it":    false,
+		"/a.b/c":                   false,
+		"//restart":                false, // RouteText strips one slash first
+		"/restart@bot":             false,
+		"/":                        false,
+		"/ restart":                false,
+		"/2fa":                     false,
+		"/-x":                      false,
+		"/héllo":                   false,
+		"restart":                  false,
+		"please /restart":          false,
+		"!ls":                      false,
+		"":                         false,
+	} {
+		if got := inbound.SlashCommand(text); got != want {
+			t.Errorf("SlashCommand(%q) = %v, want %v", text, got, want)
+		}
+	}
+}
+
 func allOK() inbound.Facts {
 	return inbound.Facts{FromOwner: true, OwnerChat: true, TopicLive: true, PaneExists: true, AgentInFront: true}
 }

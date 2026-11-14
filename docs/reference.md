@@ -86,7 +86,7 @@ Doctor checks:
 
 ### Commands in a topic
 
-Text that starts with `/` goes to the agent, except the commands below and the main-chat commands (`/agents`, `/new`, and so on). `//name` sends `/name` to the agent.
+Text that starts with `/` goes to the agent, except the commands below and the main-chat commands (`/agents`, `/new`, and so on). `//name` sends `/name` to the agent. Such an agent command, like `/restart` or `/compact`, waits until the agent is idle. An agent does not record its slash commands as prompts, so the 👍 comes as soon as the command is typed.
 
 | Command | What it does |
 | --- | --- |
@@ -147,7 +147,7 @@ Text that starts with `/` goes to the agent, except the commands below and the m
 ### `/model` and `/effort`
 
 - `/model` and `/effort` with no value show the current value and buttons. `/model opus` or `/effort high` set a value at once. Use `/model <name>` for a model that has no button.
-- rex-tg types the agent's own command, such as `/model opus`, like a message. It waits until the agent is idle, and every safety check applies. A button press gets no 👀 on your message, but the bot says "⚙️ Sending …". The agent writes no prompt for a slash command, so the 👍 comes as soon as it is typed.
+- rex-tg types the agent's own command, such as `/model opus`, like a message. It waits until the agent is idle, and every safety check applies. A button press gets no 👀 on your message, but the bot says "⚙️ Sending …". The agent writes no prompt for a slash command, so the 👍 comes as soon as it is typed. This holds for every slash command you send to the agent, such as `/restart`.
 - The commands by agent:
 
 | Agent | `/model <v>` types | `/effort <v>` types | Values of `/effort` |

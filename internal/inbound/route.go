@@ -48,6 +48,39 @@ func setOf(names ...string) map[string]bool {
 	return m
 }
 
+// SlashCommand tells whether text is an agent's slash command: "/" and a name
+// of ASCII letters, digits, "-", "_", and ":", which starts with a letter,
+// alone or followed by its arguments. Examples: "/restart", "/compact keep
+// the tests", "/cux:switch 2". A path such as "/tmp/a.log" or "/README.md"
+// is not one; a one-word path such as "/tmp" cannot be told apart. steerable
+// and TakesQuote take every text that starts with "/" on purpose: a path
+// also waits for an idle agent and takes no quote. An agent runs such
+// a command without writing it as a prompt: Claude Code writes "/restart" as
+// a system line, and "/new" as "/clear" (seen live, 2.1.322). So no echo
+// confirms it.
+func SlashCommand(text string) bool {
+	t := strings.TrimSpace(text)
+	if !strings.HasPrefix(t, "/") {
+		return false
+	}
+	name := t[1:]
+	if i := strings.IndexAny(name, " \t\r\n"); i >= 0 {
+		name = name[:i]
+	}
+	if name == "" || !isASCIILetter(name[0]) {
+		return false
+	}
+	for i := 0; i < len(name); i++ {
+		c := name[i]
+		if !isASCIILetter(c) && (c < '0' || c > '9') && !strings.ContainsRune("-_:", rune(c)) {
+			return false
+		}
+	}
+	return true
+}
+
+func isASCIILetter(c byte) bool { return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' }
+
 // RouteText decides what to do with an incoming text message.
 //
 // In a topic, the topic commands and the main-chat commands are bot commands;
