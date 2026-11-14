@@ -86,7 +86,29 @@ func (s *Store) ConversationByNative(ctx context.Context, rt agents.Runtime, nat
 // session in it started, or when a pane that runs (or ran) one of its
 // sessions was last seen.
 func (s *Store) RecentFolders(ctx context.Context, limit int) ([]string, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT c.cwd, MAX(MAX(c.first_seen_at, COALESCE(p.seen_at, 0))) AS used
+	uses, err := s.RecentFolderUses(ctx, limit)
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, u := range uses {
+		out = append(out, u.Path)
+	}
+	return out, nil
+}
+
+// FolderUse is a folder, when it was last used (see RecentFolders), and
+// when a session last started in it.
+type FolderUse struct {
+	Path    string
+	Used    time.Time // the newest of its sessions' first sight and its panes' last sight
+	Started time.Time // its newest session's first sight
+}
+
+// RecentFolderUses is RecentFolders with the time each folder was last used.
+func (s *Store) RecentFolderUses(ctx context.Context, limit int) ([]FolderUse, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT c.cwd, MAX(MAX(c.first_seen_at, COALESCE(p.seen_at, 0))) AS used,
+		MAX(c.first_seen_at) AS started
 		FROM conversation c
 		LEFT JOIN pane p ON p.conversation_id = c.id OR p.last_conversation_id = c.id
 		WHERE c.cwd IS NOT NULL AND c.cwd <> ''
@@ -95,14 +117,14 @@ func (s *Store) RecentFolders(ctx context.Context, limit int) ([]string, error) 
 		return nil, fmt.Errorf("store: recent folders: %w", err)
 	}
 	defer rows.Close()
-	var out []string
+	var out []FolderUse
 	for rows.Next() {
 		var cwd string
-		var used int64
-		if err := rows.Scan(&cwd, &used); err != nil {
+		var used, started int64
+		if err := rows.Scan(&cwd, &used, &started); err != nil {
 			return nil, fmt.Errorf("store: recent folders: %w", err)
 		}
-		out = append(out, cwd)
+		out = append(out, FolderUse{Path: cwd, Used: time.UnixMilli(used).UTC(), Started: time.UnixMilli(started).UTC()})
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("store: recent folders: %w", err)

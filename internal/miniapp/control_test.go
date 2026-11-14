@@ -97,6 +97,9 @@ func TestControlActionCheck(t *testing.T) {
 		{Op: OpPage, Act: act, Pane: 3, Kind: PageChanges},
 		{Op: OpNew, Act: act, Agent: "claude", Path: "/Users/me/app"},
 		{Op: OpUnlink, Act: act, Thread: 2},
+		{Op: OpForgetFolder, Act: act, Path: "/Users/me/old"},
+		{Op: OpForgetFolders, Act: act},
+		{Op: OpCleanTopics, Act: act},
 	}
 	for _, a := range ok {
 		if err := a.Check(); err != nil {
@@ -115,6 +118,7 @@ func TestControlActionCheck(t *testing.T) {
 		{Op: OpNew, Act: act, Agent: "claude", Path: "relative/app"},
 		{Op: OpNew, Act: act, Path: "/Users/me/app"},
 		{Op: OpUnlink, Act: act},
+		{Op: OpForgetFolder, Act: act, Path: "relative"},
 		{Op: "pause", Act: act}, // /pause stays a chat command
 	}
 	for _, a := range bad {

@@ -57,6 +57,14 @@ func TestRecentFolders(t *testing.T) {
 	if got := must(s.RecentFolders(ctx, 2)); len(got) != 2 {
 		t.Fatalf("limit 2: got %q", got)
 	}
+	uses := must(s.RecentFolderUses(ctx, 10))
+	if len(uses) != 3 || uses[0].Path != "/w/busy" || !uses[0].Used.Equal(t0.Add(2*time.Hour)) || !uses[2].Used.Equal(t0) {
+		t.Fatalf("uses %+v", uses)
+	}
+	// Started is the newest session's first sight, not a pane's last sight.
+	if !uses[0].Started.Equal(t0.Add(-2*time.Hour)) || !uses[1].Started.Equal(t0.Add(time.Hour)) {
+		t.Fatalf("started %+v", uses)
+	}
 }
 
 func TestPaneBasics(t *testing.T) {

@@ -8,7 +8,9 @@ import (
 
 	"rex-tg/internal/format"
 	"rex-tg/internal/rex"
+	"rex-tg/internal/sender"
 	"rex-tg/internal/store"
+	"rex-tg/internal/telegram"
 )
 
 // One rename for a topic, its Rex pane, and its tab. /rename in a topic and
@@ -94,9 +96,6 @@ func (d *daemon) planRename(th *store.Thread, paneID int64, args string) (rename
 		if err != nil {
 			return pl, "Could not change the name now. Try again."
 		}
-		if !pl.auto {
-			d.onRename(evRename{thread: pl.th.ID}) // the topic, and the tab of /new
-		}
 	}
 	return pl, ""
 }
@@ -113,25 +112,30 @@ func (d *daemon) paneThread(p store.Pane) (store.Thread, bool) {
 // renameReport is what a rename did. skips say what it did not, and why.
 type renameReport struct {
 	topic, pane, tab bool
+	topicSame        bool // Telegram says the topic had the name already
 	skips            []string
 }
 
-// runRename is the Rex part of a rename (worker).
+// runRename is the Rex and Telegram part of a rename (worker). The topic is
+// edited here and the answer of Telegram is reported: for a name before the
+// pane is renamed, for auto after it and a scan (so the name is right).
 func (d *daemon) runRename(pl renamePlan) renameReport {
 	ctx, cancel := context.WithTimeout(d.ctx, 30*time.Second)
 	defer cancel()
-	rep := renameReport{topic: pl.th != nil && !pl.offline()}
-	topicSkip := func() {
-		if pl.offline() {
-			rep.skips = append(rep.skips, "the topic (it takes the name when the agent runs again)")
+	var rep renameReport
+	topic := func() {
+		if pl.th != nil {
+			d.renameTopicNow(pl, &rep)
 		}
 	}
+	if !pl.auto {
+		topic()
+	}
 	if pl.pane == nil {
-		topicSkip()
-		rep.skips = append(rep.skips, "its Rex pane and its tab (the agent has no pane now)")
-		if pl.auto && pl.th != nil {
-			d.emit(evRename{thread: pl.th.ID})
+		if pl.auto {
+			topic()
 		}
+		rep.skips = append(rep.skips, "its Rex pane and its tab (the agent has no pane now)")
 		return rep
 	}
 	p := *pl.pane
@@ -144,15 +148,13 @@ func (d *daemon) runRename(pl renamePlan) renameReport {
 		rep.skips = append(rep.skips, "its Rex pane (Rex could not rename it)")
 		if pl.auto {
 			// The pane keeps its name, so the topic and the tab keep it too.
-			rep.topic = false
-			topicSkip()
 			what := "its tab"
 			if pl.th != nil && !pl.offline() {
 				what = "the topic and its tab"
 			}
 			rep.skips = append(rep.skips, what+" (the pane still has its name)")
-			if pl.th != nil {
-				d.emit(evRename{thread: pl.th.ID})
+			if pl.offline() {
+				topic() // says that an offline topic waits
 			}
 			return rep
 		}
@@ -163,10 +165,9 @@ func (d *daemon) runRename(pl renamePlan) renameReport {
 			d.log.Warn("rename: scan", "err", err)
 		}
 	}
-	if pl.auto && pl.th != nil {
-		d.emit(evRename{thread: pl.th.ID}) // the topic, and the tab of /new
+	if pl.auto {
+		topic()
 	}
-	topicSkip()
 	state, why := d.renameTab(ctx, pl, p)
 	switch state {
 	case tabRenamed, tabFollows:
@@ -175,6 +176,74 @@ func (d *daemon) runRename(pl renamePlan) renameReport {
 		rep.skips = append(rep.skips, "its tab ("+why+")")
 	}
 	return rep
+}
+
+// renameTopicNow edits the topic's name in Telegram and says in rep how it
+// went (worker). It calls Telegram even when the stored name equals the new
+// one: an explicit rename must reach Telegram, which may differ from what
+// rex-tg stored. An offline topic keeps its name until the agent runs again.
+func (d *daemon) renameTopicNow(pl renamePlan, rep *renameReport) {
+	th, err := d.st.Thread(d.ctx, pl.th.ID)
+	if err != nil || th.Status == store.ThreadClosed {
+		rep.skips = append(rep.skips, "the topic (it is unlinked)")
+		return
+	}
+	conv := pl.conv
+	if conv == nil {
+		c, err := d.st.Conversation(d.ctx, th.CurrentConversationID)
+		if err != nil {
+			rep.skips = append(rep.skips, "the topic (its session is not known)")
+			return
+		}
+		conv = &c
+	}
+	if th.Status == store.ThreadOffline {
+		rep.skips = append(rep.skips, "the topic (it takes the name when the agent runs again)")
+		d.syncTab(th, *conv)
+		return
+	}
+	name := d.desiredName(th, *conv)
+	err = d.editTopic(th, name)
+	c := telegram.Classify(err)
+	d.log.Info("topic renamed by command", "thread", th.ID, "telegram", c.String())
+	switch c {
+	case telegram.ClassNone:
+		rep.topic = true
+	case telegram.ClassNotModified:
+		rep.topicSame = true
+	case telegram.ClassThreadNotFound:
+		d.emit(evSender{sender.Event{Kind: sender.ThreadGone, ThreadID: th.ID}}) // the user deleted it
+		rep.skips = append(rep.skips, "the topic (it is gone from Telegram)")
+		return
+	default:
+		if d.ctx.Err() == nil {
+			d.log.Warn("editForumTopic", "err", err)
+		}
+		why := "Telegram refused it"
+		switch c {
+		case telegram.ClassUnknownOutcome:
+			why = "Telegram did not answer in time"
+		case telegram.ClassNotSent:
+			why = "Telegram could not be reached"
+		}
+		// The new name is kept (tab_user), so the 30-second name check
+		// tries the topic again.
+		rep.skips = append(rep.skips, "the topic ("+why+"; rex-tg tries again within a minute)")
+		return
+	}
+	if err := d.st.SetThreadName(d.ctx, th.ID, name); err != nil {
+		d.log.Warn("rename topic", "err", err)
+	}
+}
+
+// editTopic sets a topic's name in Telegram.
+func (d *daemon) editTopic(th store.Thread, name string) error {
+	if d.editTopicFn != nil {
+		return d.editTopicFn(th, name)
+	}
+	return d.snd.Call(sender.PriorityEdit, func(ctx context.Context, tg *telegram.Client) error {
+		return tg.EditForumTopic(ctx, th.ChatID, th.MessageThreadID, name)
+	})
 }
 
 type tabResult int
@@ -213,6 +282,18 @@ func (d *daemon) renameTab(ctx context.Context, pl renamePlan, p store.Pane) (ta
 		return tabSkipped, "it also holds another agent"
 	}
 	if isOwn && pl.th != nil {
+		// syncTab gives the tab the name that was kept for the topic.
+		if th, err := d.st.Thread(d.ctx, pl.th.ID); err == nil && th.Status != store.ThreadClosed {
+			conv := pl.conv
+			if conv == nil {
+				c, err := d.st.Conversation(d.ctx, th.CurrentConversationID)
+				if err != nil {
+					return tabSkipped, "its session is not known"
+				}
+				conv = &c
+			}
+			d.syncTab(th, *conv)
+		}
 		return tabFollows, ""
 	}
 	windows, err := d.rx.Windows(ctx, p.Session)
@@ -275,7 +356,9 @@ func (r renameReport) text(name string, auto bool) string {
 		}
 	}
 	var b strings.Builder
-	if len(parts) == 0 {
+	if len(parts) == 0 && r.topicSame && len(r.skips) == 0 {
+		// only the note
+	} else if len(parts) == 0 {
 		b.WriteString("Nothing was renamed.")
 	} else {
 		if auto {
@@ -284,10 +367,13 @@ func (r renameReport) text(name string, auto bool) string {
 			b.WriteString("✏️ Renamed " + joinWords(parts) + " to " + format.Truncate(name, 60) + ".")
 		}
 	}
+	if r.topicSame {
+		b.WriteString(" The topic already had that name in Telegram.")
+	}
 	if len(r.skips) > 0 {
 		b.WriteString(" Not renamed: " + strings.Join(r.skips, "; ") + ".")
 	}
-	return b.String()
+	return strings.TrimSpace(b.String())
 }
 
 // joinWords is "a", "a and b", or "a, b, and c".

@@ -5,12 +5,16 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
 	"path/filepath"
+	"slices"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"rex-tg/internal/agents"
 	"rex-tg/internal/miniapp"
 	"rex-tg/internal/store"
 )
@@ -163,5 +167,99 @@ func TestRenameReportText(t *testing.T) {
 		if got := c.rep.text("X", c.auto); got != c.want {
 			t.Errorf("%+v:\n got %q\nwant %q", c.rep, got, c.want)
 		}
+	}
+}
+
+// A forgotten folder stays out of the lists until a session in it is used
+// after it was forgotten. A pinned folder is never hidden.
+func TestFolderHideRule(t *testing.T) {
+	at := time.Now()
+	for _, c := range []struct {
+		desc       string
+		hidden, at time.Time
+		want       bool
+	}{
+		{"used before", at, at.Add(-time.Hour), true},
+		{"used at that moment", at, at, true},
+		{"used again later", at, at.Add(time.Second), false},
+	} {
+		if got := folderHidden(c.hidden, c.at); got != c.want {
+			t.Errorf("%s: hidden = %v, want %v", c.desc, got, c.want)
+		}
+	}
+}
+
+func TestNewFoldersSkipForgottenOnes(t *testing.T) {
+	f := newRenameFixture(t, false, false) // a store, and a daemon on it
+	d := f.d
+	home := t.TempDir()
+	mk := func(name string) string {
+		p := filepath.Join(home, name)
+		if err := os.MkdirAll(p, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	pinned, old, fresh := mk("pinned"), mk("old"), mk("fresh")
+	d.cfg.Rex.NewFolders = []string{pinned}
+	base := time.Now().Add(-time.Hour)
+	for i, dir := range []string{old, fresh, pinned} {
+		if _, err := d.st.UpsertConversation(d.ctx, store.Conversation{Runtime: agents.Pi, NativeID: dir, Transcript: "/t" + dir, CWD: dir, FirstSeenAt: base.Add(time.Duration(i) * time.Minute)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	list := func() []string {
+		var out []string
+		for _, c := range d.folderChoices(0, 0, 10) {
+			out = append(out, c.path)
+		}
+		return out
+	}
+	if got := list(); !slices.Equal(got, []string{pinned, fresh, old}) {
+		t.Fatalf("list %q", got)
+	}
+	// Forgotten after their last use: out of the lists (also /new's).
+	for _, dir := range []string{old, pinned} {
+		if err := d.st.Set(d.ctx, folderHiddenKey(dir), strconv.FormatInt(time.Now().UnixMilli(), 10)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := list(); !slices.Equal(got, []string{pinned, fresh}) {
+		t.Fatalf("after forgetting: %q (a pinned folder stays, a recent one goes)", got)
+	}
+	if got := d.newFolders(0, 0); !slices.Equal(got, []string{pinned, fresh}) {
+		t.Errorf("/new offers %q", got)
+	}
+	// A running agent's pane, seen by every scan, does not bring it back:
+	// only a new session does.
+	busy, ok, err := d.st.ConversationByNative(d.ctx, agents.Pi, old)
+	if err != nil || !ok {
+		t.Fatal(ok, err)
+	}
+	p, err := d.st.UpsertPane(d.ctx, "local", "blk-old", "S1", "", time.Now().Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := d.st.SetPaneOccupant(d.ctx, p.ID, busy.ID, 1, "pi", store.SourceHook); err != nil {
+		t.Fatal(err)
+	}
+	if got := list(); !slices.Equal(got, []string{pinned, fresh}) {
+		t.Fatalf("a pane seen after the forget brought the folder back: %q", got)
+	}
+	// A newer session in the folder brings it back.
+	if _, err := d.st.UpsertConversation(d.ctx, store.Conversation{Runtime: agents.Pi, NativeID: "again", Transcript: "/t/again", CWD: old, FirstSeenAt: time.Now().Add(time.Minute)}); err != nil {
+		t.Fatal(err)
+	}
+	if got := list(); !slices.Equal(got, []string{pinned, old, fresh}) {
+		t.Errorf("after a new session: %q", got)
+	}
+	// Housekeeping keeps the record of a folder that is still listed, and
+	// drops the one of a folder that is gone.
+	if err := d.st.Set(d.ctx, folderHiddenKey(filepath.Join(home, "gone")), "1"); err != nil {
+		t.Fatal(err)
+	}
+	d.pruneFolderHides()
+	if keys, _ := d.st.KeysWithPrefix(d.ctx, "folder_hidden:"); len(keys) != 2 {
+		t.Errorf("records left: %q", keys)
 	}
 }

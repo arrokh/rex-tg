@@ -326,35 +326,84 @@ func (d *daemon) shownPath(dir string) string {
 	return "<code>" + esc(format.Truncate(d.tildePath(dir), maxShownPath)) + "</code>"
 }
 
-// newFolders returns the folders to offer: the pinned ones (rex.new_folders)
-// first, then the folder of this topic's agent, then the folders of recent
-// sessions. Only folders that still exist count. It reads the disk, so it
-// runs in a worker.
-func (d *daemon) newFolders(chat, thread int64) []string {
-	var dirs []string
+// maxPanelFolders is the number of folders that the control panel lists.
+const maxPanelFolders = 20
+
+// folderHiddenKey is the kv key of a recent folder that was forgotten: its
+// value is the time (Unix milliseconds) of the forgetting.
+func folderHiddenKey(dir string) string { return "folder_hidden:" + dir }
+
+// folderHidden tells whether a forgotten folder stays out of the lists:
+// until a new session starts in it after it was forgotten. started is the
+// first sight of its newest session, not a pane's last sight: a scan sees a
+// running agent's pane every few seconds, which would bring the folder back
+// at once.
+func folderHidden(hiddenAt, started time.Time) bool { return !started.After(hiddenAt) }
+
+// hiddenFolders reads the forgotten folders and when they were forgotten.
+func (d *daemon) hiddenFolders() map[string]time.Time {
+	out := map[string]time.Time{}
+	keys, err := d.st.KeysWithPrefix(d.ctx, "folder_hidden:")
+	if err != nil {
+		return out
+	}
+	for _, k := range keys {
+		v, ok, err := d.st.Get(d.ctx, k)
+		if n, perr := strconv.ParseInt(v, 10, 64); err == nil && ok && perr == nil {
+			out[strings.TrimPrefix(k, "folder_hidden:")] = time.UnixMilli(n)
+		}
+	}
+	return out
+}
+
+// folderChoice is a folder that a list offers.
+type folderChoice struct {
+	path   string
+	pinned bool // a folder of rex.new_folders
+}
+
+// folderChoices returns the folders to offer, at most limit: the pinned ones
+// (rex.new_folders) first, then the folder of this topic's agent, then the
+// folders of recent sessions, without the ones that were forgotten. Only
+// folders that still exist count. It reads the disk, so it runs in a worker.
+func (d *daemon) folderChoices(chat, thread int64, limit int) []folderChoice {
+	var out []folderChoice
 	seen := map[string]bool{}
-	add := func(dir string) {
-		if dir != "" && !seen[dir] && len(dirs) < maxNewFolders && isDir(dir) {
+	add := func(dir string, pinned bool) {
+		if dir != "" && !seen[dir] && len(out) < limit && isDir(dir) {
 			seen[dir] = true
-			dirs = append(dirs, dir)
+			out = append(out, folderChoice{dir, pinned})
 		}
 	}
 	for _, dir := range d.cfg.Rex.NewFolders {
-		add(dir)
+		add(dir, true)
 	}
 	if thread != 0 {
 		if th, ok, err := d.st.ThreadByTopic(d.ctx, chat, thread); err == nil && ok && th.Status != store.ThreadClosed {
 			if conv, err := d.st.Conversation(d.ctx, th.CurrentConversationID); err == nil {
-				add(conv.CWD)
+				add(conv.CWD, false)
 			}
 		}
 	}
-	recent, err := d.st.RecentFolders(d.ctx, 4*maxNewFolders)
+	hidden := d.hiddenFolders()
+	recent, err := d.st.RecentFolderUses(d.ctx, 4*limit+len(hidden))
 	if err != nil {
 		d.log.Warn("new: recent folders", "err", err)
 	}
-	for _, dir := range recent {
-		add(dir)
+	for _, u := range recent {
+		if at, ok := hidden[u.Path]; ok && folderHidden(at, u.Started) {
+			continue
+		}
+		add(u.Path, false)
+	}
+	return out
+}
+
+// newFolders returns the folders that /new offers (see folderChoices).
+func (d *daemon) newFolders(chat, thread int64) []string {
+	var dirs []string
+	for _, c := range d.folderChoices(chat, thread, maxNewFolders) {
+		dirs = append(dirs, c.path)
 	}
 	return dirs
 }
@@ -575,7 +624,17 @@ func (d *daemon) expireNewFlows(now time.Time) {
 // is the message to show the progress in; 0 sends a new one. token names the
 // request ("" for /new with all its arguments).
 func (d *daemon) launch(token string, msg, chat, thread int64, a newAgent, dir string) {
+	d.launchWith(token, msg, chat, thread, a, dir, nil)
+}
+
+// launchWith is launch that tells the caller how the start went: started is
+// called once, right after the tab exists (with its Rex ids and fail ""), or
+// when the start failed (with the reason in plain words).
+func (d *daemon) launchWith(token string, msg, chat, thread int64, a newAgent, dir string, started func(st rex.Started, fail string)) {
 	defer d.emit(evNewDone{token})
+	if started == nil {
+		started = func(rex.Started, string) {}
+	}
 	show := func(html string) {
 		if msg == 0 {
 			if m, err := d.sendNow(chat, thread, html, nil); err == nil {
@@ -588,6 +647,7 @@ func (d *daemon) launch(token string, msg, chat, thread int64, a newAgent, dir s
 	name := format.Escape(a.name())
 	where := d.shownPath(dir)
 	if !isDir(dir) {
+		started(rex.Started{}, "The folder is gone.")
 		show("⚠️ The folder " + where + " is gone, so " + name + " was not started. Send /new again.")
 		return
 	}
@@ -595,18 +655,22 @@ func (d *daemon) launch(token string, msg, chat, thread int64, a newAgent, dir s
 
 	st, in, err := d.startTab(a, dir)
 	if errors.Is(err, errNoRex) {
+		started(rex.Started{}, "Could not reach Rex, so nothing was started.")
 		show("⚠️ Could not reach Rex, so " + name + " was not started.")
 		return
 	}
 	if err != nil {
 		d.log.Warn("new: start agent", "agent", a.key, "err", err)
 		if errors.Is(err, context.DeadlineExceeded) {
+			started(rex.Started{}, "Rex did not answer in time. The agent may have started anyway: check the list before you try again.")
 			show("⚠️ Rex did not answer in time. " + name + " may have started anyway: check /agents before you try again.")
 		} else {
+			started(rex.Started{}, "Could not start the agent: "+format.Truncate(err.Error(), 300))
 			show("⚠️ Could not start " + name + ": " + esc(format.Truncate(err.Error(), 300)))
 		}
 		return
 	}
+	started(st, "")
 	d.log.Info("new: agent started", "agent", a.key, "session", st.SessionID, "block", st.BlockID)
 	show("✅ Started " + name + " in " + where + ", in " + in + ".\nIts topic opens when " + name + " reports its session.")
 	answers := make(chan startupAnswer, 1)

@@ -12,9 +12,14 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
+	"rex-tg/internal/agents"
 	"rex-tg/internal/miniapp"
+	"rex-tg/internal/store"
 )
+
+const offlineName = "🔴 old work"
 
 // miniControl asks the control panel's API as the owner. body is a JSON
 // action for POST, or nil for GET.
@@ -59,6 +64,36 @@ func TestControlPanel(t *testing.T) {
 	if err := os.MkdirAll(proj, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	// The pane has a tab in a session of the user's.
+	e.fake.On([]string{"block", "ls"}, fmt.Sprintf(`{"blocks":[{"block_id":%q,"label":"pane one","window_id":"W1"}]}`, rexBlock), 0)
+	e.setTab("pane one")
+	// Folders: one pinned, two that sessions ran in, and a stopped agent's
+	// topic (its session ran in the first of them).
+	pinned, fa, fb := filepath.Join(e.home, "pinned"), filepath.Join(e.home, "work", "a"), filepath.Join(e.home, "work", "b")
+	for _, dir := range []string{pinned, fa, fb} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	e.cfg.Rex.NewFolders = []string{pinned}
+	e.withStore(func(st *store.Store) {
+		ctx := context.Background()
+		for i, dir := range []string{fa, fb} {
+			c, err := st.UpsertConversation(ctx, store.Conversation{Runtime: agents.Pi, NativeID: "earlier" + dir, Transcript: dir + "/earlier.jsonl", CWD: dir, FirstSeenAt: time.Now().Add(-time.Duration(i+2) * time.Hour)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if i == 0 {
+				th, err := st.LinkTopic(ctx, chatID, 77, c.ID, offlineName, time.Now())
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := st.SetThreadStatus(ctx, th.ID, store.ThreadOffline); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+	})
 	e.start()
 	e.hookPi(p, "startup")
 	e.waitFor("a resolved pane", func() bool {
@@ -84,6 +119,9 @@ func TestControlPanel(t *testing.T) {
 		t.Fatalf("state: %d %+v", code, st)
 	}
 	ag := st.Agents[0]
+	if ag.Block != rexBlock || ag.Tab != "pane one" || ag.Session != "main" {
+		t.Errorf("block %q, tab %q, session %q", ag.Block, ag.Tab, ag.Session)
+	}
 	if !ag.Ready || ag.Topic != nil || ag.Agent != "pi" || ag.Label != "pane one" || len(st.Starters) == 0 || st.Home.Path != e.home {
 		t.Errorf("agent %+v, starters %+v, home %+v", ag, st.Starters, st.Home)
 	}
@@ -113,10 +151,28 @@ func TestControlPanel(t *testing.T) {
 	}
 	thread := st.Agents[0].Topic.Thread
 
-	// The pane has a tab in a session of the user's.
-	e.fake.On([]string{"block", "ls"}, fmt.Sprintf(`{"blocks":[{"block_id":%q,"label":"pane one","window_id":"W1"}]}`, rexBlock), 0)
-
-	e.setTab("pane one")
+	// Topics: the live one with its session, tab, and pane, and the stopped
+	// one without a pane.
+	st = miniapp.ControlState{}
+	miniControl(t, e, addr, base, nil, &st)
+	var live, off *miniapp.TopicRow
+	for i := range st.Topics {
+		switch tr := &st.Topics[i]; tr.Status {
+		case "live":
+			live = tr
+		case "offline":
+			off = tr
+		}
+	}
+	if live == nil || off == nil || len(st.Topics) != 2 {
+		t.Fatalf("topics: %+v", st.Topics)
+	}
+	if live.Thread != thread || live.Pane != ag.Pane || live.Session != "main" || live.Tab != "pane one" || live.PaneLabel != "pane one" || live.Agent != "pi" {
+		t.Errorf("live topic %+v", *live)
+	}
+	if off.Pane != 0 || off.Session != "" || off.Name != "old work" || off.Agent != "pi" || off.Folder != "~/work/a" {
+		t.Errorf("offline topic %+v", *off)
+	}
 
 	// Rename: the topic, the pane in Rex, and its tab, once, also when the
 	// act repeats. The topic's name sticks, and shows as custom.
@@ -188,10 +244,74 @@ func TestControlPanel(t *testing.T) {
 	e.say(0, "/unpause")
 	e.waitText(0, "Typing is on again")
 
+	// Folders: the pinned one, then the recent ones. Forgetting one drops it
+	// from the panel and from /new's buttons; the pinned one cannot be
+	// forgotten; "forget all" leaves only the pinned one.
+	st = miniapp.ControlState{}
+	miniControl(t, e, addr, base, nil, &st)
+	var paths []string
+	for _, f := range st.Folders {
+		paths = append(paths, f.Path)
+	}
+	if !slices.Equal(paths, []string{pinned, fa, fb}) || !st.Folders[0].Pinned || st.Folders[1].Pinned {
+		t.Fatalf("folders %+v", st.Folders)
+	}
+	newButtons := func() (a, b bool) {
+		e.say(0, "/new")
+		q := e.waitText(0, "Which coding agent?")
+		e.pressButton(q, buttonData(q, "pi"))
+		e.waitFor("the folder question", func() bool {
+			m, _ := e.message(q.ID)
+			q = m
+			return strings.Contains(m.Text, "Which folder?")
+		})
+		return buttonData(q, "~/work/a") != "", buttonData(q, "~/work/b") != ""
+	}
+	if a, b := newButtons(); !a || !b {
+		t.Fatalf("/new buttons before: %v %v", a, b)
+	}
+	if r = do(miniapp.ControlAction{Op: miniapp.OpForgetFolder, Act: act(), Path: pinned}); r.OK || !strings.Contains(r.Message, "pinned") {
+		t.Errorf("forget a pinned folder: %+v", r)
+	}
+	if r = do(miniapp.ControlAction{Op: miniapp.OpForgetFolder, Act: act(), Path: fa}); !r.OK {
+		t.Fatalf("forget: %+v", r)
+	}
+	st = miniapp.ControlState{}
+	miniControl(t, e, addr, base, nil, &st)
+	if len(st.Folders) != 2 || st.Folders[1].Path != fb {
+		t.Errorf("folders after forgetting one: %+v", st.Folders)
+	}
+	if a, b := newButtons(); a || !b {
+		t.Errorf("/new buttons after forgetting a: %v %v", a, b)
+	}
+	if r = do(miniapp.ControlAction{Op: miniapp.OpForgetFolders, Act: act()}); !r.OK {
+		t.Fatalf("forget all: %+v", r)
+	}
+	st = miniapp.ControlState{}
+	miniControl(t, e, addr, base, nil, &st)
+	if len(st.Folders) != 1 || !st.Folders[0].Pinned {
+		t.Errorf("folders after forgetting all: %+v", st.Folders)
+	}
+
+	// Clean up stopped topics: only the offline one is unlinked, once.
+	clean := miniapp.ControlAction{Op: miniapp.OpCleanTopics, Act: act()}
+	r = do(clean)
+	if again := do(clean); !r.OK || r.Message != "Unlinked 1 stopped topic." || again != r {
+		t.Fatalf("clean: %+v, again %+v", r, again)
+	}
+	st = miniapp.ControlState{}
+	miniControl(t, e, addr, base, nil, &st)
+	if len(st.Topics) != 1 || st.Topics[0].Status != "live" {
+		t.Errorf("topics after cleaning: %+v", st.Topics)
+	}
+	if r = do(miniapp.ControlAction{Op: miniapp.OpCleanTopics, Act: act()}); r.OK || r.Message != "No stopped topics." {
+		t.Errorf("clean again: %+v", r)
+	}
+
 	// A new agent starts in a folder inside home, once, also when the act
-	// repeats.
+	// repeats. The result names the new pane's Rex block.
 	newAct := miniapp.ControlAction{Op: miniapp.OpNew, Act: act(), Agent: "pi", Path: proj}
-	if r = do(newAct); !r.OK || r.Pending {
+	if r = do(newAct); !r.OK || r.Pending || r.Block != "B2" {
 		t.Fatalf("new: %+v", r)
 	}
 	var args []string
