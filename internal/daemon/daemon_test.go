@@ -1226,11 +1226,11 @@ func TestReplyKeyboard(t *testing.T) {
 		for _, b := range kb.Keyboard[0] {
 			got = append(got, b.Text)
 		}
-		if strings.Join(got, " ") != "/rt /screen /files /changes" {
+		if strings.Join(got, "|") != "🎛 Panel|🖥 Screen|📂 Files|📝 Changes" {
 			t.Errorf("buttons = %v", got)
 		}
 	}
-	wantKeyboard(e.waitText(0, "Buttons for /rt"))
+	wantKeyboard(e.waitText(0, "Buttons under the message box"))
 	e.hookPi(p, "startup")
 	thread := e.openTopic()
 	wantKeyboard(e.waitText(thread, "Linked"))
@@ -1242,13 +1242,16 @@ func TestReplyKeyboard(t *testing.T) {
 	if m := e.waitText(thread, "ready"); m.Keyboard != nil {
 		t.Errorf("the answer has a reply keyboard: %+v", m.Keyboard)
 	}
-	// A tap sends the button's text: a command, not text for the agent.
+	// A tap sends the button's label: read as its command, not text for the
+	// agent.
 	before := len(e.botMessages(thread))
-	e.say(thread, "/files")
+	e.say(thread, "📂 Files")
 	e.waitFor("the files answer", func() bool { return len(e.botMessages(thread)) > before })
 	if len(e.pastes()) != 0 {
 		t.Errorf("a button was typed into the pane: %v", e.pastes())
 	}
+	e.say(0, "🎛 Panel") // the main chat: the panel, which is off in the tests
+	e.waitText(0, "The control panel is part of the Mini App")
 
 	// The next start does not post the note again.
 	e.stop()
@@ -1256,7 +1259,7 @@ func TestReplyKeyboard(t *testing.T) {
 	e.waitFor("the second start", func() bool { return len(e.tg.Calls("getMe")) >= 2 })
 	e.say(0, "/status")
 	e.waitText(0, "Topics: 1 live")
-	if n, m := e.countText(0, "Buttons for /rt"), e.countText(thread, "Buttons for /rt"); n != 1 || m != 0 {
+	if n, m := e.countText(0, "Buttons under the message box"), e.countText(thread, "Buttons under the message box"); n != 1 || m != 0 {
 		t.Errorf("keyboard notes = %d in the main chat, %d in the topic; want 1, 0", n, m)
 	}
 
@@ -1265,33 +1268,18 @@ func TestReplyKeyboard(t *testing.T) {
 	e.stop()
 	newButtons()
 	e.start()
-	wantKeyboard(e.waitText(thread, "Buttons for /rt"))
-	e.waitFor("the second main note", func() bool { return e.countText(0, "Buttons for /rt") == 2 })
+	wantKeyboard(e.waitText(thread, "Buttons under the message box"))
+	e.waitFor("the second main note", func() bool { return e.countText(0, "Buttons under the message box") == 2 })
 	// A topic gets its note once, even when the marker is lost again.
 	e.stop()
 	newButtons()
 	e.start()
-	e.waitFor("the third main note", func() bool { return e.countText(0, "Buttons for /rt") == 3 })
+	e.waitFor("the third main note", func() bool { return e.countText(0, "Buttons under the message box") == 3 })
 	e.say(thread, "/info")
 	e.waitText(thread, "Topic: live")
-	if n := e.countText(thread, "Buttons for /rt"); n != 1 {
+	if n := e.countText(thread, "Buttons under the message box"); n != 1 {
 		t.Errorf("keyboard notes in the topic = %d, want 1", n)
 	}
-}
-
-// Telegram asks to wait an hour for rich messages (seen live): the answer
-// goes out as a plain message at once, and /status shows the wait.
-func TestLongRateLimitOnRichAnswers(t *testing.T) {
-	e, p, thread := piTopicCfg(t, "pi-flood", func(e *env) { e.cfg.Display.RichMessages = true })
-	e.tg.FailNext("sendRichMessage", 1, 429, "Too Many Requests: retry after 3600", 3600)
-	p.User("report")
-	time.Sleep(10 * time.Millisecond) // the answer comes after the prompt: the pane is idle then
-	p.Final("All **done**.")
-	if m := e.waitText(thread, "All <b>done</b>"); m.Rich {
-		t.Error("the answer went out as a rich message during the wait")
-	}
-	e.say(0, "/status")
-	e.waitText(0, "Telegram asked to wait: <code>sendRichMessage</code> until")
 }
 
 func TestAgentLeavesAndReturns(t *testing.T) {

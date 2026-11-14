@@ -391,38 +391,56 @@ func TestRetryAfter(t *testing.T) {
 	}
 }
 
-// A 429 with a long wait holds its method: the client refuses it without
-// asking Telegram until the wait ends, and the other methods still go.
-func TestLongWaitHoldsTheMethod(t *testing.T) {
+// A 429 with a long wait holds the chat: the client refuses every request
+// that posts to it, without asking Telegram, until the wait ends. getUpdates
+// still goes, and a restored hold works the same.
+func TestLongWaitHoldsTheChat(t *testing.T) {
 	now := time.Unix(1_800_000_000, 0)
 	s, c := setup(t, telegram.WithClock(func() time.Time { return now }))
 	ctx := context.Background()
+	var seen []telegram.Hold
+	c.OnHold(func(h telegram.Hold) { seen = append(seen, h) })
 	s.FailNext("sendRichMessage", 1, 429, "Too Many Requests: retry after 3600", 3600)
-	for i := 0; i < 2; i++ {
-		_, err := c.SendRichMessage(ctx, chat, 0, "hi", false, nil)
-		var api *telegram.APIError
-		if !errors.As(err, &api) || api.Code != 429 || !api.Held || api.RetryAfter <= telegram.HoldAfter {
-			t.Fatalf("call %d: %v", i, err)
-		}
-		if telegram.Classify(err) != telegram.ClassRateLimited {
-			t.Fatalf("class = %v", telegram.Classify(err))
-		}
+	_, err := c.SendRichMessage(ctx, chat, 0, "hi", false, nil)
+	var api *telegram.APIError
+	if !errors.As(err, &api) || api.Code != 429 || !api.Held || api.Local || api.RetryAfter != time.Hour {
+		t.Fatalf("first: %v", err)
 	}
-	if n := len(s.Calls("sendRichMessage")); n != 1 {
-		t.Fatalf("calls during the hold = %d, want 1", n)
+	// Other methods are refused too, without a request.
+	_, err = c.SendMessage(ctx, telegram.SendMessageParams{ChatID: chat, Text: "other"})
+	if !errors.As(err, &api) || !api.Held || !api.Local || telegram.Classify(err) != telegram.ClassRateLimited {
+		t.Fatalf("sendMessage during the hold: %v", err)
 	}
-	if hs := c.Holds(); len(hs) != 1 || hs[0].Method != "sendRichMessage" || !hs[0].Until.Equal(now.Add(time.Hour)) {
-		t.Fatalf("holds = %+v", hs)
+	if n := len(s.Calls("sendRichMessage")) + len(s.Calls("sendMessage")); n != 1 {
+		t.Fatalf("requests during the hold = %d, want 1", n)
 	}
-	if _, err := c.SendMessage(ctx, telegram.SendMessageParams{ChatID: chat, Text: "other"}); err != nil {
-		t.Fatalf("another method: %v", err)
+	if _, err := c.GetUpdates(ctx, 0, 0, nil); err != nil {
+		t.Fatalf("getUpdates during the hold: %v", err)
+	}
+	h, on := c.CurrentHold()
+	if !on || h.Method != "sendRichMessage" || !h.Since.Equal(now) || !h.Until.Equal(now.Add(time.Hour)) {
+		t.Fatalf("hold = %+v %v", h, on)
+	}
+	if len(seen) != 1 || seen[0] != h {
+		t.Fatalf("OnHold got %+v", seen)
 	}
 	now = now.Add(time.Hour)
-	if _, err := c.SendRichMessage(ctx, chat, 0, "hi", false, nil); err != nil {
+	if _, err := c.SendMessage(ctx, telegram.SendMessageParams{ChatID: chat, Text: "after"}); err != nil {
 		t.Fatalf("after the wait: %v", err)
 	}
-	if len(c.Holds()) != 0 {
-		t.Fatalf("holds after the wait = %+v", c.Holds())
+	if _, on := c.CurrentHold(); on {
+		t.Fatal("still held after the wait")
+	}
+
+	// A hold kept from an earlier run: no request until it ends.
+	_, c2 := setup(t, telegram.WithClock(func() time.Time { return now }))
+	c2.SetHold(telegram.Hold{Method: "sendMessage", Since: now.Add(-time.Minute), Until: now.Add(time.Minute)})
+	if _, err := c2.SendMessage(ctx, telegram.SendMessageParams{ChatID: chat, Text: "x"}); !errors.As(err, &api) || !api.Held {
+		t.Fatalf("restored hold: %v", err)
+	}
+	c2.SetHold(telegram.Hold{Until: now.Add(-time.Second)}) // an ended hold changes nothing
+	if h, on := c2.CurrentHold(); !on || h.Method != "sendMessage" {
+		t.Fatalf("hold after an ended SetHold = %+v %v", h, on)
 	}
 }
 

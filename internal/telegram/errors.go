@@ -13,9 +13,12 @@ type APIError struct {
 	Code        int
 	Description string
 	RetryAfter  time.Duration
-	// Held is set on a 429 whose method the client now holds (HoldAfter):
+	// Held is set on a 429 that makes the client hold the chat (HoldAfter):
 	// a long wait from Telegram, or the client's own refusal during it.
 	Held bool
+	// Local is set on the client's own refusal during a hold: no request
+	// was made.
+	Local bool
 }
 
 // Error implements error.

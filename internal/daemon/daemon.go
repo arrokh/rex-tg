@@ -146,6 +146,8 @@ func Run(ctx context.Context, opt Options) error {
 	})
 	d := newDaemon(cfg, home, log, now, st, tg, rx, snd, opt.ProcStart, timing)
 	d.polled = polled
+	tg.OnHold(d.noteHold) // a long Telegram wait outlives a restart (hold.go)
+	defer tg.OnHold(nil)
 	if d.miniAppOn() && opt.Token != "" {
 		d.miniSecret = miniapp.Secret(opt.Token) // the key that checks Telegram's signature, not the token
 	}

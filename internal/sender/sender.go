@@ -122,6 +122,12 @@ type Options struct {
 	// so that every message the user sent before t has its number in the
 	// store. The check of an unknown part waits for it (nil: no wait).
 	PolledSince func(t time.Time) bool
+	// EditsPerMinute is the chat-wide budget of progress edits (default 20,
+	// burst 3). Telegram punishes a chat that gets many edits, and progress
+	// edits are most of the requests. An edit over the budget waits and
+	// merges with newer edits of its topic. After a 429 from Telegram the
+	// budget runs at half its rate for an hour.
+	EditsPerMinute float64
 }
 
 const (
@@ -131,6 +137,8 @@ const (
 	netDownCap   = 3 * time.Second // longest pause after a request that never left the machine
 	idlePoll     = 2 * time.Second
 	eventBufSize = 256
+	editBurst    = 3         // progress edits that may go out at once
+	slowAfter429 = time.Hour // how long the edit budget runs at half rate after a 429
 )
 
 // Sender writes to Telegram.
@@ -151,14 +159,18 @@ type Sender struct {
 
 	mu       sync.Mutex
 	bucket   bucket
-	jobs     []*job
-	prog     map[int64][]*progOp
-	seq      uint64
-	blocked  bool
-	stopped  bool
-	finished map[int64]bool // topics whose progress row holds a finished summary
-	gone     map[int64]bool
-	served   map[int64]uint64
+	edits    bucket // budget of progress edits, on top of bucket
+	editRate float64
+	// slowUntil ends the hour of half-rate edits that follows a 429.
+	slowUntil time.Time
+	jobs      []*job
+	prog      map[int64][]*progOp
+	seq       uint64
+	blocked   bool
+	stopped   bool
+	finished  map[int64]bool // topics whose progress row holds a finished summary
+	gone      map[int64]bool
+	served    map[int64]uint64
 	// reactions holds the newest reaction per message. An older reaction
 	// that has not been sent yet is skipped, so a message always ends with
 	// the newest one, also when an older one waits for a retry.
@@ -167,12 +179,11 @@ type Sender struct {
 	// netFails counts requests in a row that never left this machine; it
 	// sets the pause before the next try (see netDown).
 	netFails int
-	// held is the longest wait of a held method (telegram.HoldAfter) that
-	// the running work met; execute makes that work, and only that work,
-	// wait for it.
+	// held is the time left of a hold (telegram.HoldAfter) that the
+	// running work met; execute makes that work wait for it.
 	held time.Duration
-	// partHold keeps a topic's outbox parts back until a held method that
-	// one of them met is free again.
+	// partHold keeps a topic's outbox parts back until the hold that one of
+	// them met has ended.
 	partHold map[int64]time.Time
 }
 
@@ -196,11 +207,16 @@ func New(st *store.Store, tg *telegram.Client, opt Options) *Sender {
 	if opt.CheckDelay <= 0 {
 		opt.CheckDelay = 60 * time.Second
 	}
+	if opt.EditsPerMinute <= 0 {
+		opt.EditsPerMinute = 20
+	}
 	return &Sender{
 		st: st, tg: tg, now: opt.Now, sleep: opt.Sleep, log: opt.Logger, checkDelay: opt.CheckDelay, markup: opt.Markup, keyboard: opt.Keyboard, polled: opt.PolledSince,
 		events:    make(chan Event, eventBufSize),
 		wake:      make(chan struct{}, 1),
 		bucket:    newBucket(opt.RatePerSecond, opt.Burst, opt.Now()),
+		edits:     newBucket(opt.EditsPerMinute/60, editBurst, opt.Now()),
+		editRate:  opt.EditsPerMinute / 60,
 		prog:      map[int64][]*progOp{},
 		gone:      map[int64]bool{},
 		finished:  map[int64]bool{},
@@ -490,13 +506,21 @@ func (s *Sender) pauseBucket(d time.Duration) {
 }
 
 // pauseFor pauses the budget for the retry_after of a 429 error. A long
-// wait holds only its method (telegram.HoldAfter): the client refuses that
-// method until the wait ends, the work that met it waits as long (execute),
-// and every other request goes on. So one limited method does not stop all
-// sending for an hour.
+// wait holds the chat (telegram.HoldAfter): the client refuses every request
+// that posts to it until the wait ends, without asking Telegram. Each piece
+// of work that meets the hold waits for its end (execute) instead of trying
+// again and again; nothing it does reaches Telegram meanwhile.
 func (s *Sender) pauseFor(err error) {
 	var api *telegram.APIError
-	if errors.As(err, &api) && api.Held {
+	isAPI := errors.As(err, &api)
+	if !isAPI || !api.Local {
+		// A 429 from Telegram slows the edits down. The client's own
+		// refusals during a hold do not move the hour on.
+		s.mu.Lock()
+		s.slowUntil = s.now().Add(slowAfter429)
+		s.mu.Unlock()
+	}
+	if isAPI && api.Held {
 		s.mu.Lock()
 		s.held = max(s.held, api.RetryAfter)
 		s.mu.Unlock()
@@ -507,6 +531,18 @@ func (s *Sender) pauseFor(err error) {
 		d = api.RetryAfter
 	}
 	s.pauseBucket(d)
+}
+
+// editWait returns how long until a progress edit may run (0 = now). It
+// spends nothing. The caller holds s.mu.
+func (s *Sender) editWait(now time.Time) time.Duration {
+	s.edits.refill(now) // up to now at the old rate
+	rate := s.editRate
+	if now.Before(s.slowUntil) {
+		rate /= 2
+	}
+	s.edits.rate = rate
+	return s.edits.wait(now)
 }
 
 // heldErr reports a 429 whose method the client holds.
@@ -670,6 +706,12 @@ func (s *Sender) pick(ctx context.Context) work {
 			deferTo(op.notBefore)
 			continue
 		}
+		if op.kind == Edit {
+			if w := s.editWait(now); w > 0 {
+				deferTo(now.Add(w))
+				continue
+			}
+		}
 		prio := PriorityEdit
 		if op.kind == Show || op.kind == Repost {
 			prio = PriorityNewProgress
@@ -701,7 +743,7 @@ func (s *Sender) execute(ctx context.Context, w work) {
 	case wPart:
 		s.sendPart(ctx, w.part)
 		if h := s.takeHeld(); h > 0 {
-			// Its method is held: the topic's parts wait, the others go on.
+			// The chat is held: the topic's parts wait for the end of the hold.
 			s.mu.Lock()
 			s.partHold[w.part.ThreadID] = s.now().Add(h)
 			s.mu.Unlock()
@@ -730,6 +772,11 @@ func (s *Sender) execute(ctx context.Context, w work) {
 			if len(q) == 1 {
 				delete(s.prog, w.tid)
 			}
+		}
+		if op != nil && op.kind == Edit {
+			now := s.now()
+			s.editWait(now)
+			s.edits.reserve(now)
 		}
 		s.mu.Unlock()
 		if op != nil {

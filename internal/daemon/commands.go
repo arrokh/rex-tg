@@ -327,12 +327,10 @@ func (d *daemon) statusText() string {
 	}
 	text := fmt.Sprintf("<b>rex-tg is running</b>\nTopics: %d live, %d offline\nQueued messages: %d\nTyping: %s\nRex: %s",
 		live, offline, queued, typing, format.Escape(rexLine))
-	// A long 429 from Telegram holds one method; it shows here until it ends.
-	for _, h := range d.tg.Holds() {
-		text += fmt.Sprintf("\n⏸ Telegram asked to wait: <code>%s</code> until %s", format.Escape(h.Method), h.Until.Local().Format("15:04"))
-		if h.Method == "sendRichMessage" {
-			text += " (answers come as plain messages)"
-		}
+	// A long 429 from Telegram holds the chat; it shows here until it ends.
+	if h, on := d.tg.CurrentHold(); on {
+		text += fmt.Sprintf("\n⏸ Telegram asked rex-tg to wait until %s (since %s). Messages wait until then.",
+			h.Until.Local().Format("15:04"), h.Since.Local().Format("15:04"))
 	}
 	return text
 }

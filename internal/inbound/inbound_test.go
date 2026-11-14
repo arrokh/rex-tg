@@ -61,6 +61,28 @@ func TestRouteText(t *testing.T) {
 	}
 }
 
+// A tap on a keyboard button sends its label: it routes as the button's
+// command, with or without emoji variation selectors, and never as text for
+// the agent. Other text that only starts like a label is text.
+func TestRouteTextButtons(t *testing.T) {
+	for _, b := range inbound.Buttons {
+		for _, label := range []string{b.Label, " " + b.Label + " ", strings.ReplaceAll(b.Label, " ", "\uFE0F ")} {
+			if r := inbound.RouteText(label, true, "bot"); r.Kind != inbound.RouteCommand || r.Command != b.Command {
+				t.Errorf("topic %q: %+v, want /%s", label, r, b.Command)
+			}
+		}
+	}
+	if r := inbound.RouteText("🎛 Panel", false, "bot"); r.Kind != inbound.RouteCommand || r.Command != "rt" {
+		t.Errorf("main chat panel: %+v", r)
+	}
+	if r := inbound.RouteText("🖥 Screen", false, "bot"); r.Command != inbound.CmdTopicOnly || r.Args != "screen" {
+		t.Errorf("main chat screen: %+v", r)
+	}
+	if r := inbound.RouteText("🖥 Screen please", true, "bot"); r.Kind != inbound.RouteAgentText {
+		t.Errorf("text that starts like a label: %+v", r)
+	}
+}
+
 func TestRouteTextAllCommands(t *testing.T) {
 	for _, c := range []string{"info", "screen", "files", "changes", "approve", "deny", "esc", "interrupt", "key", "force", "mode", "verbose", "reasoning", "resend", "unlink", "mute", "unmute", "help"} {
 		if r := inbound.RouteText("/"+c, true, "b"); r.Kind != inbound.RouteCommand || r.Command != c {

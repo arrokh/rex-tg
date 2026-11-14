@@ -85,6 +85,7 @@ func (d *daemon) startup(ctx context.Context) error {
 	}
 	d.pruneKnownTypes(ctx) // an update may have taught the adapters a type
 	d.loadPending(ctx)     // control commands queued before the stop
+	d.restoreHold(ctx)     // a long Telegram wait that is still on: post nothing until it ends
 
 	if err := d.snd.Recover(ctx); err != nil {
 		return fmt.Errorf("daemon: recover sender: %w", err)

@@ -49,7 +49,7 @@ func TestDefaults(t *testing.T) {
 	}
 	if c.InputSettings.QueueExpiry.Duration != 30*time.Minute || c.InputSettings.BusyAfterTyping.Duration != 15*time.Second ||
 		c.InputSettings.JoinWindow.Duration != 300*time.Millisecond || c.InputSettings.JoinWindowLong.Duration != 1500*time.Millisecond ||
-		c.InputSettings.WhileBusy != "steer" || c.Display.ProgressAnimation.Duration != 3*time.Second || !c.Display.RichMessages ||
+		c.InputSettings.WhileBusy != "steer" || c.Display.ProgressAnimation.Duration != 0 || c.Display.ProgressEditInterval.Duration != 5*time.Second || !c.Display.RichMessages ||
 		c.Display.SummaryAfter.Duration != 2*time.Minute {
 		t.Errorf("input = %+v", c.InputSettings)
 	}

@@ -69,7 +69,7 @@ func (s *Sender) finishQueued(tid int64) bool {
 func (s *Sender) requeue(tid int64, op *progOp, delay time.Duration) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	delay = max(delay, s.held) // a held method: wait for it (pauseFor)
+	delay = max(delay, s.held) // a hold: wait for its end (pauseFor)
 	s.held = 0
 	op.notBefore = s.now().Add(delay)
 	q := s.prog[tid]

@@ -132,8 +132,10 @@ var _ rexClient = (*rex.Client)(nil)
 // daemon is the wiring. Fields marked "core" are touched only by the core
 // goroutine; the others are safe for concurrent use.
 type daemon struct {
-	tabMu         sync.Mutex    // serializes the choice of tab names (syncTab), and guards the two below
-	tabSessions   []rex.Session // the Rex sessions, cached for syncTab
+	lastHold      atomic.Pointer[telegram.Hold] // a long Telegram wait whose end note is due (hold.go)
+	holdMu        sync.Mutex                    // orders noteHold and checkHoldEnd
+	tabMu         sync.Mutex                    // serializes the choice of tab names (syncTab), and guards the two below
+	tabSessions   []rex.Session                 // the Rex sessions, cached for syncTab
 	tabSessionsAt time.Time
 	cfg           config.Config
 	timing        Timing // fixed waits, with defaults filled in
@@ -510,6 +512,7 @@ func (d *daemon) tick() {
 		d.joined(g)
 	}
 	d.pump(now)
+	d.checkHoldEnd()
 	for conv, tl := range d.tailers {
 		if !tl.stopAt.IsZero() && !now.Before(tl.stopAt) {
 			d.stopTailer(conv, false)

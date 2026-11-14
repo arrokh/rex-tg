@@ -117,13 +117,17 @@ func (c *Client) SendDocument(ctx, chatID, threadID int64, filename string, data
 func (c *Client) GetFile(ctx, fileID string) (File, error)
 func (c *Client) DownloadFile(ctx, filePath string, w io.Writer, maxBytes int64) error
 func (c *Client) OnMessage(fn func(chatID, messageID int64)) // gets the number of each sent message and of each message in an update; nil removes it
+func (c *Client) CurrentHold() (Hold, bool)                  // the Telegram wait in force, if any (see the hold bullets below)
+func (c *Client) SetHold(h Hold)                             // puts back a kept hold that is still on and longer than the current one
+func (c *Client) OnHold(fn func(Hold))                       // gets each new or longer hold; nil removes it
 func Classify(err error) Class
 ```
 
+- The reply keyboard's buttons are `inbound.Buttons` (label and command). `inbound.RouteText` reads an exact label, without emoji variation selectors, as `/<command>` before it routes the text.
 - `SendMessageParams`: `ChatID`, `MessageThreadID`, `Text`, `ParseMode` (`"HTML"` or `""`), `DisableNotification`, `ReplyMarkup *InlineKeyboardMarkup`, `Keyboard *ReplyKeyboardMarkup` (a reply keyboard, sent as `reply_markup` only when `ReplyMarkup` is nil), `ReplyToMessageID`; link previews are always off (`link_preview_options.is_disabled`).
-- Errors: an `*APIError{Method, Code, Description, RetryAfter}` when Telegram answers `ok: false`. Network errors, timeouts, and 5xx answers come back as `*UnknownOutcomeError`, because the request may have taken effect.
-- A 429 whose `retry_after` is at least `HoldAfter` (5 min) holds its method: the client logs it (`Telegram rate limit`), sets `APIError.Held`, and answers later calls of that method itself with a 429 (`Held`, the time left as `RetryAfter`) until the wait ends, without a request. `Holds()` lists the held methods; `WithClock` sets the clock for tests. The sender pauses the whole bucket only for a 429 that is not held; work that met a held method waits for the hold (a job's `notBefore`, a topic's parts, a progress operation), and a held `sendRichMessage` falls back to a normal message.
-- An overlapping 429 never shortens a wait: the longer wait wins. The sender fails a held typing action, draft, or `answerCallbackQuery` at once; other held work waits for the hold without using its attempts (`sender.Call`, design 9.3).
+- Errors: an `*APIError{Method, Code, Description, RetryAfter, Held, Local}` when Telegram answers `ok: false`, or when the client refuses a call during a hold (then `Local` is set, and no request is made). Network errors, timeouts, and 5xx answers come back as `*UnknownOutcomeError`, because the request may have taken effect.
+- A 429 whose `retry_after` is at least `HoldAfter` (5 min) holds the chat, unless its method is one of the unheld ones (`getUpdates`, `getMe`, `getFile`, `setMyCommands`, `getMyCommands`, `deleteMyCommands`, `deleteWebhook`, `getWebhookInfo`). The client logs it (`Telegram rate limit`), sets `APIError.Held`, and refuses every other call until the wait ends (`held`, checked first in `call`, so no request is made). `CurrentHold()` returns the hold in force, as `Hold{Method, Since, Until}`. `SetHold` puts back a kept hold, and `OnHold` gets each new or longer hold (the daemon keeps it in KV `telegram_hold`). `WithClock` sets the clock for tests.
+- An overlapping 429 never shortens a wait: the longer wait wins, and a hold that is still on keeps its start. The sender fails a held draft, typing action, or `answerCallbackQuery` at once; other held work waits for the hold without using its attempts (`sender.Call`, design 9.3).
 - `Class` values: `ClassNone`, `ClassRateLimited` (429), `ClassParseEntities`, `ClassNotModified`, `ClassEditTargetGone`, `ClassDeleteTargetGone`, `ClassThreadNotFound`, `ClassBlocked` (403), `ClassConflict` (409), `ClassBadRequest` (other 4xx), `ClassUnknownOutcome`.
 - Default timeouts: 15 s per call; `GetUpdates` uses its long-poll timeout plus 10 s. The token never appears in errors or logs.
 - `WithProxy(*url.URL)` sets a proxy (nil keeps `HTTP(S)_PROXY` and `ALL_PROXY` from the environment). `config.ParseProxy` accepts `http`, `https`, `socks5`, and `socks5h` URLs with a host, and its errors never hold the URL.
@@ -292,7 +296,7 @@ Pure. One `Tracker` per topic. Times come from the caller.
 type State string // "idle", "working", "done", "blocked", "error"
 type Settings struct{ Mode, Verbose string; Reasoning, ShowMacPrompts, MacNotice bool } // Mode: progress|block|final; Verbose: off|on|full
 type Config struct {
-	ProgressDelay, EditInterval, AnswerGrace, TypingInterval time.Duration // 2s, 2s, 5s, 5s
+	ProgressDelay, EditInterval, AnswerGrace, TypingInterval time.Duration // 2s, 2s, 5s, 5s: fallbacks when zero; the daemon passes the [display] values (progress_edit_interval is 5s by default)
 	MaxRows, MaxSummaryRows, MaxRowRunes                     int           // 8, 30, 120
 	Redact                                                   func(string) string
 }
@@ -455,7 +459,7 @@ Topic commands: `info`, `screen`, `approve`, `deny`, `esc`, `interrupt`, `key`, 
 The only component that writes to Telegram. It owns the rate budget and the priorities of design section 9.3.
 
 ```go
-type Options struct{ RatePerSecond float64; Burst int; Now func() time.Time; Logger *slog.Logger; CheckDelay time.Duration; Markup func(store.Part) *telegram.InlineKeyboardMarkup; Keyboard func(store.Part) *telegram.ReplyKeyboardMarkup; PolledSince func(time.Time) bool } // CheckDelay default 60 s; Keyboard: the reply keyboard of an HTML or plain part without buttons
+type Options struct{ RatePerSecond float64; Burst int; Now func() time.Time; Logger *slog.Logger; CheckDelay time.Duration; Markup func(store.Part) *telegram.InlineKeyboardMarkup; Keyboard func(store.Part) *telegram.ReplyKeyboardMarkup; PolledSince func(time.Time) bool; EditsPerMinute float64 } // CheckDelay default 60 s; Keyboard: the reply keyboard of an HTML or plain part without buttons; EditsPerMinute: the chat-wide budget of progress edits, default 20 with burst 3 (`editBurst`); the daemon leaves it at the default
 func New(st *store.Store, tg *telegram.Client, opt Options) *Sender
 func (s *Sender) Run(ctx context.Context) error // until ctx ends
 func (s *Sender) Wake()                         // new outbox rows exist
@@ -468,6 +472,8 @@ func (s *Sender) Recover(ctx context.Context) error // at start: sending parts b
 ```
 
 Rules: outbox parts per design section 9.1 (claims with the floor, parse-error fallback to plain text, 429 waits, an unknown part is checked against the chat's message numbers and sent again only when they prove it never arrived, else a notice with key `notice:unknown:<outbox id>:<part>` or the check's note edited into it, row state from parts), documents through `SendDocument`, muted topics send answers silently, progress messages through the `progress` table (Show, Edit with "not modified" as success and "edit target gone" as a new Show, Repost as new then delete old, Finish as the last edit then the row is deleted; an unknown Show is never retried), edits and deletes retried with backoff, priorities answers > alerts > new progress > progress edits > typing.
+
+Holds and the edit budget: a short 429 pauses the bucket for its `retry_after` (`pauseBucket`). A hold does not pause the bucket (`pauseFor`, `APIError.Held`). During a hold, a part of a topic waits in `partHold`, a job waits in its `notBefore`, and a progress operation waits in `requeue`, each until the hold ends (`execute`, `takeHeld`). `Call` fails a held draft or `answerCallbackQuery` at once, and `Typing` drops its action. A progress edit (`Edit`, not the first post or the finish) takes a token of the edit budget (`edits`, `editWait`, `editRate`, `editBurst` 3). After a 429 from Telegram, the budget runs at half rate for an hour (`slowAfter429`, `slowUntil`). The client's own refusals (`APIError.Local`) do not restart that hour.
 
 ## Wave 3 packages
 
@@ -504,11 +510,11 @@ func Run(ctx context.Context, opt Options) error                                
 func NewPairingCode(ctx context.Context, st *store.Store, now time.Time) (string, error) // used by `rex-tg login`
 ```
 
-KV keys: `owner_user_id`, `owner_chat_id`, `bot_username`, `tg_offset`, `paused`, `pairing_code_hash`, `pairing_expires_at`, `pairing_attempts`, `turn:<thread id>` (the turn tracker snapshot as JSON; the sender owns the `progress` rows), `mac_notice:<thread>` and `mac_answer:<thread>` (the Mac hold, design 8.4a), `agents_board` (`<chat>:<message>` of the live `/agents` list, 8.7), `remind:<alert>` (`<count>:<chat>:<message>` of an alert's newest reminder, 8.6).
+KV keys: `owner_user_id`, `owner_chat_id`, `bot_username`, `tg_offset`, `paused`, `pairing_code_hash`, `pairing_expires_at`, `pairing_attempts`, `turn:<thread id>` (the turn tracker snapshot as JSON; the sender owns the `progress` rows), `mac_notice:<thread>` and `mac_answer:<thread>` (the Mac hold, design 8.4a), `agents_board` (`<chat>:<message>` of the live `/agents` list, 8.7), `remind:<alert>` (`<count>:<chat>:<message>` of an alert's newest reminder, 8.6), `telegram_hold` (JSON `{method, since, until}` of a Telegram wait, from the client's `OnHold`; deleted when the wait ends, before its note is sent, design 9.3).
 
-Periodic work in the tick, each in its own file: `tickBoard` (`board.go`: redraw the live list when an agent changed, at most every `Timing.BoardEdit`, and every `Timing.BoardRefresh`), `tickReminders` (`reminders.go`: every `Timing.RemindCheck`), and `checkUpdate` (`selfupdate.go`: every `Timing.UpdateCheck`; stops only while `delivering` and `busy` are empty).
+Periodic work in the tick, each in its own file: `tickBoard` (`board.go`: redraw the live list when an agent changed, at most every `Timing.BoardEdit`, and every `Timing.BoardRefresh`), `tickReminders` (`reminders.go`: every `Timing.RemindCheck`), `checkHoldEnd` (`hold.go`: once a Telegram wait has ended, one silent note goes to the main chat; the wait is forgotten before the note is sent, so a note that fails is not sent again), and `checkUpdate` (`selfupdate.go`: every `Timing.UpdateCheck`; stops only while `delivering` and `busy` are empty).
 
-`Run` does, in order: take the instance lock (`syscall.Flock` on `Config.LockPath()`, fail with `ErrAlreadyRunning`); open the store; `sender.Recover`; `store.RecoverTyping` with one notice per row ("Your message may be in the input box without Enter. Check with /screen."); `getMe` (save `bot_username`; log a warning when `has_topics_enabled` is false); `setMyCommands`; post the reply keyboard note to the main chat and to every open topic (outbox key `keyboard:<version>`) once per keyboard version (KV `reply_keyboard`, set before the send); restore tailers and turn trackers for live topics; start the sender, the Rex event stream (restart with backoff), the spool watcher (fsnotify plus a 1 s poll on `Config.SpoolDir()`), the scan ticker, the `getUpdates` loop, and a 250 ms tick; then run one core loop that handles everything below. Only the core loop changes state, so no locks are needed beyond the store's.
+`Run` does, in order: take the instance lock (`syscall.Flock` on `Config.LockPath()`, fail with `ErrAlreadyRunning`); open the store; `tg.OnHold(d.noteHold)`; `loadPending`; `restoreHold` (a Telegram wait kept by an earlier run goes back into the client, so no posting request is sent until it ends); `sender.Recover`; `store.RecoverTyping` with one notice per row ("Your message may be in the input box without Enter. Check with /screen."); `getMe` (save `bot_username`; log a warning when `has_topics_enabled` is false); `setMyCommands`; post the reply keyboard note to the main chat and to every open topic (outbox key `keyboard:<version>`) once per keyboard version (KV `reply_keyboard`, set before the send); restore tailers and turn trackers for live topics; start the sender, the Rex event stream (restart with backoff), the spool watcher (fsnotify plus a 1 s poll on `Config.SpoolDir()`), the scan ticker, the `getUpdates` loop, and a 250 ms tick; then run one core loop that handles everything below. Only the core loop changes state, so no locks are needed beyond the store's.
 
 Flows (design sections in brackets):
 
@@ -547,4 +553,4 @@ Schema version 4 rebuilds `outbox_part` so that `format` also allows `image`. It
 
 ### Rich messages (Phase 6, opt-in)
 
-`telegram.(*Client).SendRichMessage(ctx, chatID, threadID int64, markdown string, silent bool, markup *InlineKeyboardMarkup) (Message, error)` sends `{"chat_id", "message_thread_id", "rich_message": {"markdown": …}, "disable_notification", "reply_markup"}`. Schema version 2 adds `rich` to `outbox_part.format`. The sender sends `rich` parts with `SendRichMessage`; on a 400 error it falls back to plain text, or to a `.md` document when the text is longer than 4000 characters.
+`telegram.(*Client).SendRichMessage(ctx, chatID, threadID int64, markdown string, silent bool, markup *InlineKeyboardMarkup) (Message, error)` sends `{"chat_id", "message_thread_id", "rich_message": {"markdown": …}, "disable_notification", "reply_markup"}`. Schema version 2 adds `rich` to `outbox_part.format`. The sender sends `rich` parts with `SendRichMessage`. On a 400 error (`ClassParseEntities` or `ClassBadRequest`) it sends the text again through `sendText` as HTML (plain text when Telegram cannot parse that), or as a `.md` document when the text is longer than 4000 characters. A 429 does not change the format: the part waits like any other part (`pauseFor`, design 9.3).

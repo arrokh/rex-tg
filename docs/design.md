@@ -127,7 +127,7 @@ sequenceDiagram
   B->>T: after 2 s without an answer: sendMessage (progress message, silent)
   loop while the agent works
     A->>F: tool call, tool result, commentary
-    B->>T: editMessageText (progress message), at most every 2 s
+    B->>T: editMessageText (progress message), at most every 5 s
   end
   A->>F: final answer line
   B->>T: editMessageText (progress message becomes a summary line)
@@ -371,13 +371,13 @@ While the agent works, one progress message is edited in place:
 ⏱ 1m 12s · 4 tools
 ```
 
-- **Headline.** The first line of the agent's latest commentary as plain text (Markdown marks such as `**` dropped), or "Working…" before there is any. Its icon is an hourglass (⏳ ⌛) that turns with each edit. A Telegram message cannot animate by itself, so `[display] progress_animation` (3 s by default, at least 2 s, `"0s"` off) edits the message that often while the agent works: the hourglass turns and the timer moves. Edits go through the shared rate budget at a low priority and merge per topic, so with many agents at work the animation slows down instead of delaying answers. While the turn waits for an answer, the message stays as it is. With the animation off, the hourglass turns only with the edits that go out anyway.
+- **Headline.** The first line of the agent's latest commentary as plain text (Markdown marks such as `**` dropped), or "Working…" before there is any. Its icon is an hourglass (⏳ ⌛) that turns with each edit. A Telegram message cannot animate by itself, so `[display] progress_animation` (off by default; at least 2 s when set) edits the message that often while the agent works: the hourglass turns and the timer moves. Edits go through the progress edit budget (section 9.3) and the shared rate budget, at a low priority, and merge per topic. So with many agents at work, the animation slows down instead of delaying answers. While the turn waits for an answer, the message stays as it is. With the animation off, the hourglass turns only with the edits that go out anyway.
 - **Rows.** One row per tool call: `▸` while it runs, `✅` when it ends, `❌` when it fails. Repeated calls of the same tool in a row collapse, for example `📖 Read ×3`. At most 8 rows of at most 120 characters, as in OpenClaw. Older rows drop off the top.
 - **Labels (D14).** A row shows a short label: Claude's Bash `description`, a file path relative to the project, or a search pattern. For a shell call without a description, it shows the start of the command after secret removal. A row never shows tool output or file contents.
-- **Footer.** Elapsed time and the number of tools. The time moves on even when nothing else changes, for example while the agent thinks or one long tool runs. Such an edit comes every 10 seconds at first. The step grows with the turn (a sixth of the elapsed time) up to one minute, so a long turn spends little of the rate budget. While the turn waits for the user's answer, the time stays.
+- **Footer.** Elapsed time and the number of tools. The time moves on even when nothing else changes, for example while the agent thinks or one long tool runs. With the animation off, such an edit comes every 10 seconds at first. The step grows with the turn (a sixth of the elapsed time) up to one minute, so a long turn spends little of the rate budget. While the turn waits for the user's answer, the time stays.
 - **When it appears.** Only after 2 seconds without an answer, so that quick answers do not flash a progress message first. When the turn ends before the progress message could go out (the chat's budget went to answers first), none is posted: a late "Working… 0s" below newer messages would only confuse.
 - **Silent.** The progress message is sent with `disable_notification`, as Hermes does with tool progress. Edits never make a sound. Only the agent's answer (its first message) and a prompt that waits for the user (an alert or its reminder) make a sound; notices, the waiting notice, command replies, block-mode text, and prompts typed on the Mac are silent.
-- **Edits.** At most one edit every 2 seconds per topic, within the shared rate budget (section 9.3).
+- **Edits.** At most one edit every 5 seconds per topic (`[display] progress_edit_interval`). Edits also share the chat's progress edit budget (section 9.3).
 - **It stays at the bottom.** If other messages arrive below it while the turn runs, rex-tg posts a new progress message and deletes the old one, as OpenClaw does. This counts the agent's own posts, alerts, reminders, waiting notices, other notices, and your own messages, so the last message of a running turn is always the one that shows its progress. While the turn waits for your answer, the alert stays the last message; the progress message moves below it once the turn goes on.
 - **At the end (D13).** rex-tg edits the progress message into one summary line, with the tool rows in a collapsed quote. Then it sends the answer as a new message:
 
@@ -404,12 +404,12 @@ While a turn runs, the topic shows the agent's text as a Telegram draft (`sendMe
 - **What it shows.** The end of the text, at most 3000 characters from the start of a line, rendered like an answer and with secrets removed. Block mode shows only pi's text, because its blocks are posted as messages anyway.
 - **When.** Only while a turn runs that Telegram sees: not for a turn held for the Mac (8.4a), not in final mode (answers only), and not once its answer is out. A topic gets at most one draft every `[display] stream_interval` (1 second by default, which is also the least: drafts share the chat's budget of about one message a second, and a 429 with a short wait from Telegram would pause every send). A draft that did not change is sent again after 20 seconds, so it does not fade during a long tool call; after 2 minutes without a change it may fade.
 - **Order.** Drafts go last in the sender, after answers, alerts, and progress. The sender sends one request at a time. rex-tg closes a turn's draft before the answer's outbox row exists, and the draft request checks this when it is sent. So no draft comes after the answer.
-- **Errors.** A draft that fails is not sent again at once; the next change sends the newest text, at most one per `stream_interval`. After 3 refusals (400) in a row, rex-tg sends no drafts until the next start, and logs it once.
+- **Errors.** A draft that fails is not sent again at once; the next change sends the newest text, at most one per `stream_interval`. After 3 refusals (400) in a row, rex-tg sends no drafts until the next start, and logs it once. During a hold (9.3), a draft fails at once, and none reaches Telegram.
 - Drafts are off by default: at their fastest they change once a second, which is slower than the word-by-word stream of OpenClaw or Hermes. `[display] stream = true` turns them on.
 
 ### 8.2 The answer
 
-- The final answer is a normal message, with Markdown turned into Telegram HTML.
+- The final answer is a normal message. With `[display] rich_messages` (on by default), Telegram renders its Markdown (8.9). Otherwise, Markdown is turned into Telegram HTML.
 - A long answer comes as several chat messages, split where a person would split it, not one transcript entry per message (`format.Messages`):
   - Each message aims at `[display] message_length` characters (1500 by default, 300 to 4000), and none is longer than 4000.
   - Splits fall between paragraphs, and a heading starts a new message. A message never ends with a heading or with a line that leads into the next block ("Here is the fix:").
@@ -714,7 +714,7 @@ Telegram errors:
 
 | Error | Handling |
 | --- | --- |
-| 429 Too Many Requests | Wait for `retry_after`, then retry. Telegram posted nothing. A wait of 5 minutes or more holds only its method (see 9.3). |
+| 429 Too Many Requests | Wait for `retry_after`, then retry. Telegram posted nothing. A wait of 5 minutes or more holds the whole chat until it ends (see 9.3). |
 | 400 "can't parse entities" | Send the same part again as plain text. Telegram posted nothing. |
 | 400 "message is not modified" | The edit counts as done. |
 | 400 "message to edit not found" | The progress message is gone. Post a new one. |
@@ -733,12 +733,21 @@ The sender handles each topic's rows in `id` order, with one request in flight p
 
 ### 9.3 Rate limits
 
-All topics are in one private chat, so they share one budget. The Telegram FAQ says to send about 1 message per second per chat. Edits count against the same limits.
+All topics are in one private chat, so they share one budget. The [Telegram FAQ](https://core.telegram.org/bots/faq) says: "In a single chat, avoid sending more than one message per second." Edits count against the same limits.
 
 - One token bucket for the chat: 1 request per second, with bursts of up to 5. Both values are config settings. The bucket also honors 429 responses.
-- A 429 with a short wait (under 5 minutes) pauses the whole bucket. That is the chat's normal limit, and it covers every method.
-- A 429 with a long wait (5 minutes or more) holds only its method. Telegram once asked rex-tg to wait about 95 minutes, and pausing the whole bucket stopped every reply for that time (seen live, 2026-11-14). Now the client refuses the held method itself until the wait ends, without asking Telegram: a request during the wait could make it longer. The work that met the hold waits for its end, without using its attempts. The exception is typing, a draft, or the answer to a button press. Those are worth nothing an hour later, so they fail at once. All other requests go on. A rich answer goes out as a normal message at once. When two calls overlap, the longer wait wins.
-- Each 429 is logged with its method and wait, and `/status` shows the held methods.
+- A 429 with a short wait (under 5 minutes) pauses the whole bucket for its `retry_after`. That is the chat's normal limit.
+- A 429 with a long wait (5 minutes or more) is a hold. rex-tg holds the whole chat for it. On 2026-11-14 Telegram asked rex-tg to wait about 95 minutes. sendMessage, sendRichMessage, and editMessageText then each answered 429 with the same time left (spike S1).
+- Telegram's documents do not say whether a wait covers one method or the whole chat. A Telegram developer wrote that `retry_after` is for one API call (spike S1). The same time left on three methods does not fit that. So rex-tg treats the wait as one for the whole chat.
+- During a hold, the client refuses every Bot API call except `getUpdates`, `getMe`, `getFile`, the command-menu calls, and the webhook calls, which post nothing. The refusal does not ask Telegram. So nothing that posts reaches Telegram during the hold. This is a precaution: no source shows that a request during a wait makes it longer.
+- The hold is kept in the store (KV `telegram_hold`). A restart does not post during the wait.
+- Work that meets the hold waits for its end, without using its attempts. Typing, drafts, and answers to button presses fail at once.
+- The held messages go out when the wait ends. Some may come before the note below.
+- When the wait ends, the main chat gets one silent note with the start and end of the wait. If the wait ended while rex-tg was stopped, the note comes after the next start.
+- `/status` shows the hold in one line while it lasts.
+- Progress edits have their own budget: 20 per minute for the chat, with a burst of 3 (`sender.Options.EditsPerMinute`). An edit over the budget waits, and newer edits of its topic merge into it. The first post and the final summary are not counted. The official FAQ gives 20 messages per minute for a group, and no limit for edits in a private chat. The budget of 20 is rex-tg's own choice.
+- After a 429 from Telegram, the edit budget runs at half its rate for one hour. The client's own refusals during a hold do not restart that hour.
+- Each 429 from Telegram is logged with its method and wait.
 - When the budget is short, work goes in this order: answers, alerts, new progress messages, progress edits, "typing…".
 - Several pending progress changes merge into one edit.
 
@@ -1070,8 +1079,8 @@ show_mac_prompts = true
 mac_notice = true            # hold Mac turns behind one notice (8.4a)
 turn_images = 4              # images the agent looked at that come after an answer that names no image file (0 = off)
 progress_delay = "2s"
-progress_edit_interval = "2s"
-progress_animation = "3s"
+progress_edit_interval = "5s"
+progress_animation = "0s"
 rich_messages = true
 quick_replies = []
 show_changes = true
