@@ -48,7 +48,7 @@ const (
 		"/resend [id] - send again a reply that may not have arrived (the newest one without an id)\n" +
 		"/mute, /unmute - answers without or with sound\n" +
 		"/at &lt;time|delay&gt; &lt;text&gt; - send text to the agent later, at 09:00 or in 30m; /at lists, /at cancel &lt;n&gt; removes one\n" +
-		"/rename &lt;name&gt; - rename this topic (and its Rex tab); /rename auto names it after the session again\n" +
+		"/rename &lt;name&gt; - rename this topic, its Rex pane and its tab; /rename auto names them after the session again\n" +
 		"/unlink - stop mirroring this session\n" +
 		"/help - this list"
 )

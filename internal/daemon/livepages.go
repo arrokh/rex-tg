@@ -216,7 +216,7 @@ func (d *daemon) liveScreenButton(th store.Thread) *telegram.InlineKeyboardMarku
 	if !d.miniAppReady() {
 		return nil
 	}
-	id, err := d.livePage(miniapp.KindScreen, th.ID, "live", firstNonEmpty(th.Name, "Screen"), "")
+	id, err := d.screenPage(th)
 	if err != nil {
 		d.log.Warn("mini app: live screen page", "err", err)
 		return nil
@@ -224,6 +224,39 @@ func (d *daemon) liveScreenButton(th store.Thread) *telegram.InlineKeyboardMarku
 	return &telegram.InlineKeyboardMarkup{InlineKeyboard: [][]telegram.InlineKeyboardButton{{
 		{Text: "🖥 Live screen", WebApp: &telegram.WebAppInfo{URL: miniAppURL(d.cfg.MiniApp.URL, id)}},
 	}}}
+}
+
+// screenPage returns the id of a topic's live screen page (any goroutine).
+func (d *daemon) screenPage(th store.Thread) (string, error) {
+	return d.livePage(miniapp.KindScreen, th.ID, "live", firstNonEmpty(th.Name, "Screen"), "")
+}
+
+// repoTop is the top folder of the git repository that holds cwd. ok is
+// false outside a repository (worker).
+func (d *daemon) repoTop(ctx context.Context, cwd string) (string, bool) {
+	out, err := git(ctx, cwd, nil, "rev-parse", "--show-toplevel")
+	if err != nil {
+		return cwd, false
+	}
+	top := strings.TrimRight(out, "\n")
+	if top == "" {
+		return cwd, false
+	}
+	return filepath.Clean(top), true
+}
+
+// filesPage returns the id of the files page of the agent's folder: the
+// repository's top folder when it works in a git repository, else its
+// working folder (worker).
+func (d *daemon) filesPage(ctx context.Context, th store.Thread, cwd string) (string, error) {
+	root, _ := d.repoTop(ctx, cwd)
+	root = filepath.Clean(root)
+	return d.livePage(miniapp.KindFiles, th.ID, root, "📂 "+filepath.Base(root), root)
+}
+
+// changesPage returns the id of the changes page of a repository's top folder.
+func (d *daemon) changesPage(th store.Thread, top string) (string, error) {
+	return d.livePage(miniapp.KindChanges, th.ID, top, "📝 "+filepath.Base(top), top)
 }
 
 // filesCommand answers /files with a button that opens the agent's folder
@@ -246,14 +279,9 @@ func (d *daemon) filesCommand(th store.Thread, upd int64) {
 	}
 	cwd := conv.CWD
 	d.spawn(func() {
-		root := cwd
-		if out, err := git(d.ctx, cwd, nil, "rev-parse", "--show-toplevel"); err == nil {
-			if top := strings.TrimRight(out, "\n"); top != "" {
-				root = top
-			}
-		}
+		root, _ := d.repoTop(d.ctx, cwd)
 		root = filepath.Clean(root)
-		id, err := d.livePage(miniapp.KindFiles, th.ID, root, "📂 "+filepath.Base(root), root)
+		id, err := d.filesPage(d.ctx, th, cwd)
 		if err != nil {
 			d.log.Warn("mini app: files page", "err", err)
 			d.replyTopic(th, tag, "Could not open the file browser.")
@@ -313,12 +341,7 @@ func (d *daemon) changesCommand(th store.Thread, upd int64) {
 			}
 			some = some || l.Total > 0
 		}
-		top := cwd
-		if out, err := git(d.ctx, cwd, nil, "rev-parse", "--show-toplevel"); err == nil {
-			if t := strings.TrimRight(out, "\n"); t != "" {
-				top = filepath.Clean(t)
-			}
-		}
+		top, _ := d.repoTop(d.ctx, cwd)
 		where := "📝 <code>" + format.Escape(d.tildePath(top)) + "</code>"
 		if head.Branch != "" {
 			where += " · " + format.Escape(head.Branch)
@@ -328,7 +351,7 @@ func (d *daemon) changesCommand(th store.Thread, upd int64) {
 			d.replyTopic(th, tag, text)
 			return
 		}
-		id, err := d.livePage(miniapp.KindChanges, th.ID, top, "📝 "+filepath.Base(top), top)
+		id, err := d.changesPage(th, top)
 		if err != nil {
 			d.log.Warn("mini app: changes page", "err", err)
 			d.replyTopic(th, tag, "Could not open the changes view.")

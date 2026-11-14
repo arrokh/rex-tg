@@ -260,6 +260,25 @@ func (d *daemon) tabSessionList() ([]rex.Session, error) {
 	return ss, nil
 }
 
+// inOwnSession tells whether a Rex session is the one of /new
+// (rex.new_session). The caller holds tabMu. A cached list that predates the
+// session that /new just made is read again once.
+func (d *daemon) inOwnSession(session string) (bool, error) {
+	sessions, err := d.tabSessionList()
+	if err != nil {
+		return false, err
+	}
+	own, ok := d.ownSession(sessions)
+	if !ok && d.now().Sub(d.tabSessionsAt) > time.Second {
+		d.tabSessions = nil
+		if sessions, err = d.tabSessionList(); err != nil {
+			return false, err
+		}
+		own, ok = d.ownSession(sessions)
+	}
+	return ok && own.ID == session, nil
+}
+
 // syncTab gives the Rex tab of an agent the name that goes with its topic
 // (worker): the topic's name, or the folder and agent form when the topic has
 // only the folder fallback, with a 🔴 in front while the topic is offline. th
@@ -288,21 +307,12 @@ func (d *daemon) syncTab(th store.Thread, conv store.Conversation) {
 	}
 	d.tabMu.Lock() // two syncs must not pick the same unique name
 	defer d.tabMu.Unlock()
-	sessions, err := d.tabSessionList()
+	isOwn, err := d.inOwnSession(p.Session)
 	if err != nil {
 		d.log.Warn("rename tab: list sessions", "err", err)
 		return
 	}
-	own, ok := d.ownSession(sessions)
-	if !ok && d.now().Sub(d.tabSessionsAt) > time.Second {
-		// The cached list may predate the session that /new just made.
-		d.tabSessions = nil
-		if sessions, err = d.tabSessionList(); err != nil {
-			return
-		}
-		own, ok = d.ownSession(sessions)
-	}
-	if !ok || own.ID != p.Session {
+	if !isOwn {
 		return // a tab of the user's own sessions
 	}
 	blocks, err := d.rx.Blocks(d.ctx, p.Session)
@@ -647,36 +657,4 @@ func (d *daemon) introCard(th store.Thread, conv store.Conversation, title strin
 	fmt.Fprintf(&b, "\nMode: %s · Input: %s", format.Escape(th.Mode), input)
 	b.WriteString("\nWrite here to type into the pane. /help lists the commands.")
 	return b.String()
-}
-
-// renameCommand is /rename <name> in a topic (core). An agent cannot rename
-// its topic, and an agent asked to do so may rename its Rex session instead
-// (which, for the session of /new, rex-tg names back). /rename names the
-// topic, and its tab in the session of /new, as a tab name that you gave
-// would: the name sticks until /rename auto, or until the tab gets the
-// "<folder> · <agent>" form again.
-func (d *daemon) renameCommand(th store.Thread, args string, reply func(string)) {
-	name := cleanLabel(strings.Join(strings.Fields(format.Redact(args)), " "))
-	switch {
-	case name == "":
-		reply("Usage: /rename &lt;name&gt; names this topic, and its Rex tab when the agent was started with /new. /rename auto names it after the agent's session again.")
-		return
-	case strings.EqualFold(name, "auto"):
-		if err := d.st.Delete(d.ctx, tabUserKey(th.ID)); err != nil {
-			reply("Could not change the name now. Try again.")
-			return
-		}
-		reply("✏️ This topic is named after the agent's session again.")
-	default:
-		if tidyName(name, "") == "" {
-			reply("A name needs a letter or a digit.")
-			return
-		}
-		if err := d.st.Set(d.ctx, tabUserKey(th.ID), name); err != nil {
-			reply("Could not change the name now. Try again.")
-			return
-		}
-		reply("✏️ Renaming this topic to <b>" + format.Escape(shortName(tidyName(name, ""), maxTopicName)) + "</b>.")
-	}
-	d.onRename(evRename{thread: th.ID})
 }

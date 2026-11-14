@@ -94,7 +94,7 @@ func runQueued(c *controlPanel) {
 func TestControlPanelRetryRunsOnce(t *testing.T) {
 	var runs atomic.Int32
 	c := testPanel(t, &runs, nil)
-	a := miniapp.ControlAction{Op: miniapp.OpPause, Act: "0123456789abcdef"}
+	a := miniapp.ControlAction{Op: miniapp.OpUnlink, Thread: 1, Act: "0123456789abcdef"}
 	ctx := context.Background()
 	for i := 0; i < 2; i++ { // the core is not running: both events stay queued
 		if r := c.Do(ctx, a); r.OK || !r.Pending {
@@ -118,7 +118,7 @@ func TestControlPanelRetryRunsOnce(t *testing.T) {
 	if err := c.storeResult("fedcba9876543210", controlRunning); err != nil {
 		t.Fatal(err)
 	}
-	r := c.Do(ctx, miniapp.ControlAction{Op: miniapp.OpPause, Act: "fedcba9876543210"})
+	r := c.Do(ctx, miniapp.ControlAction{Op: miniapp.OpUnlink, Thread: 1, Act: "fedcba9876543210"})
 	if r.OK || r.Pending || !strings.Contains(r.Message, "stopped while it ran") || runs.Load() != 1 {
 		t.Errorf("crashed claim: %+v after %d runs", r, runs.Load())
 	}
@@ -142,5 +142,26 @@ func TestControlPanelStillRunning(t *testing.T) {
 	}
 	if runs.Load() != 1 {
 		t.Errorf("%d runs, want 1", runs.Load())
+	}
+}
+
+// The report says what a rename did, and what it did not, and why.
+func TestRenameReportText(t *testing.T) {
+	for _, c := range []struct {
+		rep  renameReport
+		auto bool
+		want string
+	}{
+		{renameReport{topic: true, pane: true, tab: true}, false, "✏️ Renamed the topic, its Rex pane, and its tab to X."},
+		{renameReport{pane: true, tab: true}, false, "✏️ Renamed the Rex pane and its tab to X."},
+		{renameReport{topic: true, pane: true, tab: true}, true, "✏️ Reset the topic, its Rex pane, and its tab to the automatic name."},
+		{renameReport{topic: true, pane: true, skips: []string{"its tab (it is shared with another agent)"}}, false,
+			"✏️ Renamed the topic and its Rex pane to X. Not renamed: its tab (it is shared with another agent)."},
+		{renameReport{skips: []string{"its Rex pane and its tab (the agent has no pane now)"}}, false,
+			"Nothing was renamed. Not renamed: its Rex pane and its tab (the agent has no pane now)."},
+	} {
+		if got := c.rep.text("X", c.auto); got != c.want {
+			t.Errorf("%+v:\n got %q\nwant %q", c.rep, got, c.want)
+		}
 	}
 }

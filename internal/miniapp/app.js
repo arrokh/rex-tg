@@ -1,7 +1,7 @@
 // rex-tg Mini App: shows one page: an answer, the changes of a turn, the
 // live screen of a topic's pane, the files of the agent's folder, the
 // changes of its repository, or the control panel (the agents in Rex panes:
-// open, rename, start, unlink, pause).
+// open, rename, start, unlink; their screen, files and changes).
 // Every request carries Telegram's signed init data; the server checks it.
 (function () {
   var tg = window.Telegram && window.Telegram.WebApp;
@@ -297,11 +297,16 @@
   // --- trees: the file explorer and the changes ---
 
   // Telegram's back button runs the one action set last (none: hidden).
-  var backAction = null;
+  // rootBack is what Back does at the top of a page opened from the panel:
+  // it returns to the panel.
+  var backAction = null, rootBack = null;
   if (tg && tg.BackButton) { tg.BackButton.onClick(function () { if (backAction) { backAction(); } }); }
   function setBack(f) {
-    backAction = f;
-    if (tg && tg.BackButton) { if (f) { tg.BackButton.show(); } else { tg.BackButton.hide(); } }
+    backAction = f || rootBack;
+    if (tg && tg.BackButton) { if (backAction) { tg.BackButton.show(); } else { tg.BackButton.hide(); } }
+  }
+  function backToPanel() {
+    if (history.length > 1) { history.back(); } else if (tg && tg.close) { tg.close(); }
   }
 
   function size(n) {
@@ -740,8 +745,30 @@
     return s;
   }
 
-  function confirmAsk(msg, yes) {
-    if (tg && tg.showConfirm) { tg.showConfirm(msg, function (ok) { if (ok) { yes(); } }); } else if (window.confirm(msg)) { yes(); }
+  // hap gives a haptic tick: "light" for a tap, or a result kind.
+  function hap(kind) {
+    try {
+      var h = tg && tg.HapticFeedback;
+      if (!h) { return; }
+      if (kind === "success" || kind === "error" || kind === "warning") { h.notificationOccurred(kind); } else { h.impactOccurred("light"); }
+    } catch (e) { /* an older Telegram: no haptics */ }
+  }
+
+  // confirmAsk asks in Telegram's popup, or in showConfirm, or in the browser.
+  function confirmAsk(o, yes) {
+    if (tg && tg.showPopup && (!tg.isVersionAtLeast || tg.isVersionAtLeast("6.2"))) {
+      try {
+        tg.showPopup({
+          title: o.title, message: o.message,
+          buttons: [{ id: "ok", type: o.danger ? "destructive" : "default", text: o.ok }, { type: "cancel" }]
+        }, function (bid) { if (bid === "ok") { yes(); } });
+        return;
+      } catch (e) { /* an older Telegram */ }
+    }
+    if (tg && tg.showConfirm) {
+      try { tg.showConfirm(o.message, function (ok) { if (ok) { yes(); } }); return; } catch (e) { /* an older Telegram */ }
+    }
+    if (window.confirm(o.message)) { yes(); }
   }
 
   function openLink(url) {
@@ -758,15 +785,24 @@
   // acts keeps the act of an action whose outcome is not known (a pending
   // result, or a request that may have reached the server), by the action's
   // key. A tap on the same action sends the same act, so it never runs twice.
-  var acts = {};
+  // An entry lives for 10 minutes, and ends when any action on the same
+  // target (pane or topic) gets a final result: after that the old act would
+  // only make the server return a stale result for an action it never ran.
+  var acts = {}, actTTL = 10 * 60 * 1000;
+  function actTarget(a) { return a.pane ? "p" + a.pane : a.thread ? "t" + a.thread : a.op; }
+  function dropActs(target) {
+    Object.keys(acts).forEach(function (k) { if (acts[k].target === target) { delete acts[k]; } });
+  }
   function actKey(a) {
-    return [a.op, a.pane || "", a.thread || "", a.agent || "", a.path || "", a.name || "", a.on ? "1" : "0"].join("|");
+    return [a.op, a.pane || "", a.thread || "", a.agent || "", a.path || "", a.name || "", a.kind || "", a.on ? "1" : "0"].join("|");
   }
 
   // post runs one action. The buttons in lock stay off while it runs.
   function post(a, lock) {
     var key = actKey(a);
-    a.act = acts[key] || act();
+    var target = actTarget(a), old = acts[key];
+    if (old && Date.now() - old.at > actTTL) { delete acts[key]; old = null; }
+    a.act = old ? old.act : act();
     var all = lock ? Array.prototype.slice.call(lock.querySelectorAll("button")) : [];
     var was = all.map(function (b) { return b.disabled; });
     all.forEach(function (b) { b.disabled = true; });
@@ -784,375 +820,751 @@
       .then(function (r) {
         if (lock) { lock.removeAttribute("aria-busy"); }
         all.forEach(function (b, i) { b.disabled = was[i]; });
-        if (r.pending) { acts[key] = a.act; } else { delete acts[key]; }
+        if (r.pending) { acts[key] = { act: a.act, at: old ? old.at : Date.now(), target: target }; } else { dropActs(target); delete acts[key]; }
         return r;
       });
   }
 
-  function resultBox(r) {
-    var box = el("div", "result " + (r.pending ? "wait" : r.ok ? "ok" : "bad"));
-    box.setAttribute("role", r.ok || r.pending ? "status" : "alert");
-    box.appendChild(el("span", "", (r.pending ? "⏳ " : r.ok ? "✓ " : "⚠ ") + (r.message || (r.ok ? "Done." : "The action failed."))));
-    if (r.pending) { box.appendChild(el("div", "hint", "Tap again to check; it will not run twice.")); }
-    if (r.link) {
-      var go = button("↗ Open topic", "btn small");
-      go.addEventListener("click", function () { openLink(r.link); });
-      box.appendChild(go);
+  // toast shows a result without blocking the page.
+  var toastBox = null;
+  function toast(r, extra) {
+    if (!toastBox) {
+      toastBox = el("div", "toasts");
+      document.body.appendChild(toastBox);
     }
-    return box;
+    hap(r.pending ? "warning" : r.ok ? "success" : "error");
+    var t = el("div", "toast " + (r.pending ? "wait" : r.ok ? "ok" : "bad"));
+    t.setAttribute("role", r.ok || r.pending ? "status" : "alert");
+    var body = el("div", "tbody");
+    body.appendChild(el("div", "", (r.pending ? "⏳ " : r.ok ? "✓ " : "⚠ ") + (r.message || (r.ok ? "Done." : "The action failed."))));
+    if (r.pending) { body.appendChild(el("div", "thint", "Tap again to check; it will not run twice.")); }
+    if (r.ok && extra) { body.appendChild(el("div", "thint", extra)); }
+    t.appendChild(body);
+    if (r.link) {
+      var go = button("↗ Open", "btn small");
+      go.addEventListener("click", function () { openLink(r.link); });
+      t.appendChild(go);
+    }
+    var x = button("✕", "tx", "Dismiss");
+    t.appendChild(x);
+    function gone() { if (t.parentNode) { t.parentNode.removeChild(t); } }
+    x.addEventListener("click", gone);
+    toastBox.appendChild(t);
+    while (toastBox.children.length > 3) { toastBox.removeChild(toastBox.firstChild); }
+    setTimeout(gone, r.ok && !r.link ? 4500 : 9000);
   }
+
+  // goPage opens another Mini App page of the bot; Back returns to the panel.
+  function goPage(p) {
+    try { if (tg && tg.MainButton) { tg.MainButton.hide(); } } catch (e) { /* none */ }
+    location.href = "app?p=" + encodeURIComponent(p) + "&from=panel" + location.hash;
+  }
+
+  // The kind of a state, for its colour and its filter chip.
+  function stateKind(s) {
+    s = (s || "").toLowerCase();
+    if (/^waiting/.test(s)) { return "waiting"; }
+    if (/err|fail|stuck|offline|dead|crash/.test(s)) { return "bad"; }
+    if (/work|run|busy|think|start/.test(s)) { return "working"; }
+    if (/idle|ready|done/.test(s)) { return "idle"; }
+    return "other";
+  }
+  var kindOrder = ["waiting", "working", "idle", "bad", "other"];
+  var kindName = { waiting: "waiting", working: "working", idle: "idle", bad: "attention", other: "other" };
 
   function controlPanel() {
     document.body.classList.remove("fill");
+    document.body.classList.add("ctlbody");
     page.className = "ctl";
     page.textContent = "";
+    var header = document.querySelector("header.top");
+    header.classList.add("stack");
 
-    var state = null, asked = 0, timer = null, inflight = false;
-    var ui = {}; // by pane: { edit: "topic"|"pane"|null, msg: result, el: card }
+    var mb = tg && tg.MainButton && tg.MainButton.setText && tg.MainButton.onClick ? tg.MainButton : null;
+    var state = null, asked = 0, timer = null;
+    var tab = load("rex-tg.panel.tab") === "new" ? "new" : "agents";
+    var group = load("rex-tg.panel.group") || "none";
+    if (["none", "state", "folder", "session"].indexOf(group) < 0) { group = "none"; }
+    var filters = {}, query = "";
+    var open = {};  // the rows that are expanded, by pane
+    var cards = {}; // by pane: { sig, el }
+    var sheet = null, newPanel = null;
 
-    // the top: pause, time, refresh
-    var top = el("div", "ctl-top");
-    var pauseLine = el("div", "pauseline");
-    var pauseText = el("span", "", "");
-    var pauseBtn = button("Pause typing", "btn small");
-    pauseLine.appendChild(pauseText);
-    pauseLine.appendChild(pauseBtn);
-    var upd = el("div", "updline");
-    var updText = el("span", "status", "Loading…");
-    var reload = button("↻", "chip", "Refresh now");
-    upd.appendChild(updText);
-    upd.appendChild(reload);
-    top.appendChild(pauseLine);
-    top.appendChild(upd);
-    var topMsg = el("div", "");
-    var errBox = el("div", "result bad");
-    errBox.hidden = true;
-    errBox.setAttribute("role", "alert");
-    var agentsHead = el("h2", "sect", "Agents");
-    var agentsBox = el("div", "cards");
-    var newBox = el("section", "newagent");
-    page.appendChild(top);
-    page.appendChild(topMsg);
-    page.appendChild(errBox);
-    page.appendChild(agentsHead);
-    page.appendChild(agentsBox);
-    page.appendChild(newBox);
-    var newPanel = null;
+    // --- the sticky head: paused banner, tabs, state filters ---
+    var head = el("div", "ctl-head");
+    var banner = el("div", "banner", "⏸ Typing is paused. Send /unpause in the chat to allow it again.");
+    banner.hidden = true;
+    banner.setAttribute("role", "status");
+    var seg = el("div", "segc");
+    seg.setAttribute("role", "tablist");
+    seg.setAttribute("aria-label", "Panel");
+    var tabAgents = button("Agents", "", "");
+    var tabNew = button("New agent", "", "");
+    var count = el("span", "cnt", "");
+    tabAgents.appendChild(count);
+    [tabAgents, tabNew].forEach(function (b) { b.setAttribute("role", "tab"); seg.appendChild(b); });
+    var chipsRow = el("div", "schips");
+    chipsRow.setAttribute("role", "group");
+    chipsRow.setAttribute("aria-label", "Filter by state");
+    head.appendChild(banner);
+    head.appendChild(seg);
+    head.appendChild(chipsRow);
+    header.appendChild(head);
 
-    pauseBtn.addEventListener("click", function () {
-      var on = !(state && state.paused);
-      function go() {
-        post({ op: "pause", on: on }, top).then(function (r) {
-          topMsg.textContent = "";
-          topMsg.appendChild(resultBox(r));
-          refresh();
-        });
-      }
-      if (on) { confirmAsk("Pause typing? Nothing is typed into panes until you resume.", go); } else { go(); }
+    var errBar = el("div", "errbar", "");
+    errBar.hidden = true;
+    errBar.setAttribute("role", "alert");
+    var agentsView = el("div", "view-agents");
+    var newView = el("div", "view-new");
+    page.appendChild(errBar);
+    page.appendChild(agentsView);
+    page.appendChild(newView);
+
+    // --- the Agents tab: tools, then the list ---
+    var tools = el("div", "tools2");
+    var search = el("input", "txt");
+    search.type = "search";
+    search.placeholder = "Search name, folder or agent";
+    search.setAttribute("aria-label", "Search agents");
+    search.autocomplete = "off";
+    var reload = button("↻", "ibtn", "Refresh now");
+    var groupSel = el("select", "sel");
+    groupSel.setAttribute("aria-label", "Group agents");
+    [["none", "No grouping"], ["state", "Group by state"], ["folder", "Group by folder"], ["session", "Group by Rex session"]].forEach(function (o) {
+      var op = el("option", "", o[1]);
+      op.value = o[0];
+      groupSel.appendChild(op);
     });
-    reload.addEventListener("click", function () { refresh(); });
+    groupSel.value = group;
+    var expandAll = button("Expand all", "chip");
+    expandAll.hidden = true;
+    var row1 = el("div", "trow2");
+    row1.appendChild(search);
+    row1.appendChild(reload);
+    var row2 = el("div", "trow2");
+    row2.appendChild(groupSel);
+    row2.appendChild(expandAll);
+    tools.appendChild(row1);
+    tools.appendChild(row2);
+    var cardsBox = el("div", "cards");
+    var foot = el("div", "foot", "");
+    agentsView.appendChild(tools);
+    agentsView.appendChild(cardsBox);
+    agentsView.appendChild(foot);
+    // the first look: grey blocks until the state arrives
+    for (var i = 0; i < 3; i++) { cardsBox.appendChild(el("div", "skel card-skel")); }
 
-    function drawTop() {
-      var paused = !!state.paused;
-      pauseText.textContent = paused ? "⏸ Typing is paused" : "";
-      pauseText.className = paused ? "pausetxt" : "";
-      pauseBtn.textContent = paused ? "Resume" : "Pause typing";
-      pauseBtn.className = paused ? "btn small primary" : "btn small";
-      pauseBtn.setAttribute("aria-label", paused ? "Resume typing into panes" : "Pause typing into panes");
-      updText.textContent = "Updated " + (state.at || "");
+    search.addEventListener("input", function () { query = search.value.trim().toLowerCase(); drawAgents(); });
+    reload.addEventListener("click", function () { hap("light"); refresh(); });
+    groupSel.addEventListener("change", function () { group = groupSel.value; save("rex-tg.panel.group", group === "none" ? null : group); drawAgents(); });
+    expandAll.addEventListener("click", function () {
+      hap("light");
+      var shown = visible();
+      var anyClosed = shown.some(function (a) { return !open[a.pane]; });
+      shown.forEach(function (a) { if (anyClosed) { open[a.pane] = true; } else { delete open[a.pane]; } });
+      Object.keys(cards).forEach(function (k) { applyOpen(cards[k].el, k); });
+      syncExpandAll();
+    });
+
+    function syncExpandAll() {
+      var shown = visible();
+      var anyClosed = shown.some(function (a) { return !open[a.pane]; });
+      expandAll.textContent = anyClosed ? "Expand all" : "Collapse all";
+      expandAll.hidden = !shown.length;
     }
 
-    function line(cls, text) { return el("div", cls, text); }
+    // --- tabs and the Telegram buttons ---
+    function setTab(t) {
+      tab = t;
+      save("rex-tg.panel.tab", t === "new" ? "new" : null);
+      agentsView.hidden = t !== "agents";
+      newView.hidden = t !== "new";
+      chipsRow.hidden = t !== "agents" || !state || !state.agents.length;
+      [[tabAgents, "agents"], [tabNew, "new"]].forEach(function (p) {
+        p[0].setAttribute("aria-selected", p[1] === t ? "true" : "false");
+        p[0].className = p[1] === t ? "on" : "";
+        p[0].tabIndex = p[1] === t ? 0 : -1;
+      });
+      if (t === "new" && newPanel) { newPanel.shown(); }
+      if (t !== "new") { hideMain(); }
+      syncBack();
+    }
+    function hideMain() { try { if (mb) { mb.hide(); } } catch (e) { /* none */ } }
+    tabAgents.addEventListener("click", function () { hap("light"); setTab("agents"); });
+    tabNew.addEventListener("click", function () { hap("light"); setTab("new"); });
+    seg.addEventListener("keydown", function (e) {
+      if (e.key === "ArrowRight" || e.key === "ArrowLeft") { var t = tab === "agents" ? "new" : "agents"; setTab(t); (t === "agents" ? tabAgents : tabNew).focus(); }
+    });
+    window.addEventListener("pagehide", hideMain);
+    window.addEventListener("pageshow", function (e) { if (e.persisted) { refresh(); } });
+
+    // Back closes a sheet, goes up a folder, or returns to the Agents tab.
+    function syncBack() {
+      var f = null;
+      if (sheet) { f = function () { sheet.close(); }; }
+      else if (tab === "new") { f = newPanel && newPanel.canUp() ? newPanel.up : function () { setTab("agents"); }; }
+      setBack(f);
+    }
+
+    // --- sheets ---
+    function openSheet(label, build) {
+      if (sheet) { sheet.close(); }
+      var prev = document.activeElement;
+      var scrim = el("div", "scrim");
+      var box = el("div", "sheet");
+      box.setAttribute("role", "dialog");
+      box.setAttribute("aria-modal", "true");
+      box.setAttribute("aria-label", label);
+      box.appendChild(el("div", "grip"));
+      var h = el("h3", "stitle", label);
+      box.appendChild(h);
+      scrim.appendChild(box);
+      function onKey(e) {
+        if (e.key === "Escape") { s.close(); return; }
+        if (e.key !== "Tab") { return; }
+        var f = Array.prototype.slice.call(box.querySelectorAll("button:not(:disabled), input, select"));
+        if (!f.length) { return; }
+        var first = f[0], last = f[f.length - 1];
+        if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+        else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+      }
+      var s = {
+        el: box,
+        close: function () {
+          if (!scrim.parentNode) { return; }
+          scrim.parentNode.removeChild(scrim);
+          document.removeEventListener("keydown", onKey);
+          document.body.style.overflow = "";
+          if (sheet === s) { sheet = null; }
+          if (prev && prev.focus) { try { prev.focus(); } catch (e) { /* gone */ } }
+          syncBack();
+        }
+      };
+      scrim.addEventListener("click", function (e) { if (e.target === scrim) { s.close(); } });
+      document.addEventListener("keydown", onKey);
+      build(box, s.close);
+      document.body.appendChild(scrim);
+      document.body.style.overflow = "hidden";
+      sheet = s;
+      syncBack();
+      var first = box.querySelector("input") || box.querySelector("button");
+      if (first) { first.focus(); }
+    }
+
+    function renameSheet(a) {
+      openSheet("Rename " + (a.name || "agent"), function (box, close) {
+        box.appendChild(el("p", "shint", "Renames the topic, the Rex pane and its tab." + (a.topic && a.topic.custom ? " Named by you." : "")));
+        var input = el("input", "txt big");
+        input.type = "text";
+        input.maxLength = 100;
+        input.value = (a.topic && a.topic.name) || a.name || "";
+        input.setAttribute("aria-label", "New name");
+        input.autocapitalize = "off";
+        input.autocomplete = "off";
+        box.appendChild(input);
+        var row = el("div", "srow");
+        var save = button("Save", "btn primary");
+        var auto = button("Auto name", "btn", "Name it after the session again");
+        var cancel = button("Cancel", "btn");
+        row.appendChild(save);
+        row.appendChild(auto);
+        row.appendChild(cancel);
+        box.appendChild(row);
+        box.appendChild(el("p", "shint", "Auto name names it after the session again."));
+        var prefill = input.value.trim();
+        function changed() { save.disabled = !input.value.trim() || input.value.trim() === prefill; }
+        changed();
+        input.addEventListener("input", changed);
+        function submit(name) {
+          name = name.trim();
+          if (!name || (name !== "auto" && name === prefill)) { input.focus(); return; }
+          hap("light");
+          post({ op: "rename", pane: a.pane, name: name }, box).then(function (r) {
+            toast(r);
+            if (r.ok) { close(); }
+            refresh();
+          });
+        }
+        save.addEventListener("click", function () { submit(input.value); });
+        auto.addEventListener("click", function () { submit("auto"); });
+        cancel.addEventListener("click", close);
+        input.addEventListener("keydown", function (e) { if (e.key === "Enter") { e.preventDefault(); if (!save.disabled) { submit(input.value); } } });
+        setTimeout(function () { input.select(); }, 0);
+      });
+    }
+
+    // --- the head: banner, count, state chips ---
+    function drawHead() {
+      banner.hidden = !state.paused;
+      count.textContent = String(state.agents.length);
+      count.hidden = !state.agents.length;
+      tabAgents.setAttribute("aria-label", "Agents, " + state.agents.length);
+      var n = {};
+      state.agents.forEach(function (a) { var k = stateKind(a.state); n[k] = (n[k] || 0) + 1; });
+      Object.keys(filters).forEach(function (k) { if (!n[k]) { delete filters[k]; } });
+      chipsRow.textContent = "";
+      kindOrder.forEach(function (k) {
+        if (!n[k]) { return; }
+        var on = !!filters[k];
+        var b = button("", "sc k-" + k + (on ? " on" : ""));
+        b.appendChild(el("i", "dot", ""));
+        b.appendChild(document.createTextNode(n[k] + " " + kindName[k]));
+        b.setAttribute("aria-pressed", on ? "true" : "false");
+        b.setAttribute("aria-label", n[k] + " " + kindName[k] + (on ? ", filter on" : ", filter"));
+        b.addEventListener("click", function () { hap("light"); if (filters[k]) { delete filters[k]; } else { filters[k] = true; } drawHead(); drawAgents(); });
+        chipsRow.appendChild(b);
+      });
+      chipsRow.hidden = tab !== "agents" || !state.agents.length;
+    }
+
+    // --- the agent rows ---
+    function match(a) {
+      var any = Object.keys(filters).length > 0;
+      if (any && !filters[stateKind(a.state)]) { return false; }
+      if (query) {
+        var hay = [a.name, a.folder, a.agent, a.title, a.session, a.label].join(" ").toLowerCase();
+        if (hay.indexOf(query) < 0) { return false; }
+      }
+      return true;
+    }
+    function visible() { return state ? state.agents.filter(match) : []; }
+
+    function tag(text, cls) { return el("span", "tag" + (cls ? " " + cls : ""), text); }
+
+    function applyOpen(c, pane) {
+      var on = !!open[pane];
+      var rowBtn = c.querySelector(".rowmain");
+      var det = c.querySelector(".cdetail");
+      if (!rowBtn || !det) { return; }
+      rowBtn.setAttribute("aria-expanded", on ? "true" : "false");
+      det.hidden = !on;
+      c.classList.toggle("open", on);
+    }
 
     function card(a) {
-      var u = ui[a.pane] || (ui[a.pane] = { edit: null, msg: null });
-      var c = el("article", "card");
-      c.setAttribute("aria-label", a.name || ("Pane " + a.pane));
-      var head = el("div", "chead");
-      head.appendChild(el("span", "cemoji", a.emoji || "•"));
-      head.appendChild(el("span", "cname", a.name || ("Pane " + a.pane)));
-      c.appendChild(head);
+      var kind = stateKind(a.state);
+      var c = el("article", "card k-" + kind);
+      var nm = a.name || ("Pane " + a.pane);
+      var did = "d" + a.pane;
+
+      // the compact row: a button that opens the details, and a topic shortcut
+      var top = el("div", "ctop");
+      var rowBtn = el("button", "rowmain");
+      rowBtn.type = "button";
+      rowBtn.setAttribute("aria-controls", did);
+      rowBtn.setAttribute("aria-expanded", "false");
+      rowBtn.appendChild(el("span", "cemoji", a.emoji || "•"));
+      var mid = el("span", "cmid");
+      mid.appendChild(el("span", "cname", nm));
       var st = a.state || "";
       if (a.since) { st += (st ? " · " : "") + a.since; }
-      if (a.mac) { st += (st ? " · " : "") + "💻 on the Mac"; }
-      if (st) { c.appendChild(line("cstate", st)); }
-      var where = [a.agent, a.folder].filter(Boolean).join(" · ");
-      if (where) { c.appendChild(line("cline", where)); }
-      if (a.title) { c.appendChild(line("cline muted", a.title)); }
-      var rex = [];
-      if (a.session) { rex.push("Rex session " + a.session); }
-      if (a.label) { rex.push("pane " + a.label); }
-      if (rex.length) { c.appendChild(line("cline muted", rex.join(" · "))); }
-
-      var btns = el("div", "btns");
-      c.appendChild(btns);
-      var form = el("div", "formslot");
-      var msg = el("div", "");
-      c.appendChild(form);
-      c.appendChild(msg);
-
-      function showMsg() {
-        msg.textContent = "";
-        if (u.msg) { msg.appendChild(resultBox(u.msg)); }
-      }
-      function done(r, closeEdit) {
-        u.msg = r;
-        if (r.ok && closeEdit) { u.edit = null; }
-        showMsg();
-        if (r.ok) { form.textContent = ""; }
-        refresh();
-      }
-
+      mid.appendChild(el("span", "cstate", st));
+      rowBtn.appendChild(mid);
+      rowBtn.appendChild(el("span", "chev", "›"));
+      top.appendChild(rowBtn);
       if (a.topic) {
-        var t = button("↗ Open topic", "btn primary");
-        t.addEventListener("click", function () { openLink(a.topic.link); });
-        btns.appendChild(t);
+        var sc = button("↗", "ibtn small", "Open the topic of " + nm);
+        sc.addEventListener("click", function () { hap("light"); openLink(a.topic.link); });
+        top.appendChild(sc);
+      }
+      c.appendChild(top);
+
+      // the details
+      var det = el("div", "cdetail");
+      det.id = did;
+      det.setAttribute("role", "region");
+      det.setAttribute("aria-label", "Details of " + nm);
+      det.hidden = true;
+      var where = [a.agent, a.folder].filter(Boolean).join(" · ");
+      if (where) { det.appendChild(el("div", "cmeta", where)); }
+      if (a.title) { det.appendChild(el("div", "ctitle", a.title)); }
+      var tags = el("div", "tags");
+      if (a.session) { tags.appendChild(tag("Rex session " + a.session)); }
+      if (a.label) { tags.appendChild(tag("pane " + a.label)); }
+      if (a.mac) { tags.appendChild(tag("💻 on the Mac")); }
+      if (a.topic && a.topic.status === "offline") { tags.appendChild(tag("topic offline", "warn")); }
+      if (tags.children.length) { det.appendChild(tags); }
+
+      var acts2 = el("div", "cact");
+      if (a.topic) {
+        var t = button("↗ Topic", "btn primary");
+        t.addEventListener("click", function () { hap("light"); openLink(a.topic.link); });
+        acts2.appendChild(t);
       } else if (a.ready) {
         var o = button("Open topic", "btn primary");
         o.addEventListener("click", function () {
-          post({ op: "open", pane: a.pane }, c).then(function (r) { done(r, false); });
+          hap("light");
+          post({ op: "open", pane: a.pane }, c).then(function (r) { toast(r); refresh(); });
         });
-        btns.appendChild(o);
+        acts2.appendChild(o);
       } else {
-        btns.appendChild(el("span", "waiting", "Waiting for the session…"));
+        acts2.appendChild(el("span", "waiting", "Waiting for the session…"));
       }
-
-      // editor: an inline input with Save and Cancel
-      function editor(kind) {
-        u.edit = kind;
-        form.textContent = "";
-        var topic = kind === "topic";
-        var row = el("div", "editrow");
-        var input = el("input", "txt");
-        input.type = "text";
-        input.maxLength = 100;
-        input.value = topic ? a.topic.name : (a.label || a.name || "");
-        input.setAttribute("aria-label", topic ? "New topic name" : "New pane name");
-        input.autocapitalize = "off";
-        input.autocomplete = "off";
-        var save = button("Save", "btn small primary");
-        var cancel = button("Cancel", "btn small");
-        row.appendChild(input);
-        row.appendChild(save);
-        row.appendChild(cancel);
-        form.appendChild(row);
-        if (topic) {
-          form.appendChild(line("hint", 'Type "auto" to name it after the session again.' + (a.topic.custom ? " Named by you." : "")));
-        }
-        function close() { u.edit = null; form.textContent = ""; }
-        function submit() {
-          var v = input.value.trim();
-          if (!v) { return; }
-          var action = topic ? { op: "rename_topic", thread: a.topic.thread, name: v } : { op: "rename_pane", pane: a.pane, name: v };
-          post(action, c).then(function (r) { done(r, true); });
-        }
-        save.addEventListener("click", submit);
-        cancel.addEventListener("click", close);
-        input.addEventListener("keydown", function (e) {
-          if (e.key === "Enter") { e.preventDefault(); submit(); }
-          if (e.key === "Escape") { close(); }
-        });
-        input.focus();
-        input.select();
-      }
-
-      if (a.topic) {
-        var rt = button("✏️ Rename topic", "btn");
-        rt.addEventListener("click", function () { editor("topic"); });
-        btns.appendChild(rt);
-      }
-      var rp = button("✏️ Rename pane", "btn");
-      rp.addEventListener("click", function () { editor("pane"); });
-      btns.appendChild(rp);
-      if (a.topic) {
-        var ul = button("🔌 Unlink", "btn danger");
-        ul.addEventListener("click", function () {
-          confirmAsk("Unlink this session? rex-tg stops mirroring it; the topic stays as history.", function () {
-            post({ op: "unlink", thread: a.topic.thread }, c).then(function (r) { done(r, false); });
+      function pageBtn(icon, text, kindKey) {
+        var b = button(icon + " " + text, "btn", text + " of " + nm);
+        b.addEventListener("click", function () {
+          hap("light");
+          post({ op: "page", pane: a.pane, kind: kindKey }, c).then(function (r) {
+            if (r.page) { goPage(r.page); return; }
+            toast(r);
+            refresh();
           });
         });
-        btns.appendChild(ul);
+        acts2.appendChild(b);
       }
-      if (a.topic && a.topic.custom) { c.setAttribute("data-custom", "1"); }
-      if (u.edit === "topic" && !a.topic) { u.edit = null; }
-      if (u.edit) { editor(u.edit); }
-      showMsg();
+      if (a.topic) {
+        pageBtn("🖥", "Screen", "screen");
+        if (state.files) { pageBtn("📂", "Files", "files"); }
+        if (state.changes) { pageBtn("📝", "Changes", "changes"); }
+      }
+      var rn = button("✏️ Rename", "btn", "Rename " + nm);
+      rn.addEventListener("click", function () { hap("light"); renameSheet(a); });
+      acts2.appendChild(rn);
+      if (a.topic) {
+        var ul = button("🔌 Unlink", "btn danger", "Unlink " + nm);
+        ul.addEventListener("click", function () {
+          hap("light");
+          confirmAsk({ title: "Unlink this session?", message: "rex-tg stops mirroring this session; the topic stays as history.", ok: "Unlink", danger: true }, function () {
+            post({ op: "unlink", thread: a.topic.thread }, c).then(function (r) { toast(r); refresh(); });
+          });
+        });
+        acts2.appendChild(ul);
+      }
+      det.appendChild(acts2);
+      c.appendChild(det);
+
+      rowBtn.addEventListener("click", function () {
+        hap("light");
+        if (open[a.pane]) { delete open[a.pane]; } else { open[a.pane] = true; }
+        applyOpen(c, a.pane);
+        syncExpandAll();
+      });
+      applyOpen(c, a.pane);
       return c;
     }
 
-    function drawAgents() {
-      var seen = {};
-      var kids = [];
-      state.agents.forEach(function (a) {
-        seen[a.pane] = true;
-        var u = ui[a.pane];
-        // a card with an open input is kept as it is
-        if (u && u.edit && u.el && u.el.parentNode === agentsBox) { kids.push(u.el); return; }
-        var c = card(a);
-        ui[a.pane].el = c;
-        kids.push(c);
-      });
-      Object.keys(ui).forEach(function (k) { if (!seen[k]) { delete ui[k]; } });
-      // keep the nodes of open cards in place; replace the others
-      var same = kids.length === agentsBox.children.length && kids.every(function (k, i) { return agentsBox.children[i] === k; });
-      if (!same) {
-        agentsBox.textContent = "";
-        kids.forEach(function (k) { agentsBox.appendChild(k); });
-      }
-      if (!kids.length) { agentsBox.appendChild(el("p", "note empty", "No agents are running in Rex panes.")); }
+    function groupOf(a) {
+      if (group === "state") { var k = stateKind(a.state); return { key: k, label: kindName[k], order: kindOrder.indexOf(k) }; }
+      if (group === "folder") { return { key: a.folder || "", label: a.folder || "No folder", order: 0 }; }
+      return { key: a.session || "", label: a.session ? "Rex session " + a.session : "No Rex session", order: 0 };
     }
 
-    // --- new agent ---
+    function drawAgents() {
+      var list = visible();
+      var seen = {};
+      state.agents.forEach(function (a) { seen[a.pane] = true; });
+      Object.keys(cards).forEach(function (k) { if (!seen[k]) { delete cards[k]; delete open[k]; } });
+      var nodes = [];
+      function cardFor(a) {
+        var calm = {};
+        Object.keys(a).forEach(function (k) { if (k !== "since") { calm[k] = a[k]; } });
+        var sig = JSON.stringify([calm, state.files, state.changes]);
+        var cd = cards[a.pane];
+        // a card whose action runs is kept until it returns
+        var busy = cd && cd.el.getAttribute("aria-busy") === "true";
+        if (!cd || (cd.sig !== sig && !busy)) { cd = cards[a.pane] = { sig: sig, el: card(a) }; }
+        else if (!busy) {
+          // only the age changed: update its text in place
+          var stEl = cd.el.querySelector(".cstate");
+          var st = a.state || "";
+          if (a.since) { st += (st ? " · " : "") + a.since; }
+          if (stEl && stEl.textContent !== st) { stEl.textContent = st; }
+        }
+        return cd.el;
+      }
+      if (group === "none") {
+        list.forEach(function (a) { nodes.push(cardFor(a)); });
+      } else {
+        var gs = [], idx = {};
+        list.forEach(function (a) {
+          var g = groupOf(a);
+          if (idx[g.key] === undefined) { idx[g.key] = gs.length; gs.push({ label: g.label, order: g.order, items: [] }); }
+          gs[idx[g.key]].items.push(a);
+        });
+        if (group === "state") { gs.sort(function (x, y) { return x.order - y.order; }); }
+        gs.forEach(function (g) {
+          var h = el("h3", "ghead");
+          h.appendChild(el("span", "", g.label));
+          h.appendChild(el("span", "gcount", String(g.items.length)));
+          nodes.push(h);
+          g.items.forEach(function (a) { nodes.push(cardFor(a)); });
+        });
+      }
+      var keep = document.activeElement && cardsBox.contains(document.activeElement) ? document.activeElement : null;
+      cardsBox.textContent = "";
+      if (!state.agents.length) {
+        var e = el("div", "empty");
+        e.appendChild(el("div", "eico", "🛰"));
+        e.appendChild(el("div", "etitle", "No agents are running in Rex panes."));
+        e.appendChild(el("div", "ehint", "Start one from the New agent tab."));
+        var go = button("New agent", "btn primary");
+        go.addEventListener("click", function () { setTab("new"); });
+        e.appendChild(go);
+        cardsBox.appendChild(e);
+      } else if (!list.length) {
+        var e2 = el("div", "empty");
+        e2.appendChild(el("div", "etitle", "No agent matches."));
+        var clear = button("Clear filters", "btn");
+        clear.addEventListener("click", function () { filters = {}; query = ""; search.value = ""; drawHead(); drawAgents(); });
+        e2.appendChild(clear);
+        cardsBox.appendChild(e2);
+      } else {
+        nodes.forEach(function (n) { cardsBox.appendChild(n); });
+      }
+      if (keep && keep.isConnected) { try { keep.focus({ preventScroll: true }); } catch (e) { /* gone */ } }
+      syncExpandAll();
+      foot.textContent = "Updated " + (state.at || "") + " · " + list.length + " of " + state.agents.length + " shown";
+    }
 
-    function newAgent() {
-      var agent = null, folder = null, hidden = false, list = null, sig = "";
-      newBox.textContent = "";
-      newBox.appendChild(el("h2", "sect", "New agent"));
-      var pickAgent = el("div", "segm");
+    // --- the New agent tab ---
+    function buildNew() {
+      var agent = null, folder = null, hidden = false, list = null, loading = 0, fq = "", busy = false, sig = "", loaded = false;
+      var inner = el("div", "newinner");
+      newView.appendChild(inner);
+
+      inner.appendChild(el("h2", "sect", "Agent"));
+      var pickAgent = el("div", "acards");
       pickAgent.setAttribute("role", "radiogroup");
       pickAgent.setAttribute("aria-label", "Agent");
+      inner.appendChild(pickAgent);
+
+      inner.appendChild(el("h2", "sect", "Folder"));
       var chipsBox = el("div", "fchips");
       chipsBox.setAttribute("role", "group");
-      chipsBox.setAttribute("aria-label", "Folder shortcuts");
-      var chosen = el("div", "chosen");
+      chipsBox.setAttribute("aria-label", "Pinned and recent folders");
+      inner.appendChild(chipsBox);
+
       var expl = el("div", "explorer");
-      var start = button("", "btn primary wide");
+      var crumbs = el("nav", "crumbs");
+      crumbs.setAttribute("aria-label", "Folder path");
+      var etools = el("div", "etools");
+      var fin = el("input", "txt");
+      fin.type = "search";
+      fin.placeholder = "Filter folders here";
+      fin.setAttribute("aria-label", "Filter the folders here");
+      fin.autocomplete = "off";
+      var hid = button("Hidden", "chip", "Show hidden folders");
+      hid.setAttribute("role", "switch");
+      hid.setAttribute("aria-checked", "false");
+      etools.appendChild(fin);
+      etools.appendChild(hid);
+      var rowsBox = el("div", "frows");
+      rowsBox.setAttribute("aria-live", "polite");
+      var useBtn = button("Use this folder", "btn wide");
+      expl.appendChild(crumbs);
+      expl.appendChild(etools);
+      expl.appendChild(rowsBox);
+      expl.appendChild(useBtn);
+      inner.appendChild(expl);
+
+      var summary = el("div", "summary");
       var why = el("div", "hint");
-      var res = el("div", "");
-      newBox.appendChild(el("div", "label", "Agent"));
-      newBox.appendChild(pickAgent);
-      newBox.appendChild(el("div", "label", "Folder"));
-      newBox.appendChild(chipsBox);
-      newBox.appendChild(expl);
-      newBox.appendChild(chosen);
-      newBox.appendChild(start);
-      newBox.appendChild(why);
-      newBox.appendChild(res);
+      var startBtn = button("", "btn primary wide");
+      inner.appendChild(summary);
+      inner.appendChild(why);
+      inner.appendChild(startBtn);
 
       function starters() { return (state && state.starters) || []; }
+      function chosenStarter() { return starters().filter(function (x) { return x.key === agent; })[0]; }
+
       function updateStart() {
-        var s = starters().filter(function (x) { return x.key === agent; })[0];
+        var s = chosenStarter();
         var paused = !!(state && state.paused);
-        chosen.textContent = folder ? "Folder: " + folder.shown : "No folder picked yet.";
-        start.textContent = s && folder ? "Start " + s.name + " in " + folder.shown : "Start an agent";
-        start.disabled = paused || !s || !folder || start.getAttribute("data-busy") === "1";
-        why.textContent = paused ? "Typing is paused, so a new agent cannot start. Resume first." : (!s ? "Pick an agent." : (!folder ? "Pick a folder." : ""));
+        var ready = !!(s && folder && !paused && !busy);
+        var text = s && folder ? "Start " + s.name + " in " + folder.shown : "Start an agent";
+        summary.textContent = "";
+        if (s && folder) {
+          summary.appendChild(document.createTextNode("Start "));
+          summary.appendChild(el("b", "", s.name));
+          summary.appendChild(document.createTextNode(" in "));
+          summary.appendChild(el("code", "", folder.shown));
+        } else {
+          summary.appendChild(el("span", "muted", "Pick an agent and a folder."));
+        }
+        why.textContent = paused ? "⏸ Typing is paused, so a new agent cannot start. Send /unpause in the chat." : (!s ? "Pick an agent." : (!folder ? "Pick a folder." : ""));
+        startBtn.textContent = text;
+        startBtn.disabled = !ready;
+        startBtn.hidden = !!mb;
+        if (mb && tab === "new") {
+          try {
+            mb.setText(text);
+            if (ready) { mb.enable(); } else { mb.disable(); }
+            mb.show();
+          } catch (e) { /* an older Telegram */ }
+        }
       }
+
+      function start() {
+        var s = chosenStarter();
+        if (!s || !folder || busy || (state && state.paused)) { return; }
+        busy = true;
+        updateStart();
+        try { if (mb && mb.showProgress) { mb.showProgress(false); } } catch (e) { /* none */ }
+        hap("light");
+        post({ op: "new", agent: s.key, path: folder.path }, newView).then(function (r) {
+          busy = false;
+          try { if (mb && mb.hideProgress) { mb.hideProgress(); } } catch (e) { /* none */ }
+          toast(r, "Progress continues in the main chat.");
+          updateStart();
+          refresh();
+        });
+      }
+      startBtn.addEventListener("click", start);
+      if (mb) { mb.onClick(start); }
+
       function drawAgentPick() {
         pickAgent.textContent = "";
         starters().forEach(function (s) {
-          var b = button(s.name, "seg-b" + (s.key === agent ? " on" : ""));
+          var on = s.key === agent;
+          var b = button("", "acard" + (on ? " on" : ""));
           b.setAttribute("role", "radio");
-          b.setAttribute("aria-checked", s.key === agent ? "true" : "false");
-          b.addEventListener("click", function () { agent = s.key; drawAgentPick(); updateStart(); });
+          b.setAttribute("aria-checked", on ? "true" : "false");
+          b.appendChild(el("span", "an", s.name));
+          b.appendChild(el("span", "ak", s.key));
+          b.addEventListener("click", function () { hap("light"); agent = s.key; drawAgentPick(); updateStart(); });
           pickAgent.appendChild(b);
         });
-        if (!starters().length) { pickAgent.appendChild(el("span", "note", "No agents can be started.")); }
+        if (!starters().length) { pickAgent.appendChild(el("div", "muted", "No agents can be started.")); }
       }
       function pick(f) {
         folder = { path: f.path, shown: f.shown };
+        hap("light");
         drawChips();
+        drawUse();
         updateStart();
       }
       function drawChips() {
         chipsBox.textContent = "";
-        ((state && state.folders) || []).forEach(function (f) {
-          var b = button("📁 " + f.shown, "chip" + (folder && folder.path === f.path ? " on" : ""));
-          b.setAttribute("aria-pressed", folder && folder.path === f.path ? "true" : "false");
+        var fs = (state && state.folders) || [];
+        fs.forEach(function (f) {
+          var on = !!(folder && folder.path === f.path);
+          var b = button("📁 " + f.shown, "chip" + (on ? " on" : ""));
+          b.setAttribute("aria-pressed", on ? "true" : "false");
           b.addEventListener("click", function () { pick(f); });
           chipsBox.appendChild(b);
         });
+        chipsBox.hidden = !fs.length;
+      }
+      function drawUse() {
+        var cur = list;
+        useBtn.hidden = !cur;
+        if (!cur) { return; }
+        var sel = !!(folder && folder.path === cur.path);
+        useBtn.textContent = sel ? "✓ This folder is selected" : "Use this folder";
+        useBtn.className = sel ? "btn wide" : "btn primary wide";
+        useBtn.setAttribute("aria-label", (sel ? "Selected: " : "Use folder ") + cur.shown);
       }
 
-      // the folder explorer
-      function drawExplorer(l, err) {
-        expl.textContent = "";
-        var head = el("div", "ehead");
-        head.appendChild(el("span", "epath", l ? l.shown : "Folders"));
-        if (l && l.git) { head.appendChild(el("span", "gitflag", "🌿 git repository")); }
-        expl.appendChild(head);
-        var tools = el("div", "etools");
-        var hid = button("Show hidden", "chip" + (hidden ? " on" : ""));
-        hid.setAttribute("aria-pressed", hidden ? "true" : "false");
-        hid.addEventListener("click", function () { hidden = !hidden; load(l ? l.path : (state.home.path)); });
-        tools.appendChild(hid);
-        if (l) {
-          var use = button("Use this folder", "chip primary");
-          use.addEventListener("click", function () { pick(l); });
-          tools.appendChild(use);
+      function gitBadge() { var g = el("span", "gitb", "git"); g.setAttribute("aria-label", "git repository"); return g; }
+
+      function drawCrumbs(l) {
+        crumbs.textContent = "";
+        var home = (state && state.home && state.home.path) || "";
+        var segs = [{ shown: (state && state.home && state.home.shown) || "~", path: home }];
+        if (l.path !== home) {
+          if (home && l.path.indexOf(home + "/") === 0) {
+            var p = home;
+            l.path.slice(home.length + 1).split("/").forEach(function (cpart) { p += "/" + cpart; segs.push({ shown: cpart, path: p }); });
+          } else { segs = [{ shown: l.shown, path: l.path }]; }
         }
-        expl.appendChild(tools);
+        segs.forEach(function (sg, i) {
+          if (i) { var sp = el("span", "sep", "›"); sp.setAttribute("aria-hidden", "true"); crumbs.appendChild(sp); }
+          var last = i === segs.length - 1;
+          var b = button(sg.shown, "crumb" + (last ? " last" : ""), "Go to " + sg.shown);
+          if (last) { b.setAttribute("aria-current", "location"); }
+          b.addEventListener("click", function () { if (!last) { hap("light"); load(sg.path); } });
+          crumbs.appendChild(b);
+        });
+        if (l.git) { crumbs.appendChild(gitBadge()); }
+        crumbs.scrollLeft = crumbs.scrollWidth;
+      }
+
+      function drawRows(l, err) {
+        rowsBox.textContent = "";
         if (err) {
-          var e = el("div", "result bad", err);
-          e.setAttribute("role", "alert");
-          expl.appendChild(e);
+          rowsBox.appendChild(el("div", "etitle", err));
+          var rt = button("Try again", "btn small");
+          rt.addEventListener("click", function () { load(l ? l.path : (state.home.path)); });
+          rowsBox.appendChild(rt);
           return;
         }
-        var rows = el("div", "frows");
         if (l.parent) {
           var up = button("↑ Up", "frow up", "Up to the folder above");
-          up.addEventListener("click", function () { load(l.parent); });
-          rows.appendChild(up);
+          up.addEventListener("click", function () { hap("light"); load(l.parent); });
+          rowsBox.appendChild(up);
         }
-        l.dirs.forEach(function (d) {
-          var r = el("button", "frow");
-          r.type = "button";
+        var q = fq.toLowerCase();
+        var dirs = l.dirs.filter(function (d) { return !q || d.shown.toLowerCase().indexOf(q) >= 0; });
+        dirs.forEach(function (d) {
+          var r = button("", "frow", "Open folder " + d.shown + (d.git ? ", git repository" : ""));
           r.appendChild(el("span", "ic", "📁"));
           r.appendChild(el("span", "nm", d.shown));
+          if (d.git) { r.appendChild(gitBadge()); }
           r.appendChild(el("span", "chev", "›"));
-          r.setAttribute("aria-label", "Open folder " + d.shown);
-          r.addEventListener("click", function () { load(d.path); });
-          rows.appendChild(r);
+          r.addEventListener("click", function () { hap("light"); load(d.path); });
+          rowsBox.appendChild(r);
         });
-        if (!l.dirs.length) { rows.appendChild(el("div", "tnote", "No folders here.")); }
-        if (l.more) { rows.appendChild(el("div", "tnote", "… more folders not shown")); }
-        expl.appendChild(rows);
-      }
-      var loading = 0;
-      function load(path) {
-        var mine = ++loading;
-        expl.setAttribute("aria-busy", "true");
-        api("api/control/folders?id=" + encodeURIComponent(id) + "&path=" + encodeURIComponent(path || "") + (hidden ? "&hidden=1" : ""))
-          .then(function (l) { if (mine === loading) { list = l; drawExplorer(l); } })
-          .catch(function (e) { if (mine === loading) { drawExplorer(list, e.message || "This folder could not be loaded."); } })
-          .then(function () { if (mine === loading) { expl.removeAttribute("aria-busy"); } });
+        if (!dirs.length) { rowsBox.appendChild(el("div", "tnote", fq ? "No folder here matches “" + fq + "”." : "No folders here.")); }
+        if (l.more) { rowsBox.appendChild(el("div", "tnote", "… more folders not shown")); }
       }
 
-      start.addEventListener("click", function () {
-        var s = starters().filter(function (x) { return x.key === agent; })[0];
-        if (!s || !folder) { return; }
-        start.setAttribute("data-busy", "1");
-        post({ op: "new", agent: s.key, path: folder.path }, newBox).then(function (r) {
-          start.removeAttribute("data-busy");
-          res.textContent = "";
-          var box = resultBox(r);
-          if (r.ok) { box.appendChild(el("div", "hint", "Progress continues in the main chat.")); }
-          res.appendChild(box);
-          updateStart();
-          refresh();
-        });
+      function load(path, keepFilter) {
+        var mine = ++loading;
+        if (!keepFilter) { fq = ""; fin.value = ""; }
+        expl.setAttribute("aria-busy", "true");
+        rowsBox.textContent = "";
+        for (var i = 0; i < 4; i++) { rowsBox.appendChild(el("div", "skel row-skel")); }
+        api("api/control/folders?id=" + encodeURIComponent(id) + "&path=" + encodeURIComponent(path || "") + (hidden ? "&hidden=1" : ""))
+          .then(function (l) {
+            if (mine !== loading) { return; }
+            list = l;
+            drawCrumbs(l);
+            drawRows(l);
+            drawUse();
+          })
+          .catch(function (e) {
+            if (mine !== loading) { return; }
+            drawRows(list, e.message || "This folder could not be loaded.");
+          })
+          .then(function () {
+            if (mine !== loading) { return; }
+            expl.removeAttribute("aria-busy");
+            syncBack();
+          });
+      }
+
+      fin.addEventListener("input", function () { fq = fin.value.trim(); if (list) { drawRows(list); } });
+      hid.addEventListener("click", function () {
+        hap("light");
+        hidden = !hidden;
+        hid.className = "chip" + (hidden ? " on" : "");
+        hid.setAttribute("aria-checked", hidden ? "true" : "false");
+        load(list ? list.path : state.home.path, true);
       });
+      useBtn.addEventListener("click", function () { if (list) { pick(list); } });
 
       return {
+        canUp: function () { return !!(list && list.parent); },
+        up: function () { if (list && list.parent) { load(list.parent); } },
+        shown: function () {
+          if (!loaded && state) { loaded = true; load(state.home.path); }
+          updateStart();
+        },
         // update takes a new state: it redraws only what changed, so the form stays as it is
         update: function () {
           var s = JSON.stringify([state.starters, state.folders]);
           if (!agent || !starters().some(function (x) { return x.key === agent; })) { agent = starters().length ? starters()[0].key : null; }
-          if (s !== sig) {
-            sig = s;
-            drawAgentPick();
-            drawChips();
-          }
-          if (!list && !loading) { load(state.home.path); }
+          if (s !== sig) { sig = s; drawAgentPick(); drawChips(); }
+          if (tab === "new" && !loaded) { loaded = true; load(state.home.path); }
           updateStart();
         }
       };
     }
 
     function render() {
-      drawTop();
+      drawHead();
       drawAgents();
-      if (!newPanel) { newPanel = newAgent(); }
+      if (!newPanel) { newPanel = buildNew(); setTab(tab); }
       newPanel.update();
     }
 
@@ -1164,14 +1576,13 @@
           if (mine !== asked) { return; }
           state = s;
           state.agents = s.agents || [];
-          errBox.hidden = true;
+          errBar.hidden = true;
           render();
         })
         .catch(function (e) {
           if (mine !== asked) { return; }
-          errBox.textContent = (e.message || "Could not read the agents.") + " Trying again soon.";
-          errBox.hidden = false;
-          if (!state) { updText.textContent = "Not loaded"; }
+          errBar.textContent = (e.message || "Could not read the agents.") + " Trying again soon.";
+          errBar.hidden = false;
         })
         .then(function () { if (mine === asked) { schedule(); } });
     }
@@ -1182,6 +1593,7 @@
       }, 5000);
     }
     document.addEventListener("visibilitychange", function () { if (!document.hidden) { refresh(); } });
+    setTab(tab);
     refresh();
   }
 
@@ -1190,6 +1602,15 @@
   api("api/page?id=" + encodeURIComponent(id))
     .then(function (p) {
       setTitle(p.title);
+      if (p.kind !== "control" && new URLSearchParams(location.search).get("from") === "panel") {
+        rootBack = backToPanel;
+        var back = el("button", "backlink", "‹ Panel");
+        back.type = "button";
+        back.setAttribute("aria-label", "Back to the control panel");
+        back.addEventListener("click", backToPanel);
+        title.parentNode.insertBefore(back, title);
+      }
+      setBack(null);
       if (p.kind === "screen") { liveScreen(); return; }
       if (p.kind === "files") { fileBrowser(p.title || "Files"); return; }
       if (p.kind === "changes") { changesView(); return; }

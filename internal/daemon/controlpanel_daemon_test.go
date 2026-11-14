@@ -113,43 +113,69 @@ func TestControlPanel(t *testing.T) {
 	}
 	thread := st.Agents[0].Topic.Thread
 
-	// Rename the topic: the name sticks, and shows as custom.
-	r = do(miniapp.ControlAction{Op: miniapp.OpRenameTopic, Act: act(), Thread: thread, Name: "Billing API"})
-	if !r.OK || strings.Contains(r.Message, "<") {
-		t.Fatalf("rename topic: %+v", r)
+	// The pane has a tab in a session of the user's.
+	e.fake.On([]string{"block", "ls"}, fmt.Sprintf(`{"blocks":[{"block_id":%q,"label":"pane one","window_id":"W1"}]}`, rexBlock), 0)
+
+	e.setTab("pane one")
+
+	// Rename: the topic, the pane in Rex, and its tab, once, also when the
+	// act repeats. The topic's name sticks, and shows as custom.
+	rn := miniapp.ControlAction{Op: miniapp.OpRename, Act: act(), Pane: ag.Pane, Name: "Billing API"}
+	r = do(rn)
+	if again := do(rn); !r.OK || r.Link == "" || again != r || !strings.Contains(r.Message, "Renamed the topic, its Rex pane, and its tab to Billing API") {
+		t.Fatalf("rename: %+v, again %+v", r, again)
 	}
 	e.waitFor("the topic's new name", func() bool {
 		ts := e.tg.Topics(chatID)
 		return len(ts) == 1 && strings.Contains(ts[0].Name, "Billing API")
 	})
-	st = miniapp.ControlState{}
-	miniControl(t, e, addr, base, nil, &st)
-	if !st.Agents[0].Topic.Custom {
-		t.Errorf("the topic is not custom: %+v", st.Agents[0].Topic)
-	}
-
-	// Rename the pane: Rex gets the call once, even when the act repeats, and
-	// the topic keeps the name that was given to it.
-	same := act()
-	rp := miniapp.ControlAction{Op: miniapp.OpRenamePane, Act: same, Pane: ag.Pane, Name: "api server"}
-	r = do(rp)
-	again := do(rp)
-	if !r.OK || !strings.Contains(r.Message, "keeps") || again != r {
-		t.Fatalf("rename pane: %+v, again %+v", r, again)
-	}
-	if got := e.fake.BlockLabels()[rexBlock]; got != "api server" || e.countRex("block", "rename") != 1 {
+	if got := e.fake.BlockLabels()[rexBlock]; got != "Billing API" || e.countRex("block", "rename") != 1 {
 		t.Errorf("block label %q after %d renames", got, e.countRex("block", "rename"))
 	}
+	if got := e.tabRenames(); !slices.Equal(got, []string{"Billing API"}) {
+		t.Errorf("tab renames %q, want one", got)
+	}
 	st = miniapp.ControlState{}
 	miniControl(t, e, addr, base, nil, &st)
-	if st.Agents[0].Label != "api server" {
-		t.Errorf("pane label %q", st.Agents[0].Label)
+	if !st.Agents[0].Topic.Custom || st.Agents[0].Label != "Billing API" {
+		t.Errorf("after rename: %+v", st.Agents[0])
 	}
 
-	// Pause: typing stops, the main chat hears it, and a new agent is refused.
-	if r = do(miniapp.ControlAction{Op: miniapp.OpPause, Act: act(), On: true}); !r.OK {
-		t.Fatalf("pause: %+v", r)
+	// Pages of the agent's topic: the id opens a page of the right kind. The
+	// changes view refuses a folder outside a git repository.
+	for kind, want := range map[string]string{miniapp.PageScreen: "screen", miniapp.PageFiles: "files"} {
+		pr := do(miniapp.ControlAction{Op: miniapp.OpPage, Act: act(), Pane: ag.Pane, Kind: kind})
+		if !pr.OK || pr.Page == "" {
+			t.Fatalf("page %s: %+v", kind, pr)
+		}
+		if code, body := miniGet(t, e, addr, "/api/page?id="+pr.Page, ownerID); code != http.StatusOK || body["kind"] != want {
+			t.Errorf("page %s: %d %v", kind, code, body)
+		}
 	}
+	if pr := do(miniapp.ControlAction{Op: miniapp.OpPage, Act: act(), Pane: ag.Pane, Kind: miniapp.PageChanges}); pr.OK || !strings.Contains(pr.Message, "not in a git repository") {
+		t.Errorf("changes outside a repository: %+v", pr)
+	}
+	if !st.Files || !st.Changes {
+		t.Errorf("files %v, changes %v", st.Files, st.Changes)
+	}
+
+	// Auto: the pane gets Rex's default name, and the topic is named after
+	// the session again.
+	if r = do(miniapp.ControlAction{Op: miniapp.OpRename, Act: act(), Pane: ag.Pane, Name: "auto"}); !r.OK || !strings.Contains(r.Message, "Reset") {
+		t.Fatalf("rename auto: %+v", r)
+	}
+	if got := e.fake.BlockLabels()[rexBlock]; got != "shell" {
+		t.Errorf("block label %q after auto, want shell", got)
+	}
+	st = miniapp.ControlState{}
+	miniControl(t, e, addr, base, nil, &st)
+	if st.Agents[0].Topic.Custom {
+		t.Errorf("still custom after auto: %+v", st.Agents[0].Topic)
+	}
+
+	// Typing is paused from the chat: the panel shows it, and a new agent is
+	// refused.
+	e.say(0, "/pause")
 	e.waitText(0, "Typing is paused")
 	st = miniapp.ControlState{}
 	miniControl(t, e, addr, base, nil, &st)
@@ -159,9 +185,8 @@ func TestControlPanel(t *testing.T) {
 	if r = do(miniapp.ControlAction{Op: miniapp.OpNew, Act: act(), Agent: "pi", Path: e.home}); r.OK || !strings.Contains(r.Message, "paused") {
 		t.Errorf("new while paused: %+v", r)
 	}
-	if r = do(miniapp.ControlAction{Op: miniapp.OpPause, Act: act(), On: false}); !r.OK {
-		t.Fatalf("unpause: %+v", r)
-	}
+	e.say(0, "/unpause")
+	e.waitText(0, "Typing is on again")
 
 	// A new agent starts in a folder inside home, once, also when the act
 	// repeats.
@@ -181,8 +206,8 @@ func TestControlPanel(t *testing.T) {
 	// Things that are not there fail cleanly.
 	for _, a := range []miniapp.ControlAction{
 		{Op: miniapp.OpOpen, Pane: 99999},
-		{Op: miniapp.OpRenamePane, Pane: 99999, Name: "x"},
-		{Op: miniapp.OpRenameTopic, Thread: 99999, Name: "x"},
+		{Op: miniapp.OpRename, Pane: 99999, Name: "x"},
+		{Op: miniapp.OpPage, Pane: 99999, Kind: miniapp.PageScreen},
 		{Op: miniapp.OpUnlink, Thread: 99999},
 		{Op: miniapp.OpNew, Agent: "nope", Path: e.home},
 		{Op: miniapp.OpNew, Agent: "pi", Path: e.home + "/no-such-folder"},

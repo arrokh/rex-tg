@@ -58,6 +58,12 @@ func TestListFolders(t *testing.T) {
 	if app, err := ListFolders(home, filepath.Join(home, "work", "app"), false); err != nil || !app.Git {
 		t.Errorf("a repository: %+v %v", app, err)
 	}
+	// Each folder of a list says whether it is a repository.
+	for _, f := range work.Dirs {
+		if f.Git != (f.Shown == "app") {
+			t.Errorf("%s: git %v", f.Shown, f.Git)
+		}
+	}
 
 	for _, bad := range []string{
 		outside,                              // outside home
@@ -85,11 +91,12 @@ func TestControlActionCheck(t *testing.T) {
 	act := "0123456789abcdef"
 	ok := []ControlAction{
 		{Op: OpOpen, Act: act, Pane: 3},
-		{Op: OpRenameTopic, Act: act, Thread: 2, Name: "my topic"},
-		{Op: OpRenamePane, Act: act, Pane: 3, Name: "api"},
+		{Op: OpRename, Act: act, Pane: 3, Name: "my topic"},
+		{Op: OpRename, Act: act, Pane: 3, Name: "auto"},
+		{Op: OpPage, Act: act, Pane: 3, Kind: PageScreen},
+		{Op: OpPage, Act: act, Pane: 3, Kind: PageChanges},
 		{Op: OpNew, Act: act, Agent: "claude", Path: "/Users/me/app"},
 		{Op: OpUnlink, Act: act, Thread: 2},
-		{Op: OpPause, Act: act, On: true},
 	}
 	for _, a := range ok {
 		if err := a.Check(); err != nil {
@@ -100,12 +107,15 @@ func TestControlActionCheck(t *testing.T) {
 		{Op: OpOpen, Act: "short", Pane: 3},
 		{Op: OpOpen, Act: act},
 		{Op: "delete", Act: act, Pane: 3},
-		{Op: OpRenameTopic, Act: act, Thread: 2, Name: "two\nlines"},
-		{Op: OpRenameTopic, Act: act, Thread: 2, Name: strings.Repeat("x", 101)},
-		{Op: OpRenamePane, Act: act, Name: "x"},
+		{Op: OpRename, Act: act, Pane: 3, Name: "two\nlines"},
+		{Op: OpRename, Act: act, Pane: 3, Name: strings.Repeat("x", 101)},
+		{Op: OpRename, Act: act, Name: "x"},
+		{Op: OpPage, Act: act, Pane: 3, Kind: "answer"},
+		{Op: OpPage, Act: act, Kind: PageFiles},
 		{Op: OpNew, Act: act, Agent: "claude", Path: "relative/app"},
 		{Op: OpNew, Act: act, Path: "/Users/me/app"},
 		{Op: OpUnlink, Act: act},
+		{Op: "pause", Act: act}, // /pause stays a chat command
 	}
 	for _, a := range bad {
 		if err := a.Check(); err == nil {

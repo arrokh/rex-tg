@@ -59,7 +59,7 @@ With Threaded Mode, every message is in a topic. A topic that is not linked to a
 | --- | --- |
 | `/agents` | Lists the agents in Rex panes, the ones that wait for you first. The list updates by itself; pin it. Tap an agent to open its topic. |
 | `/new` | Starts an agent in a new Rex tab. Pick the agent and a folder. `/new pi ~/work/app` does it in one step. |
-| `/rt` | Opens rex-tg's control panel in the Mini App. There you see the agents, open or unlink their topics, rename a topic or a pane, start an agent in a folder that you pick, and pause typing. |
+| `/rt` | Opens rex-tg's control panel in the Mini App. There you find and filter the agents, open their topics, live screens, files, and changes, rename or unlink them, and start an agent in a folder that you pick. |
 | `/topics` | Lists the topics and their states. |
 | `/status` | Shows the daemon's health. |
 | `/pause`, `/unpause` | Stops or allows all typing into panes. Use `/pause` if you lose your phone. |
@@ -86,7 +86,7 @@ Your text goes to the agent. Text that starts with `/` also goes to the agent (f
 | `/resend [id]` | Sends again a reply that may not have arrived. |
 | `/mute`, `/unmute` | Answers arrive without or with sound. |
 | `/at <time or delay> <text>` | Sends text to the agent later, such as `/at 09:00 run the tests` or `/at 30m check the build`. `/at` lists, `/at cancel <n>` removes one. |
-| `/rename <name>` | Names the topic, and its Rex tab if the agent was started with `/new`. `/rename auto` names it after the session again. |
+| `/rename <name>` | Renames the topic, its Rex pane, and its Rex tab. `/rename auto` names them after the session again. |
 | `/unlink` | Closes the topic in rex-tg. |
 
 To send an agent a command that has a bot command's name, use two slashes: `//help` sends `/help` to the agent, and `//model` sends the agent's own `/model`.
