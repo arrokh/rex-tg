@@ -908,7 +908,10 @@
     page.textContent = "";
     var header = document.querySelector("header.top");
     header.classList.add("stack");
-    document.body.classList.toggle("has-mb", !!(tg && tg.MainButton && tg.MainButton.setText));
+    // The panel draws its own start bar (see .startbar), not Telegram's
+    // MainButton: Telegram's bottom bar is see-through on iOS, and the page
+    // showed through it dimmed, like a stray dark shape.
+    try { if (tg && tg.MainButton) { tg.MainButton.hide(); } } catch (e) { /* none */ }
 
     // Telegram's safe areas (the notch, the home indicator), when it reports them.
     function insets() {
@@ -922,7 +925,6 @@
     insets();
     if (tg && tg.onEvent) { ["safeAreaChanged", "contentSafeAreaChanged"].forEach(function (ev) { tg.onEvent(ev, insets); }); }
 
-    var mb = tg && tg.MainButton && tg.MainButton.setText && tg.MainButton.onClick ? tg.MainButton : null;
     var state = null, asked = 0, timer = null;
     var tab = load("rex-tg.panel.tab");
     if (tab !== "new" && tab !== "topics") { tab = "agents"; }
@@ -1041,12 +1043,10 @@
         p[0].tabIndex = p[1] === t ? 0 : -1;
       });
       if (t === "new" && newPanel) { newPanel.shown(); }
-      if (t !== "new") { hideMain(); }
       document.body.classList.toggle("on-new", t === "new");
       syncBack();
       if (changed) { window.scrollTo(0, scrollAt[t] || 0); }
     }
-    function hideMain() { try { if (mb) { mb.hide(); } } catch (e) { /* none */ } }
     tabBtns.forEach(function (p) { p[0].addEventListener("click", function () { hap("light"); setTab(p[1]); }); });
     seg.addEventListener("keydown", function (e) {
       var d = e.key === "ArrowRight" ? 1 : e.key === "ArrowLeft" ? -1 : 0;
@@ -1057,7 +1057,6 @@
       setTab(n[1]);
       n[0].focus();
     });
-    window.addEventListener("pagehide", hideMain);
     window.addEventListener("pageshow", function (e) { if (e.persisted) { refresh(); } });
 
     // Back closes a sheet, goes up a folder, or returns to the Agents tab.
@@ -1663,10 +1662,12 @@
 
       var summary = el("div", "summary");
       var why = el("div", "hint");
-      var startBtn = button("", "btn primary wide" + (mb ? "" : " sticky"));
+      var startBar = el("div", "startbar");
+      var startBtn = button("", "btn primary");
+      startBar.appendChild(startBtn);
       inner.appendChild(summary);
       inner.appendChild(why);
-      inner.appendChild(startBtn);
+      newView.appendChild(startBar); // hidden with the tab
 
       function starters() { return (state && state.starters) || []; }
       function chosenStarter() { return starters().filter(function (x) { return x.key === agent; })[0]; }
@@ -1675,7 +1676,7 @@
         var s = chosenStarter();
         var paused = !!(state && state.paused);
         var ready = !!(s && folder && !paused && !busy);
-        var text = s && folder ? "Start " + s.name + " in " + folder.shown : "Start an agent";
+        var text = busy ? "Starting…" : (s && folder ? "Start " + s.name + " in " + folder.shown : "Start an agent");
         summary.textContent = "";
         if (s && folder) {
           summary.appendChild(document.createTextNode("Start "));
@@ -1688,14 +1689,6 @@
         why.textContent = paused ? "⏸ Typing is paused, so a new agent cannot start. Send /unpause in the chat." : (!s ? "Pick an agent." : (!folder ? "Pick a folder." : ""));
         startBtn.textContent = text;
         startBtn.disabled = !ready;
-        startBtn.hidden = !!mb;
-        if (mb && tab === "new") {
-          try {
-            mb.setText(text);
-            if (ready) { mb.enable(); } else { mb.disable(); }
-            mb.show();
-          } catch (e) { /* an older Telegram */ }
-        }
       }
 
       function start() {
@@ -1703,11 +1696,9 @@
         if (!s || !folder || busy || (state && state.paused)) { return; }
         busy = true;
         updateStart();
-        try { if (mb && mb.showProgress) { mb.showProgress(false); } } catch (e) { /* none */ }
         hap("light");
         post({ op: "new", agent: s.key, path: folder.path }, newView).then(function (r) {
           busy = false;
-          try { if (mb && mb.hideProgress) { mb.hideProgress(); } } catch (e) { /* none */ }
           toast(r, "Progress continues in the main chat.");
           afterStart(r, s.name + " in " + folder.shown);
           updateStart();
@@ -1715,7 +1706,6 @@
         });
       }
       startBtn.addEventListener("click", start);
-      if (mb) { mb.onClick(start); }
 
       function drawAgentPick() {
         pickAgent.textContent = "";

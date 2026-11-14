@@ -41,12 +41,19 @@ func TestPairing(t *testing.T) {
 	// A wrong code gets no answer and does not pair.
 	e.never("an answer to a stranger", 700*time.Millisecond, func() bool { return len(e.botMessages(0)) > 0 })
 
-	// The right code pairs.
+	// The right code pairs. The answer brings the reply keyboard, so the
+	// next start posts no keyboard note.
 	e.tg.PushMessage(chatID, 0, ownerID, "/start "+good)
-	e.waitText(0, "Paired")
+	if m := e.waitText(0, "Paired"); m.Keyboard == nil {
+		t.Error("the pairing answer has no reply keyboard")
+	}
 	st := e.peek()
 	if v, ok, _ := st.Get(context.Background(), "owner_user_id"); !ok || v != fmt.Sprint(ownerID) {
 		t.Fatalf("owner_user_id = %q, %v", v, ok)
+	}
+	kbKey, kbVersion := daemon.KeyboardKV()
+	if v, _, _ := st.Get(context.Background(), kbKey); v != kbVersion {
+		t.Errorf("%s = %q after pairing, want %q", kbKey, v, kbVersion)
 	}
 	if _, ok, _ := st.Get(context.Background(), "pairing_code_hash"); ok {
 		t.Fatal("pairing code hash is still stored after pairing")
@@ -1188,6 +1195,103 @@ func TestMainChatBasics(t *testing.T) {
 	if len(e.tg.Commands()) < 10 {
 		t.Errorf("commands = %v", e.tg.Commands())
 	}
+}
+
+// The reply keyboard: the main chat gets it once with a note, a new topic
+// with its first message, and /help anywhere. After an update that changes
+// the buttons, every open topic gets it too, once. Its buttons are commands.
+func TestReplyKeyboard(t *testing.T) {
+	e := newEnv(t)
+	e.seedOwner()
+	kbKey, _ := daemon.KeyboardKV()
+	newButtons := func() { // as after an update that changes the buttons
+		e.withStore(func(st *store.Store) {
+			if err := st.Delete(context.Background(), kbKey); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+	newButtons()
+	p := e.newPi("pi-keys")
+	p.User("start")
+	p.Final("ready")
+	e.start()
+	wantKeyboard := func(m tgtest.Message) {
+		t.Helper()
+		kb := m.Keyboard
+		if kb == nil || !kb.IsPersistent || !kb.ResizeKeyboard || len(kb.Keyboard) != 1 {
+			t.Fatalf("%q: keyboard = %+v", m.Text, kb)
+		}
+		var got []string
+		for _, b := range kb.Keyboard[0] {
+			got = append(got, b.Text)
+		}
+		if strings.Join(got, " ") != "/rt /screen /files /changes" {
+			t.Errorf("buttons = %v", got)
+		}
+	}
+	wantKeyboard(e.waitText(0, "Buttons for /rt"))
+	e.hookPi(p, "startup")
+	thread := e.openTopic()
+	wantKeyboard(e.waitText(thread, "Linked"))
+	e.say(thread, "/help")
+	wantKeyboard(e.waitText(thread, "In a topic"))
+	e.say(0, "/help")
+	wantKeyboard(e.waitText(0, "Main chat"))
+	// Other messages carry no reply keyboard.
+	if m := e.waitText(thread, "ready"); m.Keyboard != nil {
+		t.Errorf("the answer has a reply keyboard: %+v", m.Keyboard)
+	}
+	// A tap sends the button's text: a command, not text for the agent.
+	before := len(e.botMessages(thread))
+	e.say(thread, "/files")
+	e.waitFor("the files answer", func() bool { return len(e.botMessages(thread)) > before })
+	if len(e.pastes()) != 0 {
+		t.Errorf("a button was typed into the pane: %v", e.pastes())
+	}
+
+	// The next start does not post the note again.
+	e.stop()
+	e.start()
+	e.waitFor("the second start", func() bool { return len(e.tg.Calls("getMe")) >= 2 })
+	e.say(0, "/status")
+	e.waitText(0, "Topics: 1 live")
+	if n, m := e.countText(0, "Buttons for /rt"), e.countText(thread, "Buttons for /rt"); n != 1 || m != 0 {
+		t.Errorf("keyboard notes = %d in the main chat, %d in the topic; want 1, 0", n, m)
+	}
+
+	// An update that changes the buttons: the topic that already exists gets
+	// them by itself, without /help.
+	e.stop()
+	newButtons()
+	e.start()
+	wantKeyboard(e.waitText(thread, "Buttons for /rt"))
+	e.waitFor("the second main note", func() bool { return e.countText(0, "Buttons for /rt") == 2 })
+	// A topic gets its note once, even when the marker is lost again.
+	e.stop()
+	newButtons()
+	e.start()
+	e.waitFor("the third main note", func() bool { return e.countText(0, "Buttons for /rt") == 3 })
+	e.say(thread, "/info")
+	e.waitText(thread, "Topic: live")
+	if n := e.countText(thread, "Buttons for /rt"); n != 1 {
+		t.Errorf("keyboard notes in the topic = %d, want 1", n)
+	}
+}
+
+// Telegram asks to wait an hour for rich messages (seen live): the answer
+// goes out as a plain message at once, and /status shows the wait.
+func TestLongRateLimitOnRichAnswers(t *testing.T) {
+	e, p, thread := piTopicCfg(t, "pi-flood", func(e *env) { e.cfg.Display.RichMessages = true })
+	e.tg.FailNext("sendRichMessage", 1, 429, "Too Many Requests: retry after 3600", 3600)
+	p.User("report")
+	time.Sleep(10 * time.Millisecond) // the answer comes after the prompt: the pane is idle then
+	p.Final("All **done**.")
+	if m := e.waitText(thread, "All <b>done</b>"); m.Rich {
+		t.Error("the answer went out as a rich message during the wait")
+	}
+	e.say(0, "/status")
+	e.waitText(0, "Telegram asked to wait: <code>sendRichMessage</code> until")
 }
 
 func TestAgentLeavesAndReturns(t *testing.T) {

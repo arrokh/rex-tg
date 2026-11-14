@@ -38,6 +38,7 @@ type Message struct {
 	Text      string // text, or caption for documents
 	ParseMode string
 	Markup    *telegram.InlineKeyboardMarkup
+	Keyboard  *telegram.ReplyKeyboardMarkup // a reply keyboard; only sendMessage takes one
 	Reaction  string
 	Silent    bool
 	Edits     int
@@ -627,20 +628,41 @@ func flag(p map[string]any, k string) bool {
 	return false
 }
 
+// markupOf reads an inline keyboard. Edits take nothing else; the fake also
+// refuses a reply keyboard on the other sends, which rex-tg never makes.
 func markupOf(p map[string]any) (*telegram.InlineKeyboardMarkup, *apiErr) {
+	mk, kb, e := sendMarkupOf(p)
+	if e == nil && kb != nil {
+		return nil, bad("inline keyboard expected")
+	}
+	return mk, e
+}
+
+// sendMarkupOf reads the reply_markup of sendMessage: an inline keyboard or
+// a reply keyboard.
+func sendMarkupOf(p map[string]any) (*telegram.InlineKeyboardMarkup, *telegram.ReplyKeyboardMarkup, *apiErr) {
 	raw, ok := p["reply_markup"]
 	if !ok || raw == nil {
-		return nil, nil
+		return nil, nil, nil
 	}
 	b, _ := json.Marshal(raw)
 	if s, ok := raw.(string); ok { // a form field of an upload holds the JSON as text
 		b = []byte(s)
 	}
-	var mk telegram.InlineKeyboardMarkup
-	if err := json.Unmarshal(b, &mk); err != nil || mk.InlineKeyboard == nil {
-		return nil, bad("can't parse reply keyboard markup JSON object")
+	var both struct {
+		telegram.InlineKeyboardMarkup
+		telegram.ReplyKeyboardMarkup
 	}
-	return &mk, nil
+	if err := json.Unmarshal(b, &both); err != nil {
+		return nil, nil, bad("can't parse reply keyboard markup JSON object")
+	}
+	switch {
+	case both.InlineKeyboard != nil:
+		return &both.InlineKeyboardMarkup, nil, nil
+	case len(both.Keyboard) > 0:
+		return nil, &both.ReplyKeyboardMarkup, nil
+	}
+	return nil, nil, bad("can't parse reply keyboard markup JSON object")
 }
 
 // handle runs a non-getUpdates method. s.mu is held.
@@ -665,7 +687,7 @@ func (s *Server) handle(method string, p map[string]any, docName string, docData
 		if e := checkText(text, str(p, "parse_mode")); e != nil {
 			return nil, e
 		}
-		mk, e := markupOf(p)
+		mk, kb, e := sendMarkupOf(p)
 		if e != nil {
 			return nil, e
 		}
@@ -674,7 +696,7 @@ func (s *Server) handle(method string, p map[string]any, docName string, docData
 			replyTo = num(rp, "message_id")
 		}
 		m := s.addMsg(&Message{ChatID: chat, ThreadID: thread, FromBot: true, Text: text,
-			ParseMode: str(p, "parse_mode"), Markup: mk, Silent: flag(p, "disable_notification"), ReplyTo: replyTo})
+			ParseMode: str(p, "parse_mode"), Markup: mk, Keyboard: kb, Silent: flag(p, "disable_notification"), ReplyTo: replyTo})
 		out := s.wire(m)
 		out.Text = text
 		return out, nil

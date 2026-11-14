@@ -104,6 +104,7 @@ func (d *daemon) startup(ctx context.Context) error {
 		return err
 	}
 	d.setCommands(ctx, d.tg)
+	d.showKeyboard(ctx)
 
 	threads, err := d.st.Threads(ctx)
 	if err != nil {

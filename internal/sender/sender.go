@@ -113,6 +113,11 @@ type Options struct {
 	// Markup gives the buttons of a text part that are not the sender's own,
 	// or nil (nil Markup: none). It is called when the part is sent.
 	Markup func(p store.Part) *telegram.InlineKeyboardMarkup
+	// Keyboard gives the reply keyboard of an HTML or plain text part that
+	// has no buttons, or nil (nil Keyboard: none). It is called when the
+	// part is sent. An edit cannot change or remove a reply keyboard, so
+	// such a part should not be edited later.
+	Keyboard func(p store.Part) *telegram.ReplyKeyboardMarkup
 	// PolledSince tells whether a getUpdates call finished at or after t,
 	// so that every message the user sent before t has its number in the
 	// store. The check of an unknown part waits for it (nil: no wait).
@@ -138,6 +143,7 @@ type Sender struct {
 	log        *slog.Logger
 	checkDelay time.Duration
 	markup     func(store.Part) *telegram.InlineKeyboardMarkup
+	keyboard   func(store.Part) *telegram.ReplyKeyboardMarkup
 	polled     func(time.Time) bool
 
 	events chan Event
@@ -161,6 +167,13 @@ type Sender struct {
 	// netFails counts requests in a row that never left this machine; it
 	// sets the pause before the next try (see netDown).
 	netFails int
+	// held is the longest wait of a held method (telegram.HoldAfter) that
+	// the running work met; execute makes that work, and only that work,
+	// wait for it.
+	held time.Duration
+	// partHold keeps a topic's outbox parts back until a held method that
+	// one of them met is free again.
+	partHold map[int64]time.Time
 }
 
 // New returns a Sender. Call Run to start it.
@@ -184,7 +197,7 @@ func New(st *store.Store, tg *telegram.Client, opt Options) *Sender {
 		opt.CheckDelay = 60 * time.Second
 	}
 	return &Sender{
-		st: st, tg: tg, now: opt.Now, sleep: opt.Sleep, log: opt.Logger, checkDelay: opt.CheckDelay, markup: opt.Markup, polled: opt.PolledSince,
+		st: st, tg: tg, now: opt.Now, sleep: opt.Sleep, log: opt.Logger, checkDelay: opt.CheckDelay, markup: opt.Markup, keyboard: opt.Keyboard, polled: opt.PolledSince,
 		events:    make(chan Event, eventBufSize),
 		wake:      make(chan struct{}, 1),
 		bucket:    newBucket(opt.RatePerSecond, opt.Burst, opt.Now()),
@@ -192,6 +205,7 @@ func New(st *store.Store, tg *telegram.Client, opt Options) *Sender {
 		gone:      map[int64]bool{},
 		finished:  map[int64]bool{},
 		served:    map[int64]uint64{},
+		partHold:  map[int64]time.Time{},
 		reactions: map[[2]int64]uint64{},
 	}
 }
@@ -280,6 +294,19 @@ func (s *Sender) Call(prio Priority, fn func(ctx context.Context, tg *telegram.C
 			s.netUp()
 		case telegram.ClassRateLimited:
 			s.pauseFor(err)
+			if heldErr(err) {
+				// Typing, a draft, or the answer to a button press is worth
+				// nothing an hour later (Telegram drops a button's answer
+				// after seconds). Other work waits for the end of the hold
+				// (execute), without using its attempts.
+				var api *telegram.APIError
+				errors.As(err, &api)
+				if j.prio >= PriorityTyping || api.Method == "answerCallbackQuery" {
+					s.takeHeld()
+					return jobResult{err: err}
+				}
+				return jobResult{retry: true}
+			}
 			if j.attempts++; j.attempts < maxAttempts {
 				return jobResult{retry: true}
 			}
@@ -462,14 +489,39 @@ func (s *Sender) pauseBucket(d time.Duration) {
 	s.mu.Unlock()
 }
 
-// pauseFor pauses the budget for the retry_after of a 429 error.
+// pauseFor pauses the budget for the retry_after of a 429 error. A long
+// wait holds only its method (telegram.HoldAfter): the client refuses that
+// method until the wait ends, the work that met it waits as long (execute),
+// and every other request goes on. So one limited method does not stop all
+// sending for an hour.
 func (s *Sender) pauseFor(err error) {
-	d := time.Second
 	var api *telegram.APIError
-	if errors.As(err, &api) && api.RetryAfter > 0 {
+	if errors.As(err, &api) && api.Held {
+		s.mu.Lock()
+		s.held = max(s.held, api.RetryAfter)
+		s.mu.Unlock()
+		return
+	}
+	d := time.Second
+	if api != nil && api.RetryAfter > 0 {
 		d = api.RetryAfter
 	}
 	s.pauseBucket(d)
+}
+
+// heldErr reports a 429 whose method the client holds.
+func heldErr(err error) bool {
+	var api *telegram.APIError
+	return errors.As(err, &api) && api.Code == 429 && api.Held
+}
+
+// takeHeld returns and clears the hold that the running work met.
+func (s *Sender) takeHeld() time.Duration {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	h := s.held
+	s.held = 0
+	return h
 }
 
 // netDown pauses the budget after a request that never left this machine,
@@ -586,14 +638,21 @@ func (s *Sender) pick(ctx context.Context) work {
 			best, bestPrio, bestSeq = w, prio, seq
 		}
 	}
-	if len(parts) > 0 {
-		p := parts[0]
-		for _, q := range parts[1:] {
-			if s.served[q.ThreadID] < s.served[p.ThreadID] {
-				p = q
+	var part *store.Part
+	for i, q := range parts {
+		if t, ok := s.partHold[q.ThreadID]; ok {
+			if t.After(now) {
+				deferTo(t)
+				continue
 			}
+			delete(s.partHold, q.ThreadID)
 		}
-		consider(work{kind: wPart, part: p}, PriorityAnswer, 0)
+		if part == nil || s.served[q.ThreadID] < s.served[part.ThreadID] {
+			part = &parts[i]
+		}
+	}
+	if part != nil {
+		consider(work{kind: wPart, part: *part}, PriorityAnswer, 0)
 	}
 	for _, j := range s.jobs {
 		if j.notBefore.After(now) {
@@ -637,13 +696,21 @@ func (s *Sender) Idle() bool { return s.inflight.Load() == 0 }
 func (s *Sender) execute(ctx context.Context, w work) {
 	s.inflight.Add(1)
 	defer s.inflight.Add(-1)
+	s.takeHeld()
 	switch w.kind {
 	case wPart:
 		s.sendPart(ctx, w.part)
+		if h := s.takeHeld(); h > 0 {
+			// Its method is held: the topic's parts wait, the others go on.
+			s.mu.Lock()
+			s.partHold[w.part.ThreadID] = s.now().Add(h)
+			s.mu.Unlock()
+		}
 	case wJob:
 		s.removeJob(w.job)
 		res := w.job.run(ctx, w.job)
 		if res.retry {
+			res.delay = max(res.delay, s.takeHeld())
 			w.job.notBefore = s.now().Add(res.delay)
 			s.mu.Lock()
 			s.jobs = append(s.jobs, w.job)
@@ -668,6 +735,7 @@ func (s *Sender) execute(ctx context.Context, w work) {
 		if op != nil {
 			s.runProgress(ctx, w.tid, op)
 		}
+		s.takeHeld() // a requeue took it, or the operation ended
 	}
 }
 

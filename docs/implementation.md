@@ -120,8 +120,10 @@ func (c *Client) OnMessage(fn func(chatID, messageID int64)) // gets the number 
 func Classify(err error) Class
 ```
 
-- `SendMessageParams`: `ChatID`, `MessageThreadID`, `Text`, `ParseMode` (`"HTML"` or `""`), `DisableNotification`, `ReplyMarkup *InlineKeyboardMarkup`, `ReplyToMessageID`; link previews are always off (`link_preview_options.is_disabled`).
+- `SendMessageParams`: `ChatID`, `MessageThreadID`, `Text`, `ParseMode` (`"HTML"` or `""`), `DisableNotification`, `ReplyMarkup *InlineKeyboardMarkup`, `Keyboard *ReplyKeyboardMarkup` (a reply keyboard, sent as `reply_markup` only when `ReplyMarkup` is nil), `ReplyToMessageID`; link previews are always off (`link_preview_options.is_disabled`).
 - Errors: an `*APIError{Method, Code, Description, RetryAfter}` when Telegram answers `ok: false`. Network errors, timeouts, and 5xx answers come back as `*UnknownOutcomeError`, because the request may have taken effect.
+- A 429 whose `retry_after` is at least `HoldAfter` (5 min) holds its method: the client logs it (`Telegram rate limit`), sets `APIError.Held`, and answers later calls of that method itself with a 429 (`Held`, the time left as `RetryAfter`) until the wait ends, without a request. `Holds()` lists the held methods; `WithClock` sets the clock for tests. The sender pauses the whole bucket only for a 429 that is not held; work that met a held method waits for the hold (a job's `notBefore`, a topic's parts, a progress operation), and a held `sendRichMessage` falls back to a normal message.
+- An overlapping 429 never shortens a wait: the longer wait wins. The sender fails a held typing action, draft, or `answerCallbackQuery` at once; other held work waits for the hold without using its attempts (`sender.Call`, design 9.3).
 - `Class` values: `ClassNone`, `ClassRateLimited` (429), `ClassParseEntities`, `ClassNotModified`, `ClassEditTargetGone`, `ClassDeleteTargetGone`, `ClassThreadNotFound`, `ClassBlocked` (403), `ClassConflict` (409), `ClassBadRequest` (other 4xx), `ClassUnknownOutcome`.
 - Default timeouts: 15 s per call; `GetUpdates` uses its long-poll timeout plus 10 s. The token never appears in errors or logs.
 - `WithProxy(*url.URL)` sets a proxy (nil keeps `HTTP(S)_PROXY` and `ALL_PROXY` from the environment). `config.ParseProxy` accepts `http`, `https`, `socks5`, and `socks5h` URLs with a host, and its errors never hold the URL.
@@ -453,7 +455,7 @@ Topic commands: `info`, `screen`, `approve`, `deny`, `esc`, `interrupt`, `key`, 
 The only component that writes to Telegram. It owns the rate budget and the priorities of design section 9.3.
 
 ```go
-type Options struct{ RatePerSecond float64; Burst int; Now func() time.Time; Logger *slog.Logger; CheckDelay time.Duration } // CheckDelay default 60 s
+type Options struct{ RatePerSecond float64; Burst int; Now func() time.Time; Logger *slog.Logger; CheckDelay time.Duration; Markup func(store.Part) *telegram.InlineKeyboardMarkup; Keyboard func(store.Part) *telegram.ReplyKeyboardMarkup; PolledSince func(time.Time) bool } // CheckDelay default 60 s; Keyboard: the reply keyboard of an HTML or plain part without buttons
 func New(st *store.Store, tg *telegram.Client, opt Options) *Sender
 func (s *Sender) Run(ctx context.Context) error // until ctx ends
 func (s *Sender) Wake()                         // new outbox rows exist
@@ -506,7 +508,7 @@ KV keys: `owner_user_id`, `owner_chat_id`, `bot_username`, `tg_offset`, `paused`
 
 Periodic work in the tick, each in its own file: `tickBoard` (`board.go`: redraw the live list when an agent changed, at most every `Timing.BoardEdit`, and every `Timing.BoardRefresh`), `tickReminders` (`reminders.go`: every `Timing.RemindCheck`), and `checkUpdate` (`selfupdate.go`: every `Timing.UpdateCheck`; stops only while `delivering` and `busy` are empty).
 
-`Run` does, in order: take the instance lock (`syscall.Flock` on `Config.LockPath()`, fail with `ErrAlreadyRunning`); open the store; `sender.Recover`; `store.RecoverTyping` with one notice per row ("Your message may be in the input box without Enter. Check with /screen."); `getMe` (save `bot_username`; log a warning when `has_topics_enabled` is false); `setMyCommands`; restore tailers and turn trackers for live topics; start the sender, the Rex event stream (restart with backoff), the spool watcher (fsnotify plus a 1 s poll on `Config.SpoolDir()`), the scan ticker, the `getUpdates` loop, and a 250 ms tick; then run one core loop that handles everything below. Only the core loop changes state, so no locks are needed beyond the store's.
+`Run` does, in order: take the instance lock (`syscall.Flock` on `Config.LockPath()`, fail with `ErrAlreadyRunning`); open the store; `sender.Recover`; `store.RecoverTyping` with one notice per row ("Your message may be in the input box without Enter. Check with /screen."); `getMe` (save `bot_username`; log a warning when `has_topics_enabled` is false); `setMyCommands`; post the reply keyboard note to the main chat and to every open topic (outbox key `keyboard:<version>`) once per keyboard version (KV `reply_keyboard`, set before the send); restore tailers and turn trackers for live topics; start the sender, the Rex event stream (restart with backoff), the spool watcher (fsnotify plus a 1 s poll on `Config.SpoolDir()`), the scan ticker, the `getUpdates` loop, and a 250 ms tick; then run one core loop that handles everything below. Only the core loop changes state, so no locks are needed beyond the store's.
 
 Flows (design sections in brackets):
 

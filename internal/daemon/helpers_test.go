@@ -214,12 +214,14 @@ func (e *env) stop() {
 }
 
 // seedOwner pairs the owner directly in the store (the pairing tests use the
-// real flow).
+// real flow). The owner's chat already has the reply keyboard, so the start
+// posts no keyboard note.
 func (e *env) seedOwner() {
 	e.t.Helper()
+	kbKey, kbVersion := daemon.KeyboardKV()
 	e.withStore(func(st *store.Store) {
 		ctx := context.Background()
-		for k, v := range map[string]string{"owner_user_id": fmt.Sprint(ownerID), "owner_chat_id": fmt.Sprint(chatID)} {
+		for k, v := range map[string]string{"owner_user_id": fmt.Sprint(ownerID), "owner_chat_id": fmt.Sprint(chatID), kbKey: kbVersion} {
 			if err := st.Set(ctx, k, v); err != nil {
 				e.t.Fatal(err)
 			}

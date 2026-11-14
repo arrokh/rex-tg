@@ -25,9 +25,10 @@ var t0 = time.Date(2026, 11, 11, 12, 0, 0, 0, time.UTC)
 
 // clock is a fake clock; Sleep advances it at once and records the wait.
 type clock struct {
-	mu     sync.Mutex
-	now    time.Time
-	sleeps []time.Duration
+	mu      sync.Mutex
+	now     time.Time
+	sleeps  []time.Duration
+	onSleep func(d time.Duration) // set before the sender starts
 }
 
 func (c *clock) Now() time.Time {
@@ -37,6 +38,9 @@ func (c *clock) Now() time.Time {
 }
 
 func (c *clock) Sleep(ctx context.Context, d time.Duration) error {
+	if c.onSleep != nil {
+		c.onSleep(d)
+	}
 	c.mu.Lock()
 	c.now = c.now.Add(d)
 	c.sleeps = append(c.sleeps, d)
@@ -68,6 +72,7 @@ func newEnv(t *testing.T, opt sender.Options, clientOpts ...telegram.Option) *en
 	srv := tgtest.New(t)
 	clk := &clock{now: t0}
 	opt.Now, opt.Sleep = clk.Now, clk.Sleep
+	clientOpts = append([]telegram.Option{telegram.WithClock(clk.Now)}, clientOpts...)
 	return &env{t: t, st: st, srv: srv, clk: clk, s: sender.New(st, srv.Client(clientOpts...), opt)}
 }
 
@@ -247,6 +252,120 @@ func TestRateLimitWaitsAndRetriesOnce(t *testing.T) {
 	}
 	if !long {
 		t.Fatalf("sleeps = %v, want one of at least 3s", e.clk.slept())
+	}
+}
+
+// A long 429 holds only its method. A rich answer goes out as a plain
+// message at once, the next rich answer does not ask Telegram again, and the
+// sender does not pause for the hour.
+func TestLongRateLimitHoldsOnlyItsMethod(t *testing.T) {
+	e := newEnv(t, sender.Options{})
+	th1, th2 := e.topic(1), e.topic(2)
+	a := e.enqueue(th1, "a", store.FormatRich, "first answer")
+	b := e.enqueue(th1, "b", store.FormatRich, "second answer")
+	c := e.enqueue(th2, "c", store.FormatPlain, "other topic")
+	e.srv.FailNext("sendRichMessage", 1, 429, "Too Many Requests: retry after 3600", 3600)
+	e.start()
+	for _, id := range []int64{a, b, c} {
+		e.waitState(id, store.OutboxSent)
+	}
+	if n := len(e.srv.Calls("sendRichMessage")); n != 1 {
+		t.Errorf("sendRichMessage calls = %d, want 1: the hold refuses the second", n)
+	}
+	if n := len(e.srv.Calls("sendMessage")); n != 3 {
+		t.Errorf("sendMessage calls = %d, want 3", n)
+	}
+	var texts []string
+	for _, m := range e.visible() {
+		texts = append(texts, m.Text)
+	}
+	if got := strings.Join(texts, "|"); !strings.Contains(got, "first answer") || !strings.Contains(got, "second answer") {
+		t.Errorf("messages = %q", got)
+	}
+	for _, d := range e.clk.slept() {
+		if d >= telegram.HoldAfter {
+			t.Fatalf("slept %v: the hold paused every send", d)
+		}
+	}
+}
+
+// A Call whose method is held waits for the end of the hold, without using
+// its attempts, and then goes out once.
+func TestHeldCallWaitsForTheHold(t *testing.T) {
+	e := newEnv(t, sender.Options{})
+	e.srv.FailNext("sendMessage", 1, 429, "Too Many Requests: retry after 3600", 3600)
+	e.start()
+	start := e.clk.Now()
+	err := e.s.Call(sender.PriorityAlert, func(ctx context.Context, tg *telegram.Client) error {
+		_, err := tg.SendMessage(ctx, telegram.SendMessageParams{ChatID: chat, Text: "alert"})
+		return err
+	})
+	if err != nil {
+		t.Fatalf("call: %v", err)
+	}
+	if n := len(e.srv.Calls("sendMessage")); n != 2 {
+		t.Errorf("sendMessage calls = %d, want 2", n)
+	}
+	if waited := e.clk.Now().Sub(start); waited < time.Hour-time.Second {
+		t.Errorf("waited %v, want the hour of the hold", waited)
+	}
+}
+
+// A held method keeps back only the topic whose part met it: another topic
+// goes on, and the held part goes out once after the hold, without asking
+// Telegram during it.
+func TestHeldPartWaitsWhileOtherTopicsSend(t *testing.T) {
+	e := newEnv(t, sender.Options{})
+	th1, th2 := e.topic(1), e.topic(2)
+	// The held part is older, so it goes first (NextParts orders by outbox
+	// id): the other topic's part comes after the 429.
+	held := e.enqueue(th1, "h", store.FormatPlain, "held")
+	other := e.enqueue(th2, "o", store.FormatRich, "other topic")
+	e.srv.FailNext("sendMessage", 1, 429, "Too Many Requests: retry after 3600", 3600)
+	// The fake clock skips the hour at once, so the test looks at what was
+	// sent when the sender went to sleep for it.
+	var mu sync.Mutex
+	richAtLongSleep := -1
+	e.clk.onSleep = func(d time.Duration) {
+		mu.Lock()
+		defer mu.Unlock()
+		if d >= 30*time.Minute && richAtLongSleep < 0 {
+			richAtLongSleep = len(e.srv.Calls("sendRichMessage"))
+		}
+	}
+	start := e.clk.Now()
+	e.start()
+	e.waitState(other, store.OutboxSent)
+	e.waitState(held, store.OutboxSent)
+	if n := len(e.srv.Calls("sendMessage")); n != 2 {
+		t.Errorf("sendMessage calls = %d, want 2: none during the hold", n)
+	}
+	mu.Lock()
+	if richAtLongSleep != 1 {
+		t.Errorf("rich messages sent before the long sleep = %d, want 1: the other topic must not wait", richAtLongSleep)
+	}
+	mu.Unlock()
+	if waited := e.clk.Now().Sub(start); waited < time.Hour-time.Minute {
+		t.Errorf("the held part went out after %v, want the hour of the hold", waited)
+	}
+}
+
+// A progress edit that meets a held method waits for the hold, once.
+func TestHeldProgressEditWaits(t *testing.T) {
+	e := newEnv(t, sender.Options{})
+	th := e.topic(1)
+	e.s.Progress(th.ID, sender.ProgressOp{Kind: sender.Show, HTML: "one"})
+	e.start()
+	e.waitShown(th.ID)
+	e.srv.FailNext("editMessageText", 1, 429, "Too Many Requests: retry after 3600", 3600)
+	start := e.clk.Now()
+	e.s.Progress(th.ID, sender.ProgressOp{Kind: sender.Edit, HTML: "two"})
+	waitFor(t, "the edit", func() bool { return e.srv.Messages(chat)[0].Text == "two" })
+	if n := len(e.srv.Calls("editMessageText")); n != 2 {
+		t.Errorf("editMessageText calls = %d, want 2", n)
+	}
+	if waited := e.clk.Now().Sub(start); waited < time.Hour-time.Minute {
+		t.Errorf("the edit went out after %v, want the hour of the hold", waited)
 	}
 }
 

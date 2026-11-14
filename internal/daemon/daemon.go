@@ -141,6 +141,7 @@ func Run(ctx context.Context, opt Options) error {
 		Logger:        log,
 		CheckDelay:    timing.CheckDelay,
 		Markup:        bothMarkups(fileOfferMarkup(st), answerMarkup(st, cfg.Display.QuickReplies, cfg.MiniApp.URL)),
+		Keyboard:      partKeyboard,
 		PolledSince:   func(t time.Time) bool { return polled.Load() >= t.UnixNano() },
 	})
 	d := newDaemon(cfg, home, log, now, st, tg, rx, snd, opt.ProcStart, timing)

@@ -698,10 +698,15 @@ func (d *daemon) sendPrompt(chatID, threadID int64, html string, markup *telegra
 }
 
 func (d *daemon) sendMsg(chatID, threadID int64, html string, markup *telegram.InlineKeyboardMarkup, silent bool) (telegram.Message, error) {
+	return d.sendMsgKeys(chatID, threadID, html, markup, nil, silent)
+}
+
+// sendMsgKeys is sendMsg with a reply keyboard (kb), sent when markup is nil.
+func (d *daemon) sendMsgKeys(chatID, threadID int64, html string, markup *telegram.InlineKeyboardMarkup, kb *telegram.ReplyKeyboardMarkup, silent bool) (telegram.Message, error) {
 	var msg telegram.Message
 	err := d.snd.Call(sender.PriorityAnswer, func(ctx context.Context, tg *telegram.Client) error {
 		m, err := tg.SendMessage(ctx, telegram.SendMessageParams{
-			ChatID: chatID, MessageThreadID: threadID, Text: html, ParseMode: "HTML", ReplyMarkup: markup,
+			ChatID: chatID, MessageThreadID: threadID, Text: html, ParseMode: "HTML", ReplyMarkup: markup, Keyboard: kb,
 			DisableNotification: silent, // only answers and prompts make a sound
 		})
 		msg = m
