@@ -16,9 +16,11 @@ import (
 )
 
 // The control panel (/rt) lists the agents in Rex panes and acts on
-// them: it opens a session's topic, renames a topic or a pane, starts an
-// agent in a folder that the folder explorer picks, unlinks a topic, and
-// pauses typing. The daemon does the work (Control); this file checks who
+// them: it opens a session's topic, renames an agent (its topic, its pane,
+// and its tab), opens the live screen, files, or changes of its topic,
+// starts an agent in a folder that the folder explorer picks, and unlinks a
+// topic. It shows whether typing is paused, but /pause and /unpause stay
+// chat commands: init data that leaked cannot undo a /pause. The daemon does the work (Control); this file checks who
 // asks and what they ask, and lists folders.
 
 // KindControl is the control panel. There is one, for the whole bot.
@@ -26,11 +28,13 @@ const KindControl = "control"
 
 // ControlState is what the control panel shows.
 type ControlState struct {
-	Paused   bool           `json:"paused"`   // /pause: nothing is typed into panes
+	Paused   bool           `json:"paused"`   // /pause: nothing is typed into panes (the panel only shows it)
 	Agents   []ControlAgent `json:"agents"`   // the agents in Rex panes, the ones that wait for you first
 	Starters []Starter      `json:"starters"` // the agents that "New agent" can start
 	Folders  []Folder       `json:"folders"`  // folders for a new agent: the pinned ones, then recent ones
 	Home     Folder         `json:"home"`     // where the folder explorer starts
+	Files    bool           `json:"files"`    // OpPage PageFiles is on ([miniapp] files)
+	Changes  bool           `json:"changes"`  // OpPage PageChanges is on ([miniapp] changes)
 	At       string         `json:"at"`       // when it was read, "15:04:05"
 }
 
@@ -70,6 +74,7 @@ type Starter struct {
 type Folder struct {
 	Path  string `json:"path"`
 	Shown string `json:"shown"`
+	Git   bool   `json:"git,omitempty"` // in a folder list: it is the top folder of a git repository
 }
 
 // FolderList is one folder of the folder explorer.
@@ -83,12 +88,19 @@ type FolderList struct {
 
 // Operations of ControlAction.
 const (
-	OpOpen        = "open"         // Pane: open the session's topic, or make a new one
-	OpRenameTopic = "rename_topic" // Thread, Name: like /rename in the topic ("auto" too)
-	OpRenamePane  = "rename_pane"  // Pane, Name: rename the pane in Rex
-	OpNew         = "new"          // Agent, Path: start an agent in a new Rex tab, like /new
-	OpUnlink      = "unlink"       // Thread: like /unlink in the topic
-	OpPause       = "pause"        // On: like /pause (true) or /unpause (false)
+	OpOpen   = "open"   // Pane: open the session's topic, or make a new one
+	OpRename = "rename" // Pane, Name: like /rename: the topic, the pane, and its tab ("auto" too)
+	OpPage   = "page"   // Pane, Kind: a Mini App page of the agent's topic (PageScreen, PageFiles, PageChanges)
+	OpNew    = "new"    // Agent, Path: start an agent in a new Rex tab, like /new
+	OpUnlink = "unlink" // Thread: like /unlink in the topic
+)
+
+// Pages that OpPage opens: what /screen's live screen, /files, and /changes
+// open for the agent's topic.
+const (
+	PageScreen  = "screen"
+	PageFiles   = "files"
+	PageChanges = "changes"
 )
 
 // ControlAction is one action of the control panel.
@@ -100,7 +112,7 @@ type ControlAction struct {
 	Name   string `json:"name,omitempty"`
 	Agent  string `json:"agent,omitempty"`
 	Path   string `json:"path,omitempty"`
-	On     bool   `json:"on,omitempty"`
+	Kind   string `json:"kind,omitempty"` // OpPage: PageScreen, PageFiles, or PageChanges
 }
 
 // ControlResult is the outcome of an action, shown on the page.
@@ -112,6 +124,9 @@ type ControlResult struct {
 	// still runs). The page sends a retry with the same Act, so a retry
 	// never runs the action a second time.
 	Pending bool `json:"pending,omitempty"`
+	// Page is the id of a Mini App page to go to (OpPage): the page opens
+	// it as app?p=<Page>, in the same Mini App.
+	Page string `json:"page,omitempty"`
 }
 
 // Control is the daemon's side of the control panel.
@@ -151,12 +166,16 @@ func (a ControlAction) Check() error {
 		if a.Pane <= 0 {
 			return errors.New("no pane")
 		}
-	case OpRenameTopic, OpRenamePane:
-		if a.Op == OpRenameTopic && a.Thread <= 0 || a.Op == OpRenamePane && a.Pane <= 0 {
+	case OpRename:
+		if a.Pane <= 0 {
 			return errors.New("nothing to rename")
 		}
 		if name == "" || utf8.RuneCountInString(name) > maxNameRunes || !utf8.ValidString(name) || strings.ContainsAny(name, "\r\n\t") {
 			return errors.New("a name has 1 to 100 characters, on one line")
+		}
+	case OpPage:
+		if a.Pane <= 0 || a.Kind != PageScreen && a.Kind != PageFiles && a.Kind != PageChanges {
+			return errors.New("no such page")
 		}
 	case OpNew:
 		if a.Agent == "" || !filepath.IsAbs(a.Path) || len(a.Path) > maxPathBytes || strings.ContainsRune(a.Path, 0) {
@@ -166,7 +185,6 @@ func (a ControlAction) Check() error {
 		if a.Thread <= 0 {
 			return errors.New("no topic")
 		}
-	case OpPause:
 	default:
 		return errors.New("unknown action")
 	}
@@ -231,7 +249,8 @@ func ListFolders(home, dir string, hidden bool) (FolderList, error) {
 			l.More = true
 			break
 		}
-		l.Dirs = append(l.Dirs, Folder{Path: filepath.Join(dir, name), Shown: name})
+		_, gerr := os.Lstat(filepath.Join(real, name, ".git"))
+		l.Dirs = append(l.Dirs, Folder{Path: filepath.Join(dir, name), Shown: name, Git: gerr == nil})
 	}
 	if !l.Git {
 		if _, err := os.Stat(filepath.Join(real, ".git")); err == nil {

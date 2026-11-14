@@ -144,6 +144,8 @@ func (c *controlPanel) State(ctx context.Context) (miniapp.ControlState, error) 
 	})
 	st := miniapp.ControlState{
 		Paused:   d.paused.Load(),
+		Files:    d.miniAppReady() && d.cfg.MiniApp.Files,
+		Changes:  d.miniAppReady() && d.cfg.MiniApp.Changes,
 		Agents:   []miniapp.ControlAgent{},
 		Starters: []miniapp.Starter{},
 		Folders:  []miniapp.Folder{},
@@ -287,16 +289,14 @@ func (c *controlPanel) dispatch(a miniapp.ControlAction) (miniapp.ControlResult,
 	switch a.Op {
 	case miniapp.OpOpen:
 		wait = c.open(a)
-	case miniapp.OpRenameTopic:
-		res = c.renameTopic(a)
-	case miniapp.OpRenamePane:
-		res, wait = c.renamePane(a)
+	case miniapp.OpRename:
+		res, wait = c.rename(a)
+	case miniapp.OpPage:
+		res, wait = c.page(a)
 	case miniapp.OpNew:
 		res = c.newAgent(a)
 	case miniapp.OpUnlink:
 		res = c.unlink(a)
-	case miniapp.OpPause:
-		res = c.pause(a)
 	default:
 		res = controlFail("Unknown action.")
 	}
@@ -389,57 +389,76 @@ func (c *controlPanel) openThread(id int64) (store.Thread, bool) {
 	return th, err == nil && th.Status != store.ThreadClosed
 }
 
-// renameTopic is /rename in the topic (core).
-func (c *controlPanel) renameTopic(a miniapp.ControlAction) miniapp.ControlResult {
-	th, ok := c.openThread(a.Thread)
-	if !ok {
-		return controlFail("This topic is gone or unlinked.")
+// rename is /rename for a pane: its topic, the pane, and its tab (core, then
+// a worker).
+func (c *controlPanel) rename(a miniapp.ControlAction) (miniapp.ControlResult, <-chan miniapp.ControlResult) {
+	d := c.d
+	pl, refusal := d.planRename(nil, a.Pane, a.Name)
+	if refusal != "" {
+		return controlFail(plainText(refusal)), nil
 	}
-	var out string
-	c.d.renameCommand(th, a.Name, func(h string) { out = h })
-	res := miniapp.ControlResult{OK: strings.HasPrefix(out, "✏️"), Message: plainText(out)}
-	if res.OK {
-		res.Link = c.d.topicLink(th.MessageThreadID)
-	}
-	return res
+	return miniapp.ControlResult{}, c.background(a.Act, func() miniapp.ControlResult {
+		rep := d.runRename(pl)
+		res := miniapp.ControlResult{OK: rep.topic || rep.pane || rep.tab, Message: plainText(rep.text(pl.name, pl.auto))}
+		if pl.th != nil && rep.topic {
+			res.Link = d.topicLink(pl.th.MessageThreadID)
+		}
+		return res
+	})
 }
 
-// renamePane renames a pane in Rex (core, then a worker).
-func (c *controlPanel) renamePane(a miniapp.ControlAction) (miniapp.ControlResult, <-chan miniapp.ControlResult) {
+// page returns a Mini App page of the agent's topic (core, then a worker for
+// the pages that read git).
+func (c *controlPanel) page(a miniapp.ControlAction) (miniapp.ControlResult, <-chan miniapp.ControlResult) {
 	d := c.d
+	if !d.miniAppReady() {
+		return controlFail("The Mini App is not ready."), nil
+	}
 	p, err := d.st.Pane(d.ctx, a.Pane)
 	if err != nil || !p.GoneAt.IsZero() {
 		return controlFail("That pane is gone."), nil
 	}
-	name := cleanLabel(strings.Join(strings.Fields(format.Redact(a.Name)), " "))
-	if tidyName(name, "") == "" {
-		return controlFail("A name needs a letter or a digit."), nil
+	th, ok := d.paneThread(p)
+	if !ok || th.Status == store.ThreadClosed {
+		return controlFail("This agent has no topic. Open one first."), nil
 	}
+	if a.Kind == miniapp.PageScreen {
+		id, err := d.screenPage(th)
+		if err != nil {
+			return controlFail("Could not open the live screen."), nil
+		}
+		return miniapp.ControlResult{OK: true, Message: "Opening the live screen.", Page: id}, nil
+	}
+	if a.Kind == miniapp.PageFiles && !d.cfg.MiniApp.Files {
+		return controlFail("The file browser is off ([miniapp] files)."), nil
+	}
+	if a.Kind == miniapp.PageChanges && !d.cfg.MiniApp.Changes {
+		return controlFail("The changes view is off ([miniapp] changes)."), nil
+	}
+	conv, err := d.st.Conversation(d.ctx, th.CurrentConversationID)
+	if err != nil || conv.CWD == "" {
+		return controlFail("This agent has no folder yet."), nil
+	}
+	cwd := conv.CWD
 	return miniapp.ControlResult{}, c.background(a.Act, func() miniapp.ControlResult {
-		ctx, cancel := context.WithTimeout(d.ctx, 20*time.Second)
+		ctx, cancel := context.WithTimeout(d.ctx, time.Minute)
 		defer cancel()
-		if err := d.rx.RenameBlock(ctx, p.Session, p.Block, name); err != nil {
-			d.log.Warn("control panel: rename pane", "pane", p.ID, "err", err)
-			return controlFail("Rex could not rename the pane.")
-		}
-		if err := d.scanAndWait(ctx); err != nil && d.ctx.Err() == nil {
-			d.log.Warn("control panel: scan", "err", err)
-		}
-		msg := "The pane is named " + format.Truncate(name, 60) + "."
-		if views, err := d.reg.Agents(d.ctx); err == nil {
-			for _, v := range views {
-				if v.Pane.ID != p.ID || v.Thread == nil || v.Thread.Status == store.ThreadClosed {
-					continue
-				}
-				if _, custom, _ := d.st.Get(d.ctx, tabUserKey(v.Thread.ID)); custom {
-					msg += " Its topic keeps the name you gave it. Use auto on the topic to follow the pane."
-				} else {
-					msg += " Its topic follows in a moment."
-					d.emit(evRename{thread: v.Thread.ID})
-				}
+		var id string
+		var err error
+		if a.Kind == miniapp.PageFiles {
+			id, err = d.filesPage(ctx, th, cwd)
+		} else {
+			var top string
+			var ok bool
+			if top, ok = d.repoTop(ctx, cwd); !ok {
+				return controlFail(d.tildePath(cwd) + " is not in a git repository, so there are no changes to show.")
 			}
+			id, err = d.changesPage(th, top)
 		}
-		return miniapp.ControlResult{OK: true, Message: msg}
+		if err != nil {
+			return controlFail("Could not open the page.")
+		}
+		return miniapp.ControlResult{OK: true, Message: "Opening the page.", Page: id}
 	})
 }
 
@@ -479,18 +498,6 @@ func (c *controlPanel) unlink(a miniapp.ControlAction) miniapp.ControlResult {
 	}
 	c.d.unlink(th)
 	return miniapp.ControlResult{OK: true, Message: "Unlinked. The topic stays in Telegram as history."}
-}
-
-// pause is /pause and /unpause (core).
-func (c *controlPanel) pause(a miniapp.ControlAction) miniapp.ControlResult {
-	d := c.d
-	d.setPaused(a.On)
-	if a.On {
-		d.say(d.ownerChat, 0, "⏸ Typing is paused. Nothing is typed into panes until /unpause.", nil)
-		return miniapp.ControlResult{OK: true, Message: "Typing is paused."}
-	}
-	d.say(d.ownerChat, 0, "▶️ Typing is on again.", nil)
-	return miniapp.ControlResult{OK: true, Message: "Typing is on again."}
 }
 
 // pruneActRecords drops the claims of acts older than a day (housekeeping, a

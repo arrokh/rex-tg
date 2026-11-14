@@ -182,6 +182,7 @@ func TestRenameCommandNamesTheTopicAndItsTab(t *testing.T) {
 	e := newEnv(t)
 	e.seedOwner()
 	e.tabSession("pane one")
+	e.fake.On([]string{"block", "rename"}, "", 0)
 	p := e.newPi("pi-rename")
 	p.User("start")
 	p.Final("ready")
@@ -204,11 +205,24 @@ func TestRenameCommandNamesTheTopicAndItsTab(t *testing.T) {
 		r := e.tabRenames()
 		return len(r) > 0 && r[len(r)-1] == "explore lovina"
 	})
+	e.waitText(thread, "Renamed the topic, its Rex pane, and its tab to explore lovina")
 	if len(e.pastes()) != 0 {
 		t.Errorf("/rename was typed into the pane: %q", e.pastes())
+	}
+	// The pane is named in Rex. The tab is in the session of /new: only
+	// syncTab renames it (once, to the name that was kept).
+	if got := e.fake.BlockLabels()[rexBlock]; got != "explore lovina" {
+		t.Errorf("pane label %q", got)
+	}
+	if got := e.tabRenames(); !slices.Equal(got, []string{"explore lovina"}) {
+		t.Errorf("tab renames %q, want one", got)
 	}
 
 	e.setTab("explore lovina")
 	e.say(thread, "/rename auto")
-	e.waitFor("the topic named after the pane again", func() bool { return topic() == "pane one" })
+	e.waitText(thread, "to the automatic name")
+	if got := e.fake.BlockLabels()[rexBlock]; got != "shell" {
+		t.Errorf("pane label %q after auto, want shell", got)
+	}
+	e.waitFor("the topic named after the session again", func() bool { return topic() != "explore lovina" && topic() != "" })
 }
