@@ -129,6 +129,7 @@ func Run(ctx context.Context, opt Options) error {
 	})
 	defer tg.OnMessage(nil)
 	timing := opt.Timing.withDefaults()
+	kb := &keyboardSource{}   // the reply keyboard's key and address; the sender reads it
 	polled := &atomic.Int64{} // when the last getUpdates call that finished started (pollLoop)
 	rx := opt.Rex
 	if rx == nil {
@@ -141,11 +142,12 @@ func Run(ctx context.Context, opt Options) error {
 		Logger:        log,
 		CheckDelay:    timing.CheckDelay,
 		Markup:        bothMarkups(fileOfferMarkup(st), answerMarkup(st, cfg.Display.QuickReplies, cfg.MiniApp.URL)),
-		Keyboard:      partKeyboard,
+		Keyboard:      kb.forPart,
 		PolledSince:   func(t time.Time) bool { return polled.Load() >= t.UnixNano() },
 	})
 	d := newDaemon(cfg, home, log, now, st, tg, rx, snd, opt.ProcStart, timing)
 	d.polled = polled
+	d.kb = kb
 	tg.OnHold(d.noteHold) // a long Telegram wait outlives a restart (hold.go)
 	defer tg.OnHold(nil)
 	if d.miniAppOn() && opt.Token != "" {

@@ -182,6 +182,7 @@ type daemon struct {
 	turnTrees     map[int64]turnTree // the repository at each running turn's start, by session
 	miniSecret    []byte             // the key that checks the Mini App's signed requests
 	miniUp        atomic.Bool        // the Mini App's server listens
+	kb            *keyboardSource    // the reply keyboard's key and address (keyboard.go)
 	screenMu      sync.Mutex
 	screenShots   map[int64]*screenRead // the last live-screen read of each topic (the map under screenMu)
 	liveMu        sync.Mutex            // held while a live page is found or made
@@ -252,6 +253,7 @@ func newDaemon(cfg config.Config, home string, log *slog.Logger, now func() time
 	d := &daemon{
 		cfg: cfg, timing: timing, home: home, log: log, now: now, st: st, tg: tg, rx: rx, snd: snd, adapters: adapters,
 		polled:       &atomic.Int64{}, // Run shares its own with the sender
+		kb:           &keyboardSource{},
 		below:        map[int64]bool{},
 		promptChecks: map[int64]time.Time{},
 		blockedSince: map[int64]time.Time{},

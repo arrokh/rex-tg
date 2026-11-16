@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"rex-tg/internal/format"
+	"rex-tg/internal/inbound"
 	"rex-tg/internal/miniapp"
 	"rex-tg/internal/registry"
 	"rex-tg/internal/rex"
@@ -369,6 +370,8 @@ func (c *controlPanel) dispatch(a miniapp.ControlAction) (miniapp.ControlResult,
 		res = c.cleanTopics()
 	case miniapp.OpUnlink:
 		res = c.unlink(a)
+	case miniapp.OpNotes:
+		res = c.notes(a)
 	default:
 		res = controlFail("Unknown action.")
 	}
@@ -754,4 +757,21 @@ func (d *daemon) pruneFolderHides() {
 			_ = d.st.Delete(d.ctx, k)
 		}
 	}
+}
+
+// notes sends the notes of an Annotate or answer page to the topic's agent,
+// like a message typed in the topic (core): every check of the typing
+// applies, and the text waits until the agent is idle. The act's claim runs
+// it once; its queued row comes from the act too, so it is queued once.
+func (c *controlPanel) notes(a miniapp.ControlAction) miniapp.ControlResult {
+	d := c.d
+	th, err := d.st.Thread(d.ctx, a.Thread)
+	if err != nil || th.Status == store.ThreadClosed {
+		return controlFail("This topic is closed. Use Copy, and paste the notes where the agent is.")
+	}
+	if !d.queueText(th.ID, annotRowID(a.Act), 0, a.Text, "text", inbound.ActText) {
+		return controlFail("Could not send the notes. Try again.")
+	}
+	d.annotSent(th.ID, a.Act, a.Text)
+	return miniapp.ControlResult{OK: true, Message: "Sent to the agent. It gets them when it is idle."}
 }

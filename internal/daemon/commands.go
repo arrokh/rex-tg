@@ -30,6 +30,7 @@ const (
 		"/rt - the control panel: agents, topics, new agents (Mini App)\n" +
 		"/pause - stop typing into panes\n" +
 		"/unpause - allow typing again\n" +
+		"/rekey - make a new key for the keyboard buttons; the old buttons stop working\n" +
 		"/help - this list"
 	topicHelp = "<b>In a topic</b>\n" +
 		"Text goes to the agent. Text that starts with / goes to the agent too, except the commands below. Use //name to send /name.\n" +
@@ -50,6 +51,7 @@ const (
 		"/at &lt;time|delay&gt; &lt;text&gt; - send text to the agent later, at 09:00 or in 30m; /at lists, /at cancel &lt;n&gt; removes one\n" +
 		"/rename &lt;name&gt; - rename this topic, its Rex pane and its tab; /rename auto names them after the session again\n" +
 		"/unlink - stop mirroring this session\n" +
+		"/rekey - make a new key for the keyboard buttons; the old buttons stop working\n" +
 		"/help - this list"
 )
 
@@ -64,6 +66,14 @@ func (d *daemon) mainCommand(r inbound.Route, chat, thread int64, inTopic bool) 
 		d.spawn(func() { d.sendAgents(chat, thread, mac) })
 	case "rt":
 		d.panelCommand(chat, thread)
+	case "annotate":
+		d.say(chat, thread, annotateText, nil)
+	case "rekey":
+		if !d.rekey(d.ctx) {
+			d.say(chat, thread, "🔑 Could not make a new key: the store did not keep it. The old buttons still work. Try again.", nil)
+			break
+		}
+		d.say(chat, thread, rekeyText, nil)
 	case "new":
 		d.newCommand(chat, thread, inTopic, r.Args)
 	case "topics":

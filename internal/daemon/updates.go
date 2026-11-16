@@ -108,6 +108,10 @@ func (d *daemon) onMessage(u telegram.Update) {
 		d.log.Info("update dropped: not the owner", "update", u.UpdateID, "from", m.From.ID)
 		return
 	}
+	if m.WebAppData != nil {
+		d.webAppData(u, m) // data from a Mini App; never typed into a pane
+		return
+	}
 	if m.IsTopicMessage && m.MessageThreadID != 0 {
 		d.topicMessage(u, m)
 		return

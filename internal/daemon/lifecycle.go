@@ -25,6 +25,8 @@ const typingUnknownNotice = "⚠️ Your message may be in the input box without
 var botCommands = []telegram.BotCommand{
 	{Command: "agents", Description: "List the agents in Rex panes"},
 	{Command: "rt", Description: "Open the rex-tg control panel"},
+	{Command: "annotate", Description: "About the Annotate button"},
+	{Command: "rekey", Description: "New key for the keyboard buttons"},
 	{Command: "new", Description: "Start an agent in a new Rex tab"},
 	{Command: "topics", Description: "List topics and their states"},
 	{Command: "status", Description: "Daemon health"},
@@ -105,6 +107,7 @@ func (d *daemon) startup(ctx context.Context) error {
 		return err
 	}
 	d.setCommands(ctx, d.tg)
+	d.initKeyboard(ctx) // the key, and whether the buttons open the Mini App
 	d.showKeyboard(ctx)
 
 	threads, err := d.st.Threads(ctx)

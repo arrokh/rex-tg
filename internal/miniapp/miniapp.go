@@ -38,7 +38,7 @@ type Page struct {
 	Kind   string    `json:"kind"`             // KindAnswer, KindDiff, KindScreen, KindFiles, KindChanges or KindControl
 	Title  string    `json:"title"`            // a short title
 	Text   string    `json:"text"`             // Markdown (an answer) or a unified diff
-	Thread int64     `json:"thread,omitempty"` // the topic of a screen, files or changes page
+	Thread int64     `json:"thread,omitempty"` // the topic of a screen, files, changes, annotate or answer page (0 on answer pages made before Annotate)
 	Dir    string    `json:"dir,omitempty"`    // the folder of a files or changes page
 	At     time.Time `json:"at"`
 }
@@ -81,6 +81,10 @@ type Server struct {
 	redact  func(string) string  // cleans a file's text before it is shown
 	control Control              // the control panel (nil: off)
 	home    string               // where the control panel's folder explorer starts
+	launch  Launcher             // the keyboard buttons' pages (nil: off)
+	keyOK   func(string) bool    // checks the keyboard's key (nil: no key works)
+	annot   Annotations          // the Annotate page (nil: off)
+	tailnet bool                 // refuse a request that did not come from the tailnet
 	reads   reads                // folder and file reads that may wait for macOS (slowread.go)
 	wait    time.Duration        // how long a request waits for such a read
 	now     func() time.Time
@@ -123,6 +127,35 @@ func (s *Server) WithFiles(on func() bool, redact func(string) string) *Server {
 func (s *Server) WithChanges(on func() bool, redact func(string) string, turn func(Page) TurnRange) *Server {
 	s.changes, s.redact, s.turn = on, redact, turn
 	return s
+}
+
+// WithLaunch turns on the keyboard buttons' pages (launch.go). keyOK checks
+// the key that a button's address carries; the key only shows.
+func (s *Server) WithLaunch(l Launcher, keyOK func(string) bool) *Server {
+	s.launch, s.keyOK = l, keyOK
+	return s
+}
+
+// WithAnnotate turns on the Annotate page (annotate.go).
+func (s *Server) WithAnnotate(a Annotations) *Server {
+	s.annot = a
+	return s
+}
+
+// WithTailnetOnly makes the server answer only requests that came through
+// "tailscale serve" from a device of the tailnet: they carry the
+// Tailscale-User-Login header, which Tailscale sets itself and removes when
+// a client sends it. Funnel (public) requests carry Tailscale-Funnel-Request
+// and no identity, so they are refused.
+func (s *Server) WithTailnetOnly(on bool) *Server {
+	s.tailnet = on
+	return s
+}
+
+// fromTailnet tells whether r came through tailscale serve from a user's
+// device in the tailnet.
+func fromTailnet(r *http.Request) bool {
+	return r.Header.Get("Tailscale-Funnel-Request") == "" && strings.TrimSpace(r.Header.Get("Tailscale-User-Login")) != ""
 }
 
 // Secret is the key that checks a Mini App's init data: HMAC-SHA256 of the
@@ -230,7 +263,22 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/control", s.controlState)
 	mux.HandleFunc("GET /api/control/folders", s.controlFolders)
 	mux.HandleFunc("POST /api/control/do", s.controlDo)
-	return mux
+	mux.HandleFunc("GET /api/launch", s.launchPage)
+	mux.HandleFunc("GET /api/annotate", s.annotateList)
+	mux.HandleFunc("POST /api/annotate/draft", s.annotateDraft)
+	mux.HandleFunc("POST /api/annotate/send", s.annotateSend)
+	if !s.tailnet {
+		return mux
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !fromTailnet(r) {
+			s.noteRefusal("not from the tailnet")
+			s.headers(w, "application/json")
+			http.Error(w, `{"error":"The Mini App opens only inside your tailnet. Turn on Tailscale on this device."}`, http.StatusForbidden)
+			return
+		}
+		mux.ServeHTTP(w, r)
+	})
 }
 
 func (s *Server) headers(w http.ResponseWriter, ctype string) {
@@ -242,22 +290,44 @@ func (s *Server) headers(w http.ResponseWriter, ctype string) {
 	h.Set("Content-Security-Policy", "default-src 'none'; script-src 'self' https://telegram.org; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'")
 }
 
-// allowed checks that a request is the owner's, signed by Telegram. It
-// answers a refused request itself.
+// allowed checks that a request is the owner's: signed by Telegram, or
+// carrying the keyboard's key (keyed; it only shows). It answers a refused
+// request itself.
 func (s *Server) allowed(w http.ResponseWriter, r *http.Request) bool {
 	s.headers(w, "application/json")
+	if r.Header.Get("X-Telegram-Init-Data") == "" && r.Header.Get("X-Rex-Key") != "" {
+		if s.keyed(r) {
+			return true
+		}
+		s.noteRefusal("wrong key")
+		http.Error(w, `{"error":"This button is old. Send /help in the chat for new buttons."}`, http.StatusForbidden)
+		return false
+	}
 	user, err := CheckInitData(r.Header.Get("X-Telegram-Init-Data"), s.secret, s.now(), MaxAge)
 	owner := s.owner()
 	if err != nil || owner == 0 || user != owner {
-		s.refused.Add(1)
-		if now := s.now().UnixNano(); s.log != nil && now-s.refusedAt.Load() >= int64(time.Minute) {
-			s.refusedAt.Store(now)
-			s.log.Info("mini app: refused requests", "count", s.refused.Swap(0), "last_reason", refusal(err, owner))
-		}
+		s.noteRefusal(refusal(err, owner))
 		http.Error(w, `{"error":"Open this page from its button in Telegram."}`, http.StatusForbidden)
 		return false
 	}
 	return true
+}
+
+// keyed tells whether r carries the keyboard's key and no init data: a page
+// that a keyboard button opened. Such a request only reads.
+func (s *Server) keyed(r *http.Request) bool {
+	k := r.Header.Get("X-Rex-Key")
+	return k != "" && r.Header.Get("X-Telegram-Init-Data") == "" && s.keyOK != nil && s.owner() != 0 && s.keyOK(k)
+}
+
+// noteRefusal counts a refused request; the address may be reachable by
+// others, so refusals are logged at most once a minute.
+func (s *Server) noteRefusal(reason string) {
+	s.refused.Add(1)
+	if now := s.now().UnixNano(); s.log != nil && now-s.refusedAt.Load() >= int64(time.Minute) {
+		s.refusedAt.Store(now)
+		s.log.Info("mini app: refused requests", "count", s.refused.Swap(0), "last_reason", reason)
+	}
 }
 
 // loadKind loads the page of the request's id. With kind set, the page must
@@ -283,11 +353,19 @@ func (s *Server) page(w http.ResponseWriter, r *http.Request) {
 	switch p.Kind {
 	case KindDiff:
 		body = RenderDiff(p.Text)
-	case KindScreen, KindFiles, KindChanges, KindControl: // the page asks for its content itself
+	case KindScreen, KindFiles, KindChanges, KindControl, KindAnnotate: // the page asks for its content itself
 	default:
 		body = RenderAnswer(p.Text)
 	}
-	_ = json.NewEncoder(w).Encode(map[string]string{"kind": p.Kind, "title": p.Title, "html": body})
+	at := ""
+	if !p.At.IsZero() {
+		at = p.At.Local().Format("Jan 2 15:04")
+	}
+	out := map[string]any{"kind": p.Kind, "title": p.Title, "html": body, "at": at, "thread": p.Thread}
+	if s.annot != nil && (p.Kind == KindAnswer || p.Kind == KindAnnotate) {
+		out["bot"] = s.annot.BotName() // for t.me links (Annotate's "Put in message box")
+	}
+	_ = json.NewEncoder(w).Encode(out)
 }
 
 // liveScreen answers a refresh of a live screen.

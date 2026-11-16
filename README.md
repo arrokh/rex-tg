@@ -21,7 +21,7 @@ Not supported: T3 Code panes, and Rex servers on other computers.
 - Go, to build (the version is in `.tool-versions`; `mise install` gets it)
 - A Telegram bot from @BotFather, with Threaded Mode on
 - For voice notes only: ffmpeg and whisper.cpp
-- For the Mini App only: Tailscale, with Funnel ([setup](docs/reference.md#mini-app))
+- For the Mini App only: Tailscale on the Mac and on the phone, with `tailscale serve` ([setup](docs/reference.md#mini-app))
 
 ## Setup
 
@@ -63,7 +63,8 @@ With Threaded Mode, every message is in a topic. A topic that is not linked to a
 | `/topics` | Lists the topics and their states. |
 | `/status` | Shows the daemon's health. |
 | `/pause`, `/unpause` | Stops or allows all typing into panes. Use `/pause` if you lose your phone. |
-| `/help` | Lists the commands. |
+| `/rekey` | Makes new buttons under the message box; the old ones stop working. |
+| `/help` | Lists the commands and brings the buttons back. |
 
 ### In a topic
 
@@ -93,7 +94,7 @@ To send an agent a command that has a bot command's name, use two slashes: `//he
 
 ### Buttons under the message box
 
-Four buttons sit under the message box: 🎛 Panel (`/rt`), 🖥 Screen (`/screen`), 📂 Files (`/files`), and 📝 Changes (`/changes`). A tap runs that command, so a button never goes to the agent as a prompt. Tap ⊞ in the message box to show or hide them. After an update that changes them, rex-tg posts a short note with the buttons in the main chat and in each open topic. `/help` brings them back. Details: [docs/reference.md](docs/reference.md#buttons-under-the-message-box).
+Five buttons sit under the message box: 🎛 Panel, 🖥 Screen, 📂 Files, 📝 Changes, and ✍️ Annotate. With the Mini App on, a tap opens that page at once, for the topic you are in. ✍️ Annotate shows the agent's answers: tap a paragraph or select text, write a note, and send the notes to the agent, copy them, or put them in the message box. Without the Mini App, a tap runs the command (`/rt`, `/screen`, `/files`, `/changes`), so a button never goes to the agent as a prompt. Tap ⊞ in the message box to show or hide them. `/help` brings them back, and `/rekey` makes new ones and stops the old ones. Details: [docs/reference.md](docs/reference.md#buttons-under-the-message-box).
 
 ### What you see
 
@@ -154,7 +155,7 @@ Start with `rex-tg doctor`. Common cases:
 | "may not have arrived" | Tap `🔁 Send again`, or send `/resend`, if the reply is missing. |
 | "This topic is not linked" | Open the agent again with `/agents`. |
 | Telegram returns 409 Conflict | Another program uses the same bot token. Stop it. |
-| A Mini App page does not open | Check `[miniapp] url` and the Funnel ([Mini App](docs/reference.md#mini-app)). |
+| A Mini App page does not open | Turn on Tailscale on the phone. Check `[miniapp] url` and `tailscale serve status` ([Mini App](docs/reference.md#mini-app)). |
 
 More cases: [docs/reference.md](docs/reference.md#troubleshooting).
 

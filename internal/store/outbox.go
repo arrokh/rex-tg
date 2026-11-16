@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 )
@@ -528,4 +529,44 @@ func (s *Store) UnseenBetween(ctx context.Context, chatID, lo, hi int64) (int64,
 // UnknownParts returns every outbox part in state unknown, oldest first.
 func (s *Store) UnknownParts(ctx context.Context) ([]Part, error) {
 	return queryParts(ctx, s.db, `WHERE p.state='unknown' ORDER BY o.id, p.part`)
+}
+
+// AnswersBefore returns a topic's outbox rows of the kinds answer and
+// backfill with their parts, newest first: at most limit rows with an id
+// below before (0: from the newest). Rows that were skipped or that failed
+// are left out.
+func (s *Store) AnswersBefore(ctx context.Context, threadID, before int64, limit int) ([]OutboxRow, error) {
+	if before <= 0 {
+		before = math.MaxInt64
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT id, thread_id, event_key, kind, body, state, silent, attempts, last_error, created_at, sent_at
+		FROM outbox WHERE thread_id=? AND kind IN ('answer','backfill') AND state NOT IN ('skipped','failed') AND id<?
+		ORDER BY id DESC LIMIT ?`, threadID, before, limit)
+	if err != nil {
+		return nil, fmt.Errorf("store: answers: %w", err)
+	}
+	var out []OutboxRow
+	for rows.Next() {
+		var r OutboxRow
+		var silent int
+		var lastErr sql.NullString
+		var created, sent sql.NullInt64
+		if err := rows.Scan(&r.ID, &r.ThreadID, &r.Key, &r.Kind, &r.Body, &r.State, &silent, &r.Attempts, &lastErr, &created, &sent); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("store: answers: %w", err)
+		}
+		r.Silent, r.LastError, r.CreatedAt, r.SentAt = silent != 0, lastErr.String, fromMs(created), fromMs(sent)
+		out = append(out, r)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, fmt.Errorf("store: answers: %w", err)
+	}
+	rows.Close()
+	for i := range out {
+		if out[i].Parts, err = queryParts(ctx, s.db, `WHERE p.outbox_id=? ORDER BY p.part`, out[i].ID); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
 }

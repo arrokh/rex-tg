@@ -276,6 +276,18 @@ func (s *Server) PushMessage(chatID, threadID, fromID int64, text string) telegr
 	return s.PushUpdate(telegram.Update{Message: &tm})
 }
 
+// PushWebAppData queues a message that carries the data that a Mini App sent
+// with sendData (Telegram's web_app_data), from a user.
+func (s *Server) PushWebAppData(chatID, threadID, fromID int64, data string) telegram.Update {
+	s.mu.Lock()
+	m := s.addMsg(&Message{ChatID: chatID, ThreadID: threadID, FromID: fromID})
+	tm := s.wire(m)
+	tm.Text = ""
+	tm.WebAppData = &telegram.WebAppData{Data: data, ButtonText: "✍️ Annotate"}
+	s.mu.Unlock()
+	return s.PushUpdate(telegram.Update{Message: &tm})
+}
+
 // PushReply queues a user's text that replies to message replyTo, as
 // Telegram sends it: reply_to_message holds that message with its text
 // without markup, and quote the part the user quoted ("" for none). A

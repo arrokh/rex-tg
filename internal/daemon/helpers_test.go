@@ -218,7 +218,7 @@ func (e *env) stop() {
 // posts no keyboard note.
 func (e *env) seedOwner() {
 	e.t.Helper()
-	kbKey, kbVersion := daemon.KeyboardKV()
+	kbKey, kbVersion := daemon.KeyboardKVFor(e.cfg.MiniApp.URL)
 	e.withStore(func(st *store.Store) {
 		ctx := context.Background()
 		for k, v := range map[string]string{"owner_user_id": fmt.Sprint(ownerID), "owner_chat_id": fmt.Sprint(chatID), kbKey: kbVersion} {

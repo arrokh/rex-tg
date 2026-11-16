@@ -29,15 +29,16 @@ const KindControl = "control"
 
 // ControlState is what the control panel shows.
 type ControlState struct {
-	Paused   bool           `json:"paused"`   // /pause: nothing is typed into panes (the panel only shows it)
-	Agents   []ControlAgent `json:"agents"`   // the agents in Rex panes, the ones that wait for you first
-	Starters []Starter      `json:"starters"` // the agents that "New agent" can start
-	Folders  []Folder       `json:"folders"`  // folders for a new agent: the pinned ones, then recent ones
-	Home     Folder         `json:"home"`     // where the folder explorer starts
-	Topics   []TopicRow     `json:"topics"`   // every topic that is not closed, live or offline
-	Files    bool           `json:"files"`    // OpPage PageFiles is on ([miniapp] files)
-	Changes  bool           `json:"changes"`  // OpPage PageChanges is on ([miniapp] changes)
-	At       string         `json:"at"`       // when it was read, "15:04:05"
+	Paused   bool           `json:"paused"`             // /pause: nothing is typed into panes (the panel only shows it)
+	Agents   []ControlAgent `json:"agents"`             // the agents in Rex panes, the ones that wait for you first
+	Starters []Starter      `json:"starters"`           // the agents that "New agent" can start
+	Folders  []Folder       `json:"folders"`            // folders for a new agent: the pinned ones, then recent ones
+	Home     Folder         `json:"home"`               // where the folder explorer starts
+	Topics   []TopicRow     `json:"topics"`             // every topic that is not closed, live or offline
+	Files    bool           `json:"files"`              // OpPage PageFiles is on ([miniapp] files)
+	Changes  bool           `json:"changes"`            // OpPage PageChanges is on ([miniapp] changes)
+	At       string         `json:"at"`                 // when it was read, "15:04:05"
+	ReadOnly bool           `json:"readonly,omitempty"` // opened with the keyboard's key: actions need /rt
 }
 
 // ControlAgent is an agent in a Rex pane.
@@ -117,6 +118,10 @@ const (
 	OpPage   = "page"   // Pane, Kind: a Mini App page of the agent's topic (PageScreen, PageFiles, PageChanges)
 	OpNew    = "new"    // Agent, Path: start an agent in a new Rex tab, like /new
 	OpUnlink = "unlink" // Thread: like /unlink in the topic
+	// OpNotes: Thread, Text: send the notes of an Annotate or answer page
+	// to the topic's agent, like a message typed in the topic. Only
+	// /api/annotate/send makes it, with the page's own thread.
+	OpNotes = "notes"
 	// OpForgetFolder (Path) drops a recent folder from the panel's and /new's
 	// folder lists. It comes back when an agent runs there again.
 	OpForgetFolder = "forget_folder"
@@ -145,6 +150,7 @@ type ControlAction struct {
 	Agent  string `json:"agent,omitempty"`
 	Path   string `json:"path,omitempty"`
 	Kind   string `json:"kind,omitempty"` // OpPage: PageScreen, PageFiles, or PageChanges
+	Text   string `json:"text,omitempty"` // OpNotes: the notes, as the page joined them
 }
 
 // ControlResult is the outcome of an action, shown on the page.
@@ -219,6 +225,15 @@ func (a ControlAction) Check() error {
 	case OpUnlink:
 		if a.Thread <= 0 {
 			return errors.New("no topic")
+		}
+	case OpNotes:
+		switch {
+		case a.Thread <= 0:
+			return errors.New("no topic")
+		case strings.TrimSpace(a.Text) == "":
+			return errors.New("write a note first")
+		case len(a.Text) > maxDraftBytes || !utf8.ValidString(a.Text) || strings.ContainsRune(a.Text, 0):
+			return errors.New("these notes are too long; send fewer, or shorter ones")
 		}
 	case OpForgetFolder:
 		if !filepath.IsAbs(a.Path) || len(a.Path) > maxPathBytes || strings.ContainsRune(a.Path, 0) {
@@ -337,6 +352,7 @@ func (s *Server) controlState(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	st.At = s.now().Format("15:04:05")
+	st.ReadOnly = s.keyed(r)
 	_ = json.NewEncoder(w).Encode(st)
 }
 
@@ -377,6 +393,10 @@ func (s *Server) controlDo(w http.ResponseWriter, r *http.Request) {
 	if !s.controlAllowed(w, r) {
 		return
 	}
+	if s.keyed(r) {
+		http.Error(w, `{"error":"View only. Open the panel with /rt to change things."}`, http.StatusForbidden)
+		return
+	}
 	if _, err := CheckInitData(r.Header.Get("X-Telegram-Init-Data"), s.secret, s.now(), ActMaxAge); err != nil {
 		http.Error(w, `{"error":"This panel was opened more than an hour ago. Close it and open it again with /rt."}`, http.StatusForbidden)
 		return
@@ -393,6 +413,10 @@ func (s *Server) controlDo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.Name = strings.TrimSpace(a.Name)
+	if a.Op == OpNotes { // only /api/annotate/send, with the page's own topic
+		http.Error(w, `{"error":"This action is not valid."}`, http.StatusBadRequest)
+		return
+	}
 	if err := a.Check(); err != nil {
 		b, _ := json.Marshal(map[string]string{"error": capital(err.Error()) + "."})
 		http.Error(w, string(b), http.StatusBadRequest)
