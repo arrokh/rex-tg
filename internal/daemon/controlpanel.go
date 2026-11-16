@@ -769,6 +769,9 @@ func (c *controlPanel) notes(a miniapp.ControlAction) miniapp.ControlResult {
 	if err != nil || th.Status == store.ThreadClosed {
 		return controlFail("This topic is closed. Use Copy, and paste the notes where the agent is.")
 	}
+	if a.Conv <= 0 || th.CurrentConversationID != a.Conv {
+		return controlFail("The agent in this topic is in another session now, so the notes were not sent. Use Copy.")
+	}
 	if !d.queueText(th.ID, annotRowID(a.Act), 0, a.Text, "text", inbound.ActText) {
 		return controlFail("Could not send the notes. Try again.")
 	}

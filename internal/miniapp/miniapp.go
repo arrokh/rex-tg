@@ -35,12 +35,16 @@ import (
 
 // Page is what the Mini App shows.
 type Page struct {
-	Kind   string    `json:"kind"`             // KindAnswer, KindDiff, KindScreen, KindFiles, KindChanges or KindControl
-	Title  string    `json:"title"`            // a short title
-	Text   string    `json:"text"`             // Markdown (an answer) or a unified diff
-	Thread int64     `json:"thread,omitempty"` // the topic of a screen, files, changes, annotate or answer page (0 on answer pages made before Annotate)
-	Dir    string    `json:"dir,omitempty"`    // the folder of a files or changes page
-	At     time.Time `json:"at"`
+	Kind   string `json:"kind"`             // KindAnswer, KindDiff, KindScreen, KindFiles, KindChanges or KindControl
+	Title  string `json:"title"`            // a short title
+	Text   string `json:"text"`             // Markdown (an answer) or a unified diff
+	Thread int64  `json:"thread,omitempty"` // the topic of a screen, files, changes, annotate or answer page (0 on answer pages made before Annotate)
+	Dir    string `json:"dir,omitempty"`    // the folder of a files or changes page
+	// Conv is the agent's session (conversation) of an Annotate or answer
+	// page: the page shows only that session's answers, and its notes go
+	// to the agent only while the topic is still in that session.
+	Conv int64     `json:"conv,omitempty"`
+	At   time.Time `json:"at"`
 }
 
 // Kinds of pages.
@@ -85,6 +89,7 @@ type Server struct {
 	keyOK   func(string) bool    // checks the keyboard's key (nil: no key works)
 	annot   Annotations          // the Annotate page (nil: off)
 	tailnet bool                 // refuse a request that did not come from the tailnet
+	logins  Logins               // whose tailnet devices may use the key (nil: any)
 	reads   reads                // folder and file reads that may wait for macOS (slowread.go)
 	wait    time.Duration        // how long a request waits for such a read
 	now     func() time.Time
@@ -150,6 +155,30 @@ func (s *Server) WithAnnotate(a Annotations) *Server {
 func (s *Server) WithTailnetOnly(on bool) *Server {
 	s.tailnet = on
 	return s
+}
+
+// Logins decides which Tailscale logins may open pages with the buttons'
+// key, so that in a shared tailnet another person's device cannot use a key
+// that leaked (the daemon keeps them). Used with WithTailnetOnly.
+type Logins interface {
+	// Owner notes a login whose request carried the owner's own Telegram
+	// signature: that login is the owner's.
+	Owner(login string)
+	// KeyLoginOK tells whether a request with key may come from login. It
+	// checks the key again, together with the logins, so a /rekey between
+	// the two checks cannot let an old key teach a login.
+	KeyLoginOK(key, login string) bool
+}
+
+// WithLogins limits the key to the owner's Tailscale logins.
+func (s *Server) WithLogins(l Logins) *Server {
+	s.logins = l
+	return s
+}
+
+// tailnetLogin is the Tailscale login that tailscale serve put on r.
+func tailnetLogin(r *http.Request) string {
+	return strings.TrimSpace(r.Header.Get("Tailscale-User-Login"))
 }
 
 // fromTailnet tells whether r came through tailscale serve from a user's
@@ -273,13 +302,28 @@ func (s *Server) Handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !fromTailnet(r) {
 			s.noteRefusal("not from the tailnet")
-			s.headers(w, "application/json")
-			http.Error(w, `{"error":"The Mini App opens only inside your tailnet. Turn on Tailscale on this device."}`, http.StatusForbidden)
+			if strings.HasPrefix(r.URL.Path, "/api/") {
+				s.headers(w, "application/json")
+				http.Error(w, `{"error":"The Mini App opens only inside your tailnet. Turn on Tailscale on this device."}`, http.StatusForbidden)
+				return
+			}
+			// The page itself: Telegram shows this instead of raw JSON.
+			s.headers(w, "text/html; charset=utf-8")
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = w.Write(notInTailnetHTML)
 			return
 		}
 		mux.ServeHTTP(w, r)
 	})
 }
+
+// notInTailnetHTML is the page for a device outside the tailnet.
+var notInTailnetHTML = []byte(`<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1"><title>rex-tg</title>
+<style>body{font:17px/1.45 -apple-system,system-ui,sans-serif;margin:0;padding:28px 20px;color:#1c1c1e;background:#fff}
+@media (prefers-color-scheme:dark){body{color:#f2f2f7;background:#1c1c1e}}h1{font-size:22px;margin:0 0 12px}</style></head>
+<body><h1>Turn on Tailscale</h1><p>rex-tg's pages open only inside your tailnet. Turn on Tailscale on this device, then open the page again.</p></body></html>
+`)
 
 func (s *Server) headers(w http.ResponseWriter, ctype string) {
 	h := w.Header()
@@ -296,12 +340,17 @@ func (s *Server) headers(w http.ResponseWriter, ctype string) {
 func (s *Server) allowed(w http.ResponseWriter, r *http.Request) bool {
 	s.headers(w, "application/json")
 	if r.Header.Get("X-Telegram-Init-Data") == "" && r.Header.Get("X-Rex-Key") != "" {
-		if s.keyed(r) {
-			return true
+		if !s.keyed(r) {
+			s.noteRefusal("wrong key")
+			http.Error(w, `{"error":"This button is old. Send /help in the chat for new buttons."}`, http.StatusForbidden)
+			return false
 		}
-		s.noteRefusal("wrong key")
-		http.Error(w, `{"error":"This button is old. Send /help in the chat for new buttons."}`, http.StatusForbidden)
-		return false
+		if s.tailnet && s.logins != nil && !s.logins.KeyLoginOK(r.Header.Get("X-Rex-Key"), tailnetLogin(r)) {
+			s.noteRefusal("the key from another Tailscale login")
+			http.Error(w, `{"error":"These buttons open only on your own Tailscale account. Open them on your phone, or send /rekey in the chat to start over."}`, http.StatusForbidden)
+			return false
+		}
+		return true
 	}
 	user, err := CheckInitData(r.Header.Get("X-Telegram-Init-Data"), s.secret, s.now(), MaxAge)
 	owner := s.owner()
@@ -309,6 +358,9 @@ func (s *Server) allowed(w http.ResponseWriter, r *http.Request) bool {
 		s.noteRefusal(refusal(err, owner))
 		http.Error(w, `{"error":"Open this page from its button in Telegram."}`, http.StatusForbidden)
 		return false
+	}
+	if s.tailnet && s.logins != nil {
+		s.logins.Owner(tailnetLogin(r)) // Telegram vouches that this is the owner
 	}
 	return true
 }

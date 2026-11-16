@@ -45,6 +45,12 @@ type screenRead struct {
 // livePage returns the id of the topic's live page of a kind and key, and
 // makes a new one when there is none (any goroutine).
 func (d *daemon) livePage(kind string, thread int64, key, title, dir string) (string, error) {
+	return d.livePageOf(miniapp.Page{Kind: kind, Title: title, Thread: thread, Dir: dir}, key)
+}
+
+// livePageOf is livePage for a page with more fields (Conv).
+func (d *daemon) livePageOf(np miniapp.Page, key string) (string, error) {
+	kind, thread, title := np.Kind, np.Thread, np.Title
 	d.liveMu.Lock() // two buttons made at once get the same page
 	defer d.liveMu.Unlock()
 	name := pageForKey(thread, kind, key)
@@ -58,7 +64,7 @@ func (d *daemon) livePage(kind string, thread int64, key, title, dir string) (st
 			return id, nil
 		}
 	}
-	id, err := d.savePageOf(miniapp.Page{Kind: kind, Title: title, Thread: thread, Dir: dir})
+	id, err := d.savePageOf(np)
 	if err != nil {
 		return "", err
 	}

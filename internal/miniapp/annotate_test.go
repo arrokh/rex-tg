@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -25,12 +26,12 @@ func (f *fakeLauncher) Launch(_ context.Context, view string, thread int64) Laun
 }
 
 type fakeAnnotations struct {
-	before int64
-	drafts map[int64]string
+	before, conv int64
+	drafts       map[int64]string
 }
 
-func (f *fakeAnnotations) Answers(_ context.Context, thread, before int64, n int) ([]AnswerItem, bool, error) {
-	f.before = before
+func (f *fakeAnnotations) Answers(_ context.Context, thread, conv, before int64, n int) ([]AnswerItem, bool, error) {
+	f.before, f.conv = before, conv
 	at := time.Date(2026, 11, 16, 10, 20, 0, 0, time.Local)
 	return []AnswerItem{
 		{ID: 12, At: at, Markdown: "All **done**."},
@@ -38,7 +39,8 @@ func (f *fakeAnnotations) Answers(_ context.Context, thread, before int64, n int
 	}, true, nil
 }
 
-func (f *fakeAnnotations) SaveDraft(_ context.Context, thread int64, text string) (string, error) {
+func (f *fakeAnnotations) SaveDraft(_ context.Context, thread, conv int64, text string) (string, error) {
+	f.conv = conv
 	if f.drafts == nil {
 		f.drafts = map[int64]string{}
 	}
@@ -56,7 +58,7 @@ func newKeyServer(t *testing.T) (*Server, *fakeControl, *fakeLauncher, *fakeAnno
 	pages := map[string]Page{
 		"a1":  {Kind: KindAnswer, Title: "Answer", Text: "hello"},
 		"c1":  {Kind: KindControl, Title: "rex-tg"},
-		"an1": {Kind: KindAnnotate, Title: "✍️ api", Thread: 7},
+		"an1": {Kind: KindAnnotate, Title: "✍️ api", Thread: 7, Conv: 5},
 	}
 	fc, fl, fa := &fakeControl{}, &fakeLauncher{}, &fakeAnnotations{}
 	s := New(fakeToken, func() int64 { return 42 }, func(id string) (Page, bool) { p, ok := pages[id]; return p, ok }, nil).
@@ -181,8 +183,8 @@ func TestAnnotate(t *testing.T) {
 	c := caller{t, srv.URL}
 	key := map[string]string{"X-Rex-Key": testKey}
 	code, body := c.do("GET", "/api/annotate?id=an1&before=20", key, "")
-	if code != http.StatusOK || body["bot"] != "rex_bot" || body["more"] != true || fa.before != 20 {
-		t.Fatalf("list: %d %v before=%d", code, body, fa.before)
+	if code != http.StatusOK || body["bot"] != "rex_bot" || body["more"] != true || fa.before != 20 || fa.conv != 5 {
+		t.Fatalf("list: %d %v before=%d conv=%d", code, body, fa.before, fa.conv)
 	}
 	items := body["items"].([]any)
 	first, second := items[0].(map[string]any), items[1].(map[string]any)
@@ -215,7 +217,8 @@ func TestAnnotate(t *testing.T) {
 // the control panel's own endpoint cannot.
 func TestAnnotateSend(t *testing.T) {
 	pages := map[string]Page{
-		"w1": {Kind: KindAnswer, Title: "Report", Text: "THE END", Thread: 7, At: time.Date(2026, 11, 16, 10, 20, 0, 0, time.Local)},
+		"w1": {Kind: KindAnswer, Title: "Report", Text: "THE END", Thread: 7, Conv: 5, At: time.Date(2026, 11, 16, 10, 20, 0, 0, time.Local)},
+		"w7": {Kind: KindAnswer, Title: "v0.4.0", Text: "x", Thread: 7}, // made before pages knew their session
 		"w0": {Kind: KindAnswer, Title: "Old", Text: "x"},
 		"c1": {Kind: KindControl, Title: "rex-tg"},
 	}
@@ -236,7 +239,7 @@ func TestAnnotateSend(t *testing.T) {
 	if code, res := c.do("POST", "/api/annotate/send?id=w1", signed, body); code != http.StatusOK || res["ok"] != true || len(fc.did) != 1 {
 		t.Fatalf("send: %d %v", code, res)
 	}
-	if a := fc.did[0]; a.Op != OpNotes || a.Thread != 7 || a.Text != "> THE END\n\nmore" {
+	if a := fc.did[0]; a.Op != OpNotes || a.Thread != 7 || a.Conv != 5 || a.Text != "> THE END\n\nmore" {
 		t.Errorf("action: %+v", a)
 	}
 	old := map[string]string{"X-Telegram-Init-Data": sign(t, fakeToken, fields(42, time.Now().Add(-2*time.Hour))), "Content-Type": "application/json"}
@@ -247,6 +250,7 @@ func TestAnnotateSend(t *testing.T) {
 		want int
 	}{
 		{"/api/annotate/send?id=w0", signed, body, http.StatusBadRequest},                                                                     // no topic
+		{"/api/annotate/send?id=w7", signed, body, http.StatusBadRequest},                                                                     // no session
 		{"/api/annotate/send?id=c1", signed, body, http.StatusBadRequest},                                                                     // not an answer
 		{"/api/annotate/send?id=w1", old, body, http.StatusForbidden},                                                                         // signed too long ago
 		{"/api/annotate/send?id=w1", map[string]string{"X-Rex-Key": testKey, "Content-Type": "application/json"}, body, http.StatusForbidden}, // the key
@@ -261,5 +265,47 @@ func TestAnnotateSend(t *testing.T) {
 	}
 	if len(fc.did) != 1 {
 		t.Errorf("actions ran: %+v", fc.did)
+	}
+}
+
+type fakeLogins struct {
+	owners []string
+	allow  map[string]bool
+}
+
+func (f *fakeLogins) Owner(login string)                { f.owners = append(f.owners, login) }
+func (f *fakeLogins) KeyLoginOK(key, login string) bool { return key == testKey && f.allow[login] }
+
+// With tailnet_only, the key works only from the owner's Tailscale logins; a
+// signed request teaches the owner's login; a device outside the tailnet
+// gets a page that says what to do, not raw JSON.
+func TestKeyOnlyFromTheOwnersLogin(t *testing.T) {
+	s, _, _, _ := newKeyServer(t)
+	fl := &fakeLogins{allow: map[string]bool{"me@example.com": true}}
+	s.WithTailnetOnly(true).WithLogins(fl)
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+	c := caller{t, srv.URL}
+	if code, _ := c.do("GET", "/api/page?id=a1", map[string]string{"X-Rex-Key": testKey, "Tailscale-User-Login": "me@example.com"}, ""); code != http.StatusOK {
+		t.Errorf("the owner's login: %d", code)
+	}
+	code, body := c.do("GET", "/api/page?id=a1", map[string]string{"X-Rex-Key": testKey, "Tailscale-User-Login": "coworker@example.com"}, "")
+	if msg, _ := body["error"].(string); code != http.StatusForbidden || !strings.Contains(msg, "your own Tailscale account") {
+		t.Errorf("another login: %d %v", code, body)
+	}
+	signed := map[string]string{"X-Telegram-Init-Data": sign(t, fakeToken, fields(42, time.Now())), "Tailscale-User-Login": "phone@example.com"}
+	if code, _ := c.do("GET", "/api/page?id=a1", signed, ""); code != http.StatusOK || len(fl.owners) != 1 || fl.owners[0] != "phone@example.com" {
+		t.Errorf("a signed request: %d, owners %v", code, fl.owners)
+	}
+
+	req, _ := http.NewRequest("GET", srv.URL+"/app?p=a1", nil)
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	b, _ := io.ReadAll(res.Body)
+	if res.StatusCode != http.StatusForbidden || !strings.HasPrefix(res.Header.Get("Content-Type"), "text/html") || !strings.Contains(string(b), "Turn on Tailscale") {
+		t.Errorf("the page outside the tailnet: %d %q %.80q", res.StatusCode, res.Header.Get("Content-Type"), b)
 	}
 }

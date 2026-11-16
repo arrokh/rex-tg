@@ -58,13 +58,14 @@ type AnswerItem struct {
 
 // Annotations is the daemon's side of the Annotate page.
 type Annotations interface {
-	// Answers returns the agent's answers in a topic, newest first: n of
-	// them older than the answer before (0: the newest), and whether there
-	// are older ones.
-	Answers(ctx context.Context, thread, before int64, n int) (items []AnswerItem, more bool, err error)
-	// SaveDraft keeps notes for a topic until the owner sends them through
-	// Telegram (sendData). A draft alone sends nothing.
-	SaveDraft(ctx context.Context, thread int64, text string) (id string, err error)
+	// Answers returns the agent's answers of one session (conv) in a
+	// topic, newest first: n of them older than the answer before (0: the
+	// newest), and whether there are older ones. Other sessions' answers
+	// never show.
+	Answers(ctx context.Context, thread, conv, before int64, n int) (items []AnswerItem, more bool, err error)
+	// SaveDraft keeps notes for a topic's session until the owner sends
+	// them through Telegram (sendData). A draft alone sends nothing.
+	SaveDraft(ctx context.Context, thread, conv int64, text string) (id string, err error)
 	// BotName is the bot's username without "@", for t.me links.
 	BotName() string
 }

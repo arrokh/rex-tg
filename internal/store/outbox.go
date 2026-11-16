@@ -534,14 +534,31 @@ func (s *Store) UnknownParts(ctx context.Context) ([]Part, error) {
 // AnswersBefore returns a topic's outbox rows of the kinds answer and
 // backfill with their parts, newest first: at most limit rows with an id
 // below before (0: from the newest). Rows that were skipped or that failed
-// are left out.
-func (s *Store) AnswersBefore(ctx context.Context, threadID, before int64, limit int) ([]OutboxRow, error) {
+// are left out. session, when set, keeps only one agent session's rows: its
+// event keys are "<session>:<line>" or "<session>@<offset>" (agents.Key,
+// agents.FallbackKey; session is "<runtime>:<session id>"), also after
+// "backfill:" or "held:".
+func (s *Store) AnswersBefore(ctx context.Context, threadID, before int64, limit int, session string) ([]OutboxRow, error) {
 	if before <= 0 {
 		before = math.MaxInt64
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT id, thread_id, event_key, kind, body, state, silent, attempts, last_error, created_at, sent_at
-		FROM outbox WHERE thread_id=? AND kind IN ('answer','backfill') AND state NOT IN ('skipped','failed') AND id<?
-		ORDER BY id DESC LIMIT ?`, threadID, before, limit)
+	q := `SELECT id, thread_id, event_key, kind, body, state, silent, attempts, last_error, created_at, sent_at
+		FROM outbox WHERE thread_id=? AND kind IN ('answer','backfill') AND state NOT IN ('skipped','failed') AND id<?`
+	args := []any{threadID, before}
+	if session != "" {
+		esc := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(session)
+		var ors []string
+		for _, pre := range []string{"", "backfill:", "held:"} {
+			for _, sep := range []string{":", "@"} {
+				ors = append(ors, `event_key LIKE ? ESCAPE '\'`)
+				args = append(args, pre+esc+sep+"%")
+			}
+		}
+		q += " AND (" + strings.Join(ors, " OR ") + ")"
+	}
+	q += " ORDER BY id DESC LIMIT ?"
+	args = append(args, limit)
+	rows, err := s.db.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, fmt.Errorf("store: answers: %w", err)
 	}

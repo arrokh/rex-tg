@@ -90,7 +90,7 @@ func (s *Server) annotateList(w http.ResponseWriter, r *http.Request) {
 		}
 		before = n
 	}
-	items, more, err := s.annot.Answers(r.Context(), p.Thread, before, annotatePage)
+	items, more, err := s.annot.Answers(r.Context(), p.Thread, p.Conv, before, annotatePage)
 	if err != nil {
 		http.Error(w, `{"error":"Could not read the answers. Try again."}`, http.StatusServiceUnavailable)
 		return
@@ -143,7 +143,7 @@ func (s *Server) annotateDraft(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"These notes are too long. Send fewer, or shorter ones."}`, http.StatusBadRequest)
 		return
 	}
-	id, err := s.annot.SaveDraft(r.Context(), p.Thread, body.Text)
+	id, err := s.annot.SaveDraft(r.Context(), p.Thread, p.Conv, body.Text)
 	if err != nil {
 		http.Error(w, `{"error":"Could not keep the notes. Try again."}`, http.StatusServiceUnavailable)
 		return
@@ -168,8 +168,8 @@ func (s *Server) annotateSend(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if (p.Kind != KindAnnotate && p.Kind != KindAnswer) || p.Thread <= 0 {
-		http.Error(w, `{"error":"This page cannot send notes. Use Copy."}`, http.StatusBadRequest)
+	if (p.Kind != KindAnnotate && p.Kind != KindAnswer) || p.Thread <= 0 || p.Conv <= 0 {
+		http.Error(w, `{"error":"This page is from an older version of rex-tg and cannot send notes. Use Copy."}`, http.StatusBadRequest)
 		return
 	}
 	if s.control == nil {
@@ -194,7 +194,7 @@ func (s *Server) annotateSend(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"These notes are not valid."}`, http.StatusBadRequest)
 		return
 	}
-	a := ControlAction{Op: OpNotes, Act: body.Act, Thread: p.Thread, Text: body.Text}
+	a := ControlAction{Op: OpNotes, Act: body.Act, Thread: p.Thread, Conv: p.Conv, Text: body.Text}
 	if err := a.Check(); err != nil {
 		b, _ := json.Marshal(map[string]string{"error": capital(err.Error()) + "."})
 		http.Error(w, string(b), http.StatusBadRequest)
