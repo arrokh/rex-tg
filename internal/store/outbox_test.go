@@ -2,6 +2,7 @@ package store
 
 import (
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -434,4 +435,42 @@ func must2[T, U any](a T, b U, err error) (T, U) {
 		panic(err)
 	}
 	return a, b
+}
+
+// The Annotate page lists one session's answers: the rows whose keys start
+// with that session, also behind "backfill:" or "held:"; other sessions,
+// other kinds, and a session id that only looks alike stay out.
+func TestAnswersBeforeOneSession(t *testing.T) {
+	s := newStore(t)
+	th, _ := topic(t, s, 1)
+	add := func(key, kind string) {
+		it := item(th.ID, key, "text of "+key)
+		it.Kind = kind
+		_, _, err := s.Enqueue(ctx, it)
+		noErr(t, err)
+	}
+	add("pi:s1:a", "answer")
+	add("backfill:pi:s1:b", "backfill")
+	add("held:pi:s1:c", "answer")
+	add("pi:s2:d", "answer")
+	add("pi:s1:e", "tool")
+	add("pi:s1_x:f", "answer") // "_" is no wildcard
+	add("pi:s1@123", "answer") // a line with no id of its own (agents.FallbackKey)
+	add("pi:s10:g", "answer")  // another session whose id starts alike
+	keys := func(rows []OutboxRow) string {
+		var ks []string
+		for _, r := range rows {
+			ks = append(ks, r.Key)
+		}
+		return strings.Join(ks, " ")
+	}
+	if got := keys(must(s.AnswersBefore(ctx, th.ID, 0, 10, "pi:s1"))); got != "pi:s1@123 held:pi:s1:c backfill:pi:s1:b pi:s1:a" {
+		t.Errorf("session s1: %q", got)
+	}
+	if got := keys(must(s.AnswersBefore(ctx, th.ID, 0, 10, "pi:s1_x"))); got != "pi:s1_x:f" {
+		t.Errorf("an underscore: %q", got)
+	}
+	if got := keys(must(s.AnswersBefore(ctx, th.ID, 0, 10, ""))); strings.Count(got, " ")+1 != 7 {
+		t.Errorf("every session: %q", got)
+	}
 }

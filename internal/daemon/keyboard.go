@@ -50,6 +50,15 @@ const keyboardTopicNote = "⌨️ Buttons under the message box: 🎛 Panel (/rt
 
 const keyboardNote = keyboardTopicNote + " /help brings them back."
 
+// tailnetHint ends the keyboard note when the pages open only inside the
+// tailnet, so a phone without Tailscale does not wonder why they fail.
+func (d *daemon) tailnetHint() string {
+	if !d.miniAppOn() || !d.cfg.MiniApp.TailnetOnly {
+		return ""
+	}
+	return " The pages open only inside your tailnet: keep Tailscale on on this phone."
+}
+
 const rekeyText = "🔑 New key for the buttons. The old buttons stop working; every topic got new ones."
 
 const annotateText = "✍️ Annotate opens from its button under the message box. It needs the Mini App (<code>[miniapp] url</code>)."
@@ -220,6 +229,7 @@ func (d *daemon) rekey(ctx context.Context) bool {
 		d.log.Warn("save the key generation", "err", err)
 	}
 	d.kb.snap.Store(&kbSnap{key: key, gen: gen, url: old.url})
+	d.logins.forget() // a new key starts the learned Tailscale logins over
 	d.broadcastKeyboard(ctx)
 	return true
 }
@@ -270,14 +280,14 @@ func (d *daemon) broadcastKeyboard(ctx context.Context) {
 		}
 		d.enqueue(store.OutboxItem{
 			ThreadID: th.ID, Key: "keyboard:" + value, Kind: "notice", Silent: true,
-			Parts: []store.PartContent{{Content: keyboardTopicNote, Format: store.FormatHTML}},
+			Parts: []store.PartContent{{Content: keyboardTopicNote + d.tailnetHint(), Format: store.FormatHTML}},
 		})
 	}
 	if err := d.st.Set(ctx, keyboardKey, value); err != nil {
 		d.log.Warn("save keyboard version", "err", err)
 		return
 	}
-	d.sayKeys(d.ownerChat, 0, keyboardNote)
+	d.sayKeys(d.ownerChat, 0, keyboardNote+d.tailnetHint())
 }
 
 // keyboardShown records that the owner's chat has the current keyboard, so

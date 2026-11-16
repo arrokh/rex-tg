@@ -167,6 +167,11 @@ type Config struct {
 		// header). On by default: the keyboard's buttons carry a key in
 		// their address, and the Mini App must not be public (Funnel).
 		TailnetOnly bool `toml:"tailnet_only"`
+		// TailnetUsers are the Tailscale logins (as "tailscale status"
+		// shows them, such as you@example.com) whose devices may open
+		// pages with the buttons' key. Empty: rex-tg learns your login
+		// from your first visit (MiniApp server). Used with TailnetOnly.
+		TailnetUsers []string `toml:"tailnet_users"`
 		// Listen is the local address of the Mini App's server.
 		Listen string `toml:"listen"`
 		// AnswerPreview: an answer longer than this many characters shows
@@ -426,6 +431,11 @@ func (c Config) validate() error {
 	if c.Display.TurnImages < 0 || c.Display.TurnImages > MaxTurnImages {
 		return fmt.Errorf("display.turn_images %d: want 0 to %d", c.Display.TurnImages, MaxTurnImages)
 	}
+	for _, u := range c.MiniApp.TailnetUsers {
+		if strings.TrimSpace(u) == "" || len(u) > 320 {
+			return fmt.Errorf("miniapp.tailnet_users %q: a Tailscale login, such as you@example.com", u)
+		}
+	}
 	if u := c.MiniApp.URL; u != "" && !strings.HasPrefix(u, "https://") {
 		return fmt.Errorf("miniapp.url %q: Telegram opens a Mini App only from an https:// address", u)
 	}
@@ -497,6 +507,27 @@ func isLoopback(host string) bool {
 	}
 	ip := net.ParseIP(host)
 	return ip != nil && ip.IsLoopback()
+}
+
+// MiniAppProblem says why the Mini App must stay off although its url is
+// set, or "" when it may run. With tailnet_only, rex-tg trusts Tailscale's
+// identity header, which only "tailscale serve" on this Mac may set: a
+// listen address that other devices reach would let them set it too.
+func (c Config) MiniAppProblem() string {
+	if strings.TrimSpace(c.MiniApp.URL) == "" || !c.MiniApp.TailnetOnly {
+		return ""
+	}
+	host, _, err := net.SplitHostPort(c.MiniApp.Listen)
+	if err != nil {
+		return fmt.Sprintf("miniapp.listen %q is not host:port", c.MiniApp.Listen)
+	}
+	if host == "localhost" {
+		return ""
+	}
+	if ip := net.ParseIP(host); ip == nil || !ip.IsLoopback() {
+		return fmt.Sprintf("miniapp.listen %q is reachable from other devices; with tailnet_only it must be 127.0.0.1 or [::1], so only tailscale serve on this Mac reaches it", c.MiniApp.Listen)
+	}
+	return ""
 }
 
 // DBPath is the SQLite database file.

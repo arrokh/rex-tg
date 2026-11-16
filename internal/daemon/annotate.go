@@ -44,9 +44,11 @@ const (
 	annotNotSent = "✍️ These notes were not sent: the draft is gone. Open Annotate and send them again."
 )
 
-// annotDraft is notes that the page saved and the owner has not sent yet.
+// annotDraft is notes that the page saved and the owner has not sent yet,
+// for one topic and the session it showed.
 type annotDraft struct {
 	Thread int64  `json:"thread"`
+	Conv   int64  `json:"conv"`
 	Text   string `json:"text"`
 	At     int64  `json:"at"`
 }
@@ -101,7 +103,14 @@ func (d *daemon) Launch(ctx context.Context, view string, thread int64) miniapp.
 		}
 		return miniapp.LaunchResult{Page: id}
 	case miniapp.ViewAnnotate:
-		id, err := d.livePage(miniapp.KindAnnotate, th.ID, "main", "✍️ "+topicShownName(th), "")
+		// One page per topic and session: it shows only the answers of
+		// the session the topic is in now, and names both.
+		conv, err := d.st.Conversation(ctx, th.CurrentConversationID)
+		if th.CurrentConversationID == 0 || err != nil {
+			return fail("This topic has no agent session yet.")
+		}
+		title := "✍️ " + topicShownName(th) + " · " + sessionLabel(conv)
+		id, err := d.livePageOf(miniapp.Page{Kind: miniapp.KindAnnotate, Title: title, Thread: th.ID, Conv: conv.ID}, fmt.Sprintf("conv:%d", conv.ID))
 		if err != nil {
 			return fail("Could not open Annotate.")
 		}
@@ -127,6 +136,25 @@ func (d *daemon) Launch(ctx context.Context, view string, thread int64) miniapp.
 		return fail("Could not open the page.")
 	}
 	return miniapp.LaunchResult{Page: id}
+}
+
+// sessionLabel names an agent session on the Annotate page: its title, or
+// the start of its id.
+func sessionLabel(c store.Conversation) string {
+	if t := strings.TrimSpace(c.Title); t != "" {
+		return format.Truncate(format.Redact(t), 40)
+	}
+	id := c.NativeID
+	if len(id) > 8 {
+		id = id[:8]
+	}
+	return "session " + id
+}
+
+// sessionKeyPrefix is how the event keys of a session's posts start:
+// "<runtime>:<session id>", then ":" (agents.Key) or "@" (agents.FallbackKey).
+func sessionKeyPrefix(c store.Conversation) string {
+	return string(c.Runtime) + ":" + c.NativeID
 }
 
 // topicShownName is a topic's name as the panel shows it.
@@ -164,14 +192,22 @@ func (d *daemon) BotName() string { return d.botUser }
 // Answers returns the agent's answers in a topic, newest first (any
 // goroutine): n older than the outbox item before (0: the newest), and
 // whether older ones exist.
-func (d *daemon) Answers(ctx context.Context, thread, before int64, n int) ([]miniapp.AnswerItem, bool, error) {
-	if n <= 0 {
-		return nil, false, nil
+func (d *daemon) Answers(ctx context.Context, thread, conv, before int64, n int) ([]miniapp.AnswerItem, bool, error) {
+	if n <= 0 || conv <= 0 {
+		return nil, false, nil // a page from before sessions counted: nothing to show
 	}
+	c, err := d.st.Conversation(ctx, conv)
+	if err != nil {
+		return nil, false, err
+	}
+	if c.ThreadID != thread || c.NativeID == "" {
+		return nil, false, nil // not this topic's session
+	}
+	session := sessionKeyPrefix(c)
 	var items []miniapp.AnswerItem
 	cursor := before
 	for {
-		rows, err := d.st.AnswersBefore(ctx, thread, cursor, 2*n+2)
+		rows, err := d.st.AnswersBefore(ctx, thread, cursor, 2*n+2, session)
 		if err != nil {
 			return nil, false, err
 		}
@@ -242,13 +278,16 @@ func answerSource(r store.OutboxRow, page func(key string) (string, bool)) (md s
 
 // SaveDraft keeps notes until the owner sends them through Telegram (any
 // goroutine). The draft alone sends nothing.
-func (d *daemon) SaveDraft(ctx context.Context, thread int64, text string) (string, error) {
+func (d *daemon) SaveDraft(ctx context.Context, thread, conv int64, text string) (string, error) {
 	if strings.TrimSpace(text) == "" {
 		return "", errors.New("no text")
 	}
 	th, err := d.st.Thread(ctx, thread)
 	if err != nil || th.Status == store.ThreadClosed {
 		return "", errors.New("no such topic")
+	}
+	if conv <= 0 || th.CurrentConversationID != conv {
+		return "", errors.New("the topic is in another session")
 	}
 	if keys, err := d.st.KeysWithPrefix(ctx, annotDraftPrefix); err != nil {
 		return "", err
@@ -263,7 +302,7 @@ func (d *daemon) SaveDraft(ctx context.Context, thread int64, text string) (stri
 		return "", err
 	}
 	id := hex.EncodeToString(b[:])
-	v, err := json.Marshal(annotDraft{Thread: thread, Text: text, At: d.now().Unix()})
+	v, err := json.Marshal(annotDraft{Thread: thread, Conv: conv, Text: text, At: d.now().Unix()})
 	if err != nil {
 		return "", err
 	}
@@ -383,6 +422,17 @@ func (d *daemon) webAppData(u telegram.Update, m *telegram.Message) {
 		}
 		return
 	}
+	// The notes go only to the agent session that the page showed, and only
+	// from its own topic: a keyboard that Telegram shares across topics
+	// may have opened another topic's page.
+	if why := d.annotWrongPlace(m, th, dr); why != "" {
+		if d.recorded(u, m, "annotate", id, dr.Thread, store.InboundDone) {
+			_ = d.st.Delete(d.ctx, annotDraftPrefix+id)
+			d.log.Info("annotate: notes not sent", "thread", th.ID, "why", why)
+			d.say(m.Chat.ID, m.MessageThreadID, why, nil)
+		}
+		return
+	}
 	if !d.queueText(th.ID, row, 0, dr.Text, "text", inbound.ActText) {
 		return // the store failed: the update is fetched again
 	}
@@ -398,6 +448,22 @@ func (d *daemon) webAppData(u telegram.Update, m *telegram.Message) {
 	}
 	_ = d.st.Delete(d.ctx, annotDraftPrefix+id)
 	d.annotSent(th.ID, id, dr.Text)
+}
+
+// annotWrongPlace says why notes must not go to th's agent, or "": the
+// topic is in another session than the page showed, or the notes came from
+// another agent's topic. Notes sent from the main chat (where the buttons
+// ask which topic) are fine.
+func (d *daemon) annotWrongPlace(m *telegram.Message, th store.Thread, dr annotDraft) string {
+	if dr.Conv <= 0 || th.CurrentConversationID != dr.Conv {
+		return "✍️ Not sent: the agent in " + format.Escape(topicShownName(th)) + " is in another session now. Open ✍️ Annotate again; it shows the new session."
+	}
+	if m.MessageThreadID != 0 {
+		if from, ok, err := d.st.ThreadByTopic(d.ctx, m.Chat.ID, m.MessageThreadID); err == nil && ok && from.ID != th.ID && from.Status != store.ThreadClosed {
+			return "✍️ Not sent: these notes are for " + format.Escape(topicShownName(th)) + ", but they came from this topic. Send /help here for this topic's buttons, then open ✍️ Annotate again."
+		}
+	}
+	return ""
 }
 
 // annotSent posts the silent note that the notes went to the agent, once per

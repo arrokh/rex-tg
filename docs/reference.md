@@ -81,6 +81,7 @@ Doctor checks:
 - the Claude Code and Codex hooks, and the pi extension
 - the launchd job, and the folder modes
 - whether a daemon is running
+- the Mini App, when `[miniapp] url` is set: safe settings (`listen` on `127.0.0.1` with `tailnet_only`), that `tailscale serve` sends the address to rex-tg with Funnel off, and that the page answers. It only reads Tailscale's setup.
 
 ## Using rex-tg
 
@@ -122,11 +123,11 @@ rex-tg adds a keyboard under the message box: 🎛 Panel, 🖥 Screen, 📂 File
 
 ### Annotate
 
-✍️ Annotate opens the agent's answers in the topic, newest first. Scroll down for older ones.
+✍️ Annotate opens the answers of the agent's current session in the topic, newest first. Scroll down for older ones. Answers from other topics, and from the topic's earlier sessions, never show. The page's title names the topic and the session.
 
 - Tap a paragraph, a list item, a heading, a table row, or a line of code to add a note to it. Or select part of the text and tap `✍️ Note on selection`. Notes are marked with numbers; tap one to change or delete it.
 - `Review` lists the notes. You can add a message to the agent. Then choose how to send:
-  - `Send to agent`: the notes go to the agent as one message from you, like a message you type in the topic. It waits until the agent is idle, and it follows `/pause`. The topic gets a copy (`✍️ Notes sent to the agent`). This works when Annotate was opened from its button.
+  - `Send to agent`: the notes go to the agent as one message from you, like a message you type in the topic. It waits until the agent is idle, and it follows `/pause`. The topic gets a copy (`✍️ Notes sent to the agent`). This works when Annotate was opened from its button. rex-tg sends the notes only to the session that the page showed, and only when you send them from that topic (or from the main chat): if the agent started a new session meanwhile, or the page belongs to another topic, the notes are not sent and the chat says why.
   - `Copy`: copies the notes. Paste them in the topic yourself.
   - `Put in message box (beta)`: opens the bot's chat with the notes in the message box. Telegram may open the main chat instead of the topic.
 - The message quotes each part you noted, with your note under it.
@@ -440,6 +441,7 @@ The Mini App needs an HTTPS address that reaches this Mac. rex-tg answers only i
 url = "https://<your-mac>.<tailnet>.ts.net:8443"   # https:// only. Empty turns the Mini App off.
 listen = "127.0.0.1:8770"                           # the local target of tailscale serve; keep it on 127.0.0.1
 tailnet_only = true                                 # answer only requests from your tailnet
+# tailnet_users = ["you@example.com"]             # who may use the buttons' key; empty: rex-tg learns your login
 answer_preview = 3000                               # longer answers open in the Mini App
 files = true                                        # /files: browse the agent's folder
 changes = true                                      # /changes: what changed in the agent's repository
@@ -451,8 +453,11 @@ Who may open a page:
 
 - **Only your tailnet.** With `tailnet_only = true` (the default), rex-tg answers a request only when `tailscale serve` brought it from a device of your tailnet. Tailscale marks such a request with the `Tailscale-User-Login` header, which it sets itself and removes when a client sends it. A request through Funnel has no such header and is refused, the page shell too. A tagged device has no user, so it cannot open the Mini App.
 - **Only you.** A page request carries the Mini App's init data, which Telegram signs for the account that opened it. rex-tg checks the signature with a key made from the bot token. It refuses a signature that is more than 24 hours old, or one that is not the owner's.
-- **Or the buttons' key.** A page opened from a button under the message box has no init data; it carries the buttons' key instead ([Buttons](#buttons-under-the-message-box)). The key cannot act, but it can read everything the pages show: the agents and topics, the live screens, the agents' folders and files, the changes, the answers, and the folders of your home folder in the folder explorer. It can also keep Annotate notes as a draft (at most 20 wait at once); only your own message through Telegram sends them. Telegram sees the key, because it is in the buttons' addresses. Run `/rekey` if you think the key leaked.
-- A refused request is logged as `mini app: refused requests`, with the reason, at most once a minute.
+- **Or the buttons' key, from your own Tailscale account.** A page opened from a button under the message box has no init data; it carries the buttons' key instead ([Buttons](#buttons-under-the-message-box)). The key works only from your own Tailscale logins, so in a shared tailnet another person's device cannot use it. rex-tg learns your login from a page that you open from a chat button (Telegram signs those), and, before it knows any, from the key's first use. `/rekey` forgets the learned logins. To name them yourself, set `tailnet_users = ["you@example.com"]` (the login that `tailscale status` shows, in any case); then only those work. In a tailnet that you share with other people, set `tailnet_users` before you turn on the Mini App or upgrade to 0.4.1: until rex-tg knows a login, the first device that uses the key is trusted. The key cannot act, but it can read everything the pages show: the agents and topics, the live screens, the agents' folders and files, the changes, the answers, and the folders of your home folder in the folder explorer. It can also keep Annotate notes as a draft (at most 20 wait at once); only your own message through Telegram sends them. Telegram sees the key, because it is in the buttons' addresses. Run `/rekey` if you think the key leaked.
+- **Only through Tailscale on this Mac.** With `tailnet_only`, `listen` must be `127.0.0.1` or `[::1]`: another address would let devices on your network reach the server directly and fake Tailscale's header. rex-tg then keeps the Mini App off, and the log and `rex-tg doctor` say why.
+- A refused request is logged as `mini app: refused requests`, with the reason, at most once a minute. A phone outside the tailnet gets a page that says "Turn on Tailscale".
+
+`rex-tg doctor` checks the Mini App from end to end: the config, that `tailscale serve` sends the address to rex-tg and that Funnel is off for it, and a live request to the page. It only reads Tailscale's setup; it never changes it.
 
 To turn the Mini App off, set `url = ""`, restart rex-tg, and run `tailscale serve --https=8443 off`.
 
@@ -534,6 +539,9 @@ To delete the token: `security delete-generic-password -s rex-tg -a bot-token`. 
 | Telegram returns 409 Conflict | Another program uses the same bot token. Only one daemon may poll Telegram. |
 | Mini App page does not open | Turn on Tailscale on the phone: the Mini App answers only inside your tailnet ("The Mini App opens only inside your tailnet"). Check that `[miniapp] url` is the `https://` address of `tailscale serve`, with its port, and that it runs (`tailscale serve status`). `mini app: serving` in the log means the server runs. See [Mini App](#mini-app). |
 | A button's page says "This button is old" | The buttons' key changed (`/rekey`). Send `/help` in the topic for new buttons. |
+| A button's page says "only on your own Tailscale account" | The key works only from your Tailscale logins. Open it on your own phone. If you changed Tailscale accounts, send `/rekey`, then tap a button: rex-tg learns the new login. Or set `[miniapp] tailnet_users`. |
+| "✍️ Not sent: … another session" or "… came from this topic" | Annotate sends notes only to the session it showed, from its own topic. Open ✍️ Annotate again in the topic you are in. If a button opens another topic, send `/help` there for that topic's buttons. |
+| The log says `mini app: off` | The Mini App's settings are not safe (for example `listen` is not `127.0.0.1` while `tailnet_only` is on). `rex-tg doctor` shows the reason and the fix. |
 | The folder explorer or `📂 Browse files` says "The Mac did not let rex-tg read this folder in time" | macOS asks before a program reads Desktop, Documents, Downloads, iCloud Drive, or a network volume. The question shows on the Mac, as "rex-tg would like to access files in your Documents folder". Click Allow, then tap Try again (`↻` in the file browser). Until someone answers, the read waits, so the page stops waiting after 8 seconds and says so. Don't Allow keeps the folder closed to rex-tg. Change it later in System Settings > Privacy & Security > Files and Folders. rex-tg is not signed with a fixed identity, so macOS may ask again after an upgrade. |
 | The log says `mini app: listen` | The `[miniapp] listen` address is in use or not valid. The buttons still show, but their pages do not open. Set `listen`, then restart rex-tg. |
 | Telegram says the bot was blocked | Unblock the bot in Telegram. |

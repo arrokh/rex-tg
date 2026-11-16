@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"rex-tg/internal/config"
 	"rex-tg/internal/format"
 	"rex-tg/internal/inbound"
 	"rex-tg/internal/miniapp"
@@ -52,7 +53,19 @@ func pageForKey(thread int64, kind, key string) string {
 }
 
 // miniAppOn tells whether the Mini App is set up.
-func (d *daemon) miniAppOn() bool { return strings.TrimSpace(d.cfg.MiniApp.URL) != "" }
+func (d *daemon) miniAppOn() bool {
+	return strings.TrimSpace(d.cfg.MiniApp.URL) != "" && d.cfg.MiniAppProblem() == ""
+}
+
+// miniBase is the Mini App's address for page buttons, or "" when the Mini
+// App is off (no url, or settings that are not safe): then no button leads
+// to a server that does not run.
+func miniBase(cfg config.Config) string {
+	if cfg.MiniAppProblem() != "" {
+		return ""
+	}
+	return strings.TrimSpace(cfg.MiniApp.URL)
+}
 
 // miniAppReady tells whether the Mini App's server listens: only then do
 // answers send their readers to it.
@@ -119,6 +132,7 @@ func (d *daemon) serveMiniApp(ctx context.Context) {
 			WithLaunch(d, d.keyOK).
 			WithAnnotate(d).
 			WithTailnetOnly(d.cfg.MiniApp.TailnetOnly).
+			WithLogins(d.logins).
 			Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
@@ -173,7 +187,7 @@ func (d *daemon) longAnswer(th store.Thread, key, md string) ([]store.PartConten
 		title = "Answer"
 	}
 	// The page knows its topic, so its notes can go to the agent (Annotate).
-	id, err := d.savePageOf(miniapp.Page{Kind: miniapp.KindAnswer, Title: title, Text: md, Thread: th.ID})
+	id, err := d.savePageOf(miniapp.Page{Kind: miniapp.KindAnswer, Title: title, Text: md, Thread: th.ID, Conv: th.CurrentConversationID})
 	if err != nil {
 		d.log.Warn("mini app: keep the answer", "err", err)
 		return nil, false
@@ -465,7 +479,7 @@ func (d *daemon) refreshAnswerButtons(thread int64, key string, try int) {
 		}
 		return
 	}
-	markup := answerButtons(d.st, d.cfg.Display.QuickReplies, d.cfg.MiniApp.URL, thread, key)
+	markup := answerButtons(d.st, d.cfg.Display.QuickReplies, miniBase(d.cfg), thread, key)
 	chat, msg := last.ChatID, last.TGMessageID
 	d.spawn(func() {
 		_ = d.snd.Call(sender.PriorityEdit, func(ctx context.Context, tg *telegram.Client) error {

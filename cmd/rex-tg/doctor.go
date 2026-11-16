@@ -141,14 +141,19 @@ func doctorCmd(ctx context.Context, args []string, env Env) int {
 	}
 
 	// Lock.
+	daemonRunning := false
 	switch held, err := lockHeld(cfg.LockPath()); {
 	case err != nil:
 		d.warn("daemon lock: %v", err)
 	case held:
+		daemonRunning = true
 		d.ok("a daemon is running (holds the lock)")
 	default:
 		d.warn("no daemon is running")
 	}
+
+	// Mini App.
+	miniAppLines(ctx, d, cfg, daemonRunning, newMiniAppProbe())
 
 	if d.fail > 0 {
 		return 1

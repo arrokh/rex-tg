@@ -151,6 +151,7 @@ type ControlAction struct {
 	Path   string `json:"path,omitempty"`
 	Kind   string `json:"kind,omitempty"` // OpPage: PageScreen, PageFiles, or PageChanges
 	Text   string `json:"text,omitempty"` // OpNotes: the notes, as the page joined them
+	Conv   int64  `json:"conv,omitempty"` // OpNotes: the session the page shows; the notes go only to it
 }
 
 // ControlResult is the outcome of an action, shown on the page.
@@ -228,7 +229,7 @@ func (a ControlAction) Check() error {
 		}
 	case OpNotes:
 		switch {
-		case a.Thread <= 0:
+		case a.Thread <= 0 || a.Conv <= 0:
 			return errors.New("no topic")
 		case strings.TrimSpace(a.Text) == "":
 			return errors.New("write a note first")

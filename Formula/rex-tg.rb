@@ -33,6 +33,12 @@ class RexTg < Formula
       After `brew upgrade rex-tg`, the daemon restarts itself within about
       a minute, and the topics stay linked. Run `rex-tg install` again only
       when the release notes say the hooks changed. `rex-tg doctor` checks it.
+
+      The Mini App (optional, [miniapp] url) opens only inside your tailnet:
+        tailscale serve --bg --https=8443 http://127.0.0.1:8770
+      Use `tailscale serve`, not Funnel, and keep Tailscale on on your phone.
+      Since 0.4, rex-tg refuses Funnel requests. `rex-tg doctor` checks the
+      whole path, from the config to a live request.
     EOS
   end
 

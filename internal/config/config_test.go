@@ -305,3 +305,30 @@ func TestFallbackConfig(t *testing.T) {
 		t.Fatalf("off: %v, %v", c.Telegram.Fallback, err)
 	}
 }
+
+// With tailnet_only, the Mini App runs only behind a listen address that
+// other devices cannot reach.
+func TestMiniAppProblem(t *testing.T) {
+	for _, c := range []struct {
+		listen  string
+		tailnet bool
+		url     string
+		bad     bool
+	}{
+		{"127.0.0.1:8770", true, "https://mac.example.ts.net:8443", false},
+		{"[::1]:8770", true, "https://mac.example.ts.net:8443", false},
+		{"localhost:8770", true, "https://mac.example.ts.net:8443", false},
+		{"0.0.0.0:8770", true, "https://mac.example.ts.net:8443", true},
+		{":8770", true, "https://mac.example.ts.net:8443", true},
+		{"192.168.1.5:8770", true, "https://mac.example.ts.net:8443", true},
+		{"8770", true, "https://mac.example.ts.net:8443", true},
+		{"0.0.0.0:8770", false, "https://mac.example.ts.net:8443", false}, // the user's own choice, without the tailnet check
+		{"0.0.0.0:8770", true, "", false},                                 // the Mini App is off anyway
+	} {
+		var cfg Config
+		cfg.MiniApp.Listen, cfg.MiniApp.TailnetOnly, cfg.MiniApp.URL = c.listen, c.tailnet, c.url
+		if got := cfg.MiniAppProblem(); (got != "") != c.bad {
+			t.Errorf("%q tailnet=%v url=%q: %q", c.listen, c.tailnet, c.url, got)
+		}
+	}
+}

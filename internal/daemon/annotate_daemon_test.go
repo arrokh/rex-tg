@@ -113,9 +113,13 @@ func TestReplyKeyboardWebApp(t *testing.T) {
 func TestAnnotateSendsNotesOnce(t *testing.T) {
 	e, _, thread := piTopic(t, "pi-annotate")
 	id := storeThreadID(t, e)
+	th, err := e.peek().Thread(context.Background(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
 	e.stop()
 	draft := func(name string, at time.Time) {
-		v, _ := json.Marshal(map[string]any{"thread": id, "text": "Notes on your answer:\n\n> ready\n\nlooks <good>", "at": at.Unix()})
+		v, _ := json.Marshal(map[string]any{"thread": id, "conv": th.CurrentConversationID, "text": "Notes on your answer:\n\n> ready\n\nlooks <good>", "at": at.Unix()})
 		e.withStore(func(st *store.Store) {
 			if err := st.Set(context.Background(), "annot_draft:"+name, string(v)); err != nil {
 				t.Fatal(err)

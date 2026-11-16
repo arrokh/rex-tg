@@ -183,6 +183,7 @@ type daemon struct {
 	miniSecret    []byte             // the key that checks the Mini App's signed requests
 	miniUp        atomic.Bool        // the Mini App's server listens
 	kb            *keyboardSource    // the reply keyboard's key and address (keyboard.go)
+	logins        *miniLogins        // the Tailscale logins that may use the key (logins.go)
 	screenMu      sync.Mutex
 	screenShots   map[int64]*screenRead // the last live-screen read of each topic (the map under screenMu)
 	liveMu        sync.Mutex            // held while a live page is found or made
@@ -254,6 +255,7 @@ func newDaemon(cfg config.Config, home string, log *slog.Logger, now func() time
 		cfg: cfg, timing: timing, home: home, log: log, now: now, st: st, tg: tg, rx: rx, snd: snd, adapters: adapters,
 		polled:       &atomic.Int64{}, // Run shares its own with the sender
 		kb:           &keyboardSource{},
+		logins:       &miniLogins{},
 		below:        map[int64]bool{},
 		promptChecks: map[int64]time.Time{},
 		blockedSince: map[int64]time.Time{},
@@ -290,6 +292,7 @@ func newDaemon(cfg config.Config, home string, log *slog.Logger, now func() time
 		opening:      map[int64]bool{},
 		newFlows:     map[string]*newFlow{},
 	}
+	d.logins.d = d
 	d.hasProgram = func(name string) bool { return installed(home, name) }
 	jw := cfg.InputSettings.JoinWindow.Duration
 	if jw <= 0 {
