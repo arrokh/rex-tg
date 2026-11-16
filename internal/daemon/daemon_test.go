@@ -1219,14 +1219,19 @@ func TestReplyKeyboard(t *testing.T) {
 	wantKeyboard := func(m tgtest.Message) {
 		t.Helper()
 		kb := m.Keyboard
-		if kb == nil || !kb.IsPersistent || !kb.ResizeKeyboard || len(kb.Keyboard) != 1 {
+		if kb == nil || !kb.IsPersistent || !kb.ResizeKeyboard || len(kb.Keyboard) != 2 {
 			t.Fatalf("%q: keyboard = %+v", m.Text, kb)
 		}
 		var got []string
-		for _, b := range kb.Keyboard[0] {
-			got = append(got, b.Text)
+		for _, row := range kb.Keyboard {
+			for _, b := range row {
+				if b.WebApp != nil {
+					t.Errorf("%q: web_app button without the Mini App: %+v", b.Text, b)
+				}
+				got = append(got, b.Text)
+			}
 		}
-		if strings.Join(got, "|") != "🎛 Panel|🖥 Screen|📂 Files|📝 Changes" {
+		if strings.Join(got, "|") != "🎛 Panel|🖥 Screen|📂 Files|📝 Changes|✍️ Annotate" {
 			t.Errorf("buttons = %v", got)
 		}
 	}

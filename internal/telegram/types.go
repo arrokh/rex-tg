@@ -30,6 +30,15 @@ type Message struct {
 	Quote *TextQuote `json:"quote,omitempty"`
 	// ForumTopicCreated marks the service message that starts a topic.
 	ForumTopicCreated *ForumTopicCreated `json:"forum_topic_created,omitempty"`
+	// WebAppData is what a Mini App sent with sendData: only a Mini App that
+	// a reply keyboard button opened can send it.
+	WebAppData *WebAppData `json:"web_app_data,omitempty"`
+}
+
+// WebAppData is the data that a Mini App sent to the bot.
+type WebAppData struct {
+	Data       string `json:"data"`
+	ButtonText string `json:"button_text"`
 }
 
 // TextQuote is the quoted part of a replied message.
@@ -163,7 +172,8 @@ type ReplyKeyboardMarkup struct {
 
 // KeyboardButton is one button of a reply keyboard.
 type KeyboardButton struct {
-	Text string `json:"text"`
+	Text   string      `json:"text"`
+	WebApp *WebAppInfo `json:"web_app,omitempty"` // opens a Mini App; it may send data back
 }
 
 // WebAppInfo is the address of a Mini App that a button opens.

@@ -104,18 +104,34 @@ Text that starts with `/` goes to the agent, except the commands below and the m
 | `/at <time or delay> <text>`, `/at`, `/at cancel <n>` | Sends text to the agent later, lists the schedules, or removes one. See [`/at`](#at). |
 | `/rename <name>`, `/rename auto` | Renames the topic, its Rex pane, and its Rex tab. `/rename auto` names them after the session again. |
 | `/unlink` | Closes the topic in rex-tg. |
-| `/help` | Lists the commands. |
+| `/annotate` | Says that ✍️ Annotate opens from its button under the message box. |
+| `/rekey` | Makes a new key for the buttons under the message box; the old buttons stop working. |
+| `/help` | Lists the commands and brings the buttons back. |
 
 ### Buttons under the message box
 
-rex-tg adds a keyboard of four buttons under the message box: 🎛 Panel, 🖥 Screen, 📂 Files, and 📝 Changes. They run `/rt`, `/screen`, `/files`, and `/changes`. The keyboard is the same in every topic and in the main chat. Telegram shows it in place of your normal keyboard; tap ⊞ in the message box to switch between the two.
+rex-tg adds a keyboard under the message box: 🎛 Panel, 🖥 Screen, 📂 Files, 📝 Changes, and ✍️ Annotate. Telegram shows it in place of your normal keyboard; tap ⊞ in the message box to switch between the two.
 
-- A tap sends the button's label as your message. rex-tg reads these four labels as their commands, so a button never goes to the agent as a prompt. The same text typed by hand counts as a tap too.
-- In the main chat, 🖥 Screen, 📂 Files, and 📝 Changes answer "Use this inside a topic." 🎛 Panel works everywhere.
-- The first version of the keyboard showed the commands themselves (`/rt` and so on). Those buttons still work until the new ones replace them.
+- With the Mini App on, each button opens its page at once: the control panel, the live screen, the file browser, the changes view, or [Annotate](#annotate). The page is for the topic where you tapped. In the main chat, the topic buttons first ask which topic.
+- Telegram gives a page that a keyboard button opens no signed login data. So each button's address carries a key that rex-tg made (64 random characters, kept in rex-tg's store). The key only shows pages. Anything that acts still needs Telegram: the control panel opened from a button is view only (open it with `/rt` to rename, unlink, or start agents), and Annotate sends notes back as your own message in the chat. A page opened with an old key says "This button is old".
+- `/rekey` makes a new key at once. The old buttons stop working, and the main chat and every open topic get new buttons in a short silent note. Use it when a button's address may have leaked.
+- Without the Mini App, the buttons are text: a tap sends the label as your message, and rex-tg reads it as `/rt`, `/screen`, `/files`, `/changes`, or `/annotate`. A button never goes to the agent as a prompt. The same text typed by hand counts as a tap too.
 - Only a new message can carry the keyboard. rex-tg sends it with the pairing answer, with the first message of each new topic, and with every `/help` answer.
-- On the first start after an update that adds or changes the buttons, rex-tg posts one short silent note to the main chat and to every open topic. The note carries the keyboard, so a topic that existed before the update shows the buttons without `/help`. A closed topic gets no note. Each topic gets the note at most once, also after a restart.
-- It is not yet known whether each Telegram app keeps one keyboard for the whole chat or one per topic. So every open topic gets its own note.
+- On the first start after an update that changes the buttons, after a change of `[miniapp] url`, and after `/rekey`, rex-tg posts one short silent note to the main chat and to every open topic. The note carries the keyboard, so a topic that existed before shows the new buttons without `/help`. A closed topic gets no note. Each topic gets each note at most once, also after a restart.
+- It is not yet known whether each Telegram app keeps one keyboard for the whole chat or one per topic. So every open topic gets its own note, with its own topic in the buttons' addresses. If a button opens the wrong topic, send `/help` in the topic you are in.
+
+### Annotate
+
+✍️ Annotate opens the agent's answers in the topic, newest first. Scroll down for older ones.
+
+- Tap a paragraph, a list item, a heading, a table row, or a line of code to add a note to it. Or select part of the text and tap `✍️ Note on selection`. Notes are marked with numbers; tap one to change or delete it.
+- `Review` lists the notes. You can add a message to the agent. Then choose how to send:
+  - `Send to agent`: the notes go to the agent as one message from you, like a message you type in the topic. It waits until the agent is idle, and it follows `/pause`. The topic gets a copy (`✍️ Notes sent to the agent`). This works when Annotate was opened from its button.
+  - `Copy`: copies the notes. Paste them in the topic yourself.
+  - `Put in message box (beta)`: opens the bot's chat with the notes in the message box. Telegram may open the main chat instead of the topic.
+- The message quotes each part you noted, with your note under it.
+- `📄 Whole answer` pages work the same way: tap or select parts of the long answer, add notes, and send them. There, `Send to agent` goes straight from the page, signed by Telegram (open the page again after an hour). It sends once, also if you tap twice. A whole answer from before this version does not know its topic; use `Copy` there.
+- Notes that you have not sent stay on the phone, also when you close the page. Notes that you sent stay for an hour too: `Bring back` puts them back, for example when they did not arrive. Sending them again then asks first, so they do not reach the agent twice by mistake.
 
 ### Agents and topics
 
@@ -401,27 +417,29 @@ dir = "~/.local/state/rex-tg"           # Database, spool, logs, and uploads.
 
 The Mini App shows what does not fit a chat message. Its pages open from buttons, and only for you:
 
-- `📄 Whole answer`: an answer longer than `[miniapp] answer_preview` (3000 characters by default) shows its start in the chat. The whole answer, with its tables and code, is in the Mini App. Such an answer is not sent as one rich message.
+- `📄 Whole answer`: an answer longer than `[miniapp] answer_preview` (3000 characters by default) shows its start in the chat. The whole answer, with its tables and code, is in the Mini App, where you can add notes to it and send them to the agent ([Annotate](#annotate)). Such an answer is not sent as one rich message.
 - `📝 2 files · +40 −12`: what the turn changed in the agent's git repository, file by file. rex-tg takes a snapshot of the working files (tracked and new, not ignored) when a turn starts and when it ends with its answer. The snapshots use a copy of git's index, so your own index stays as it is. They write objects into the repository, which git cleans up later. Other agents that work in the same repository at the same time show up in it too. Secrets are removed from the diff. A folder that is not a git repository gets no button. Set `[display] show_changes = false` to turn it off. A repository with more than 300 new files that are not ignored, or more than 20 MB of them, gets no button: the snapshot would be slow.
 - `🖥 Live screen`, under a `/screen` picture: the pane's screen with its colors, drawn as a terminal (xterm.js), read again every 2 seconds while the page is open, and not while it is hidden. It fills the phone's height and keeps the bottom line in view; scroll up to read back, and `↓` goes to the bottom again. `Pause` stops the refresh while you read. `Fit width` makes the font smaller, so a wide screen fits the phone. Secrets are removed, as on every screen; a line that held one shows without colors. The page only shows the screen; it types nothing. A topic has one live screen page, so all its buttons open the same page.
 - `📂 Browse files`, from `/files`: the agent's folder as a tree, read-only. Tap a folder to open or close it in place, and a file to read it; `‹ Files` or Telegram's back button goes back to the tree as you left it. `Collapse all` closes every folder, and `↻` loads the tree again. Markdown files are rendered, other text is shown as it is, with secrets removed, and pictures (PNG, JPEG, GIF, WebP up to 4 MB) are shown. Of a long text file, the first 512 KB are shown; a binary file shows only its size. The browser never leaves the folder: a path with `..` stays inside it, and a link that points out of it does not open. It hides `.git`, files that git ignores (such as `.env` and `node_modules`), and files with names of keys and credentials (`.env*`, `*.pem`, `*.key`, `id_rsa*`, `credentials.json`, and the like, in any case; `.env.example` is shown). In a folder that is not a git repository, it also hides every name that starts with a dot. A link to a hidden file does not open either. Folders with more than 2000 entries show the first 2000.
 - `📝 View changes`, from `/changes`: the changes of the agent's git repository. Three tabs pick what to compare: `Uncommitted` (since the last commit), `This branch` (since the branch left the main branch), and `Last turn`. A tab without anything to compare is dimmed, and tapping it says why. The view opens on the first tab that has changes. The changed files show as a tree, with a letter for each: `M` changed, `A` added, `D` deleted, `U` new and not tracked, `T` turned into a link or back, `!` in conflict. Tap a file for its diff, with the old and the new line numbers. `‹` and `›` go to the previous or next file, and `Wrap` wraps long lines. The view reads git each time it opens, so it shows the changes as they are now. It hides what the file browser hides: ignored files are not listed, and a file with the name of a key or credential is listed with 🔒 but its changes are not shown. Secrets are removed from every diff. A list shows at most 2000 files, and a diff at most 1 MB. Pictures that changed are shown as they are now.
 
+- `✍️ Annotate`, from the button under the message box: the agent's answers, to add notes to and send back ([Annotate](#annotate)).
 - `🎛 Open control panel`, from `/rt`: the agents and their topics, with actions on them, and a folder explorer to start a new agent ([`/rt`](#rt-control-panel)). The control panel acts: it opens and unlinks topics, renames agents (topic, pane, and tab), and starts agents. It never types into a pane. There is one control panel page.
 
 A table on a page scrolls sideways in its own box, and the page stays still. A column is as wide as its text, up to about 18 em; longer text wraps at words.
 
 Every page has a bar at the top. `A−` and `A+` make the text smaller or bigger, and the percentage between them sets it back to 100%. ☀/🌙 switches between light and dark; tapping back to Telegram's own scheme follows Telegram again. The page keeps your choices on the phone.
 
-The Mini App needs a public HTTPS address that reaches this Mac. It is off until `url` is set. With Tailscale:
+The Mini App needs an HTTPS address that reaches this Mac. rex-tg answers only inside your tailnet, so the phone must run Tailscale too. It is off until `url` is set. With Tailscale:
 
-1. Start the Funnel for rex-tg's port: `tailscale funnel --bg --https=8443 http://127.0.0.1:8770`. `--bg` keeps it running after the command ends. Funnel works on ports 443, 8443, and 10000. Funnel must be on for your tailnet: HTTPS certificates in the admin console, and the `funnel` attribute in your access controls. `tailscale funnel status` shows its address.
-2. Put the address in the config. Its port must be the Funnel's port, and the Funnel's target must be the `listen` address:
+1. Serve rex-tg's port to your tailnet: `tailscale serve --bg --https=8443 http://127.0.0.1:8770`. `--bg` keeps it running after the command ends. HTTPS certificates must be on for your tailnet (admin console). `tailscale serve status` shows its address, marked `(tailnet only)`. Do not use `tailscale funnel`: it makes the address public, and rex-tg refuses those requests.
+2. Put the address in the config. Its port must be the port of `serve`, and the target of `serve` must be the `listen` address:
 
 ```toml
 [miniapp]
 url = "https://<your-mac>.<tailnet>.ts.net:8443"   # https:// only. Empty turns the Mini App off.
-listen = "127.0.0.1:8770"                           # the local target of the Funnel; keep it on 127.0.0.1
+listen = "127.0.0.1:8770"                           # the local target of tailscale serve; keep it on 127.0.0.1
+tailnet_only = true                                 # answer only requests from your tailnet
 answer_preview = 3000                               # longer answers open in the Mini App
 files = true                                        # /files: browse the agent's folder
 changes = true                                      # /changes: what changed in the agent's repository
@@ -429,9 +447,16 @@ changes = true                                      # /changes: what changed in 
 
 Restart rex-tg with `launchctl kickstart -k gui/$(id -u)/local.rex-tg`. Then check the log: `mini app: serving` means the server runs. Send a long answer and tap `📄 Whole answer` to test it.
 
-Pages are reachable only through Telegram's signed requests, and only for the owner. Each page request carries the Mini App's init data, which Telegram signs for the account that opened it. rex-tg checks the signature with a key made from the bot token. It refuses a signature that is more than 24 hours old, or one that is not the owner's, and the log says `mini app: refused a request`, with the reason. The shell files `/app` and `/app.js` hold no data, so they need no signature. Pages are kept for 30 days.
+Who may open a page:
 
-Funnel makes the server reachable from the internet, so keep `listen` on `127.0.0.1`. To turn the Mini App off, set `url = ""` and restart rex-tg. `tailscale funnel reset` removes every Funnel setting of this Mac.
+- **Only your tailnet.** With `tailnet_only = true` (the default), rex-tg answers a request only when `tailscale serve` brought it from a device of your tailnet. Tailscale marks such a request with the `Tailscale-User-Login` header, which it sets itself and removes when a client sends it. A request through Funnel has no such header and is refused, the page shell too. A tagged device has no user, so it cannot open the Mini App.
+- **Only you.** A page request carries the Mini App's init data, which Telegram signs for the account that opened it. rex-tg checks the signature with a key made from the bot token. It refuses a signature that is more than 24 hours old, or one that is not the owner's.
+- **Or the buttons' key.** A page opened from a button under the message box has no init data; it carries the buttons' key instead ([Buttons](#buttons-under-the-message-box)). The key cannot act, but it can read everything the pages show: the agents and topics, the live screens, the agents' folders and files, the changes, the answers, and the folders of your home folder in the folder explorer. It can also keep Annotate notes as a draft (at most 20 wait at once); only your own message through Telegram sends them. Telegram sees the key, because it is in the buttons' addresses. Run `/rekey` if you think the key leaked.
+- A refused request is logged as `mini app: refused requests`, with the reason, at most once a minute.
+
+To turn the Mini App off, set `url = ""`, restart rex-tg, and run `tailscale serve --https=8443 off`.
+
+Upgrading from a setup with `tailscale funnel`: since the buttons carry a key, rex-tg refuses Funnel requests by default. Move the port to `serve`: `tailscale funnel --https=8443 off`, then `tailscale serve --bg --https=8443 http://127.0.0.1:8770`. The address stays the same. Turn on Tailscale on the phone. At the start, the log says `mini app: answers only requests from your tailnet`. To keep a public address anyway, set `tailnet_only = false`; then anyone who gets a button's address can read the pages.
 
 Answers are kept for 30 days, changes for 14, live screens, file browsers, changes views and the control panel for 7 days after the last `/screen`, `/files`, `/changes` or `/rt` that sent their button, and at most 500 pages in all. While the Mini App's server is not running, answers come whole in the chat.
 
@@ -507,7 +532,8 @@ To delete the token: `security delete-generic-password -s rex-tg -a bot-token`. 
 | `/new`: "has not reported its session yet" | The agent may wait for something on its screen, such as a login. The message shows the screen. Deal with it on the Mac, then open the agent with `/agents`. |
 | `/new`: "did not react to a key" | The startup question did not move its cursor. Answer it on the Mac. |
 | Telegram returns 409 Conflict | Another program uses the same bot token. Only one daemon may poll Telegram. |
-| Mini App page does not open | Check that `[miniapp] url` is the Funnel's `https://` address with the Funnel's port, and that the Funnel runs (`tailscale funnel status`). `mini app: serving` in the log means the server runs. See [Mini App](#mini-app). |
+| Mini App page does not open | Turn on Tailscale on the phone: the Mini App answers only inside your tailnet ("The Mini App opens only inside your tailnet"). Check that `[miniapp] url` is the `https://` address of `tailscale serve`, with its port, and that it runs (`tailscale serve status`). `mini app: serving` in the log means the server runs. See [Mini App](#mini-app). |
+| A button's page says "This button is old" | The buttons' key changed (`/rekey`). Send `/help` in the topic for new buttons. |
 | The folder explorer or `📂 Browse files` says "The Mac did not let rex-tg read this folder in time" | macOS asks before a program reads Desktop, Documents, Downloads, iCloud Drive, or a network volume. The question shows on the Mac, as "rex-tg would like to access files in your Documents folder". Click Allow, then tap Try again (`↻` in the file browser). Until someone answers, the read waits, so the page stops waiting after 8 seconds and says so. Don't Allow keeps the folder closed to rex-tg. Change it later in System Settings > Privacy & Security > Files and Folders. rex-tg is not signed with a fixed identity, so macOS may ask again after an upgrade. |
 | The log says `mini app: listen` | The `[miniapp] listen` address is in use or not valid. The buttons still show, but their pages do not open. Set `listen`, then restart rex-tg. |
 | Telegram says the bot was blocked | Unblock the bot in Telegram. |

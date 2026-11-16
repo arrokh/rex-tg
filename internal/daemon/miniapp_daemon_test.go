@@ -282,6 +282,7 @@ func miniGet(t *testing.T, e *env, addr, path string, user int64) (int, map[stri
 	t.Helper()
 	req, _ := http.NewRequest("GET", "http://"+addr+path, nil)
 	req.Header.Set("X-Telegram-Init-Data", signedInit(e.tg.Token(), user))
+	req.Header.Set("Tailscale-User-Login", "owner@example.com") // as tailscale serve sets it ([miniapp] tailnet_only)
 	res, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)

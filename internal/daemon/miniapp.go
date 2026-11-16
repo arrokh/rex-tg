@@ -105,8 +105,9 @@ func loadPage(st *store.Store, id string) (miniapp.Page, bool) {
 }
 
 // serveMiniApp runs the Mini App's server until ctx ends (a worker). The
-// server checks Telegram's signature on every page request, with the key
-// derived from the token at the start.
+// server checks Telegram's signature (or the buttons' key) on every page
+// request, with the key derived from the token at the start. With
+// [miniapp] tailnet_only it answers only requests from the tailnet.
 func (d *daemon) serveMiniApp(ctx context.Context) {
 	owner := func() int64 { return d.kvInt("owner_user_id") }
 	srv := &http.Server{
@@ -115,6 +116,9 @@ func (d *daemon) serveMiniApp(ctx context.Context) {
 			WithFiles(func() bool { return d.cfg.MiniApp.Files }, format.Redact).
 			WithChanges(func() bool { return d.cfg.MiniApp.Changes }, format.Redact, d.lastTurn).
 			WithControl(newControlPanel(d), d.home).
+			WithLaunch(d, d.keyOK).
+			WithAnnotate(d).
+			WithTailnetOnly(d.cfg.MiniApp.TailnetOnly).
 			Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
@@ -134,7 +138,10 @@ func (d *daemon) serveMiniApp(ctx context.Context) {
 	}
 	d.miniUp.Store(true)
 	defer d.miniUp.Store(false)
-	d.log.Info("mini app: serving", "addr", ln.Addr().String())
+	d.log.Info("mini app: serving", "addr", ln.Addr().String(), "tailnet_only", d.cfg.MiniApp.TailnetOnly)
+	if d.cfg.MiniApp.TailnetOnly {
+		d.log.Info("mini app: answers only requests from your tailnet (tailscale serve); a Funnel address is refused")
+	}
 	go func() {
 		<-ctx.Done()
 		c, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -165,7 +172,8 @@ func (d *daemon) longAnswer(th store.Thread, key, md string) ([]store.PartConten
 	if title == "" {
 		title = "Answer"
 	}
-	id, err := d.savePage(miniapp.KindAnswer, title, md)
+	// The page knows its topic, so its notes can go to the agent (Annotate).
+	id, err := d.savePageOf(miniapp.Page{Kind: miniapp.KindAnswer, Title: title, Text: md, Thread: th.ID})
 	if err != nil {
 		d.log.Warn("mini app: keep the answer", "err", err)
 		return nil, false
@@ -637,7 +645,7 @@ func (d *daemon) prunePages(now time.Time) {
 		switch kind {
 		case miniapp.KindDiff:
 			age = diffMaxAge
-		case miniapp.KindScreen, miniapp.KindFiles, miniapp.KindChanges, miniapp.KindControl:
+		case miniapp.KindScreen, miniapp.KindFiles, miniapp.KindChanges, miniapp.KindControl, miniapp.KindAnnotate:
 			age = livePageMaxAge // since the last use
 		}
 		if perr != nil || now.Sub(time.Unix(at, 0)) > age {

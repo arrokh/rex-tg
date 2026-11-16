@@ -68,18 +68,39 @@
   });
   if (tg && tg.onEvent) { tg.onEvent("themeChanged", function () { setTheme(root.getAttribute("data-theme")); }); }
   setTheme(load("rex-tg.theme"));
-  var id = new URLSearchParams(location.search).get("p") || "";
+  var params = new URLSearchParams(location.search);
+  var id = params.get("p") || "";
+  var goView = params.get("go") || "";
   var initData = tg ? tg.initData : "";
-  if (!initData) {
+  // The keyboard's buttons open this page with a key (k): it gives read-only
+  // access, and it is kept for the pages that follow.
+  var key = params.get("k") || "";
+  if (key) {
+    try { sessionStorage.setItem("rex-tg.key", key); } catch (e) { /* the key stays in the links */ }
+  } else {
+    try { key = sessionStorage.getItem("rex-tg.key") || ""; } catch (e) { key = ""; }
+  }
+  var keyMode = !initData && !!key;
+  if (!initData && !key) {
     page.textContent = "Open this page from its button in Telegram.";
     return;
+  }
+
+  // appURL is the address of a page of this app (q: p, from, go, t), with the key.
+  function appURL(q) {
+    var s = [];
+    if (key) { s.push("k=" + encodeURIComponent(key)); }
+    ["p", "from", "go", "t"].forEach(function (n) {
+      if (q[n] !== undefined && q[n] !== "") { s.push(n + "=" + encodeURIComponent(q[n])); }
+    });
+    return "app?" + s.join("&") + location.hash;
   }
 
   // api reads path; with a body it posts it as JSON. A read (no body) with
   // wait stops after wait ms; a post is never stopped, so an action does not
   // look failed while it runs.
   function api(path, body, wait) {
-    var opt = { headers: { "X-Telegram-Init-Data": initData } };
+    var opt = { headers: keyMode ? { "X-Rex-Key": key } : { "X-Telegram-Init-Data": initData } };
     var timer = null;
     if (body !== undefined) {
       opt.method = "POST";
@@ -905,7 +926,7 @@
   // goPage opens another Mini App page of the bot; Back returns to the panel.
   function goPage(p) {
     try { if (tg && tg.MainButton) { tg.MainButton.hide(); } } catch (e) { /* none */ }
-    location.href = "app?p=" + encodeURIComponent(p) + "&from=panel" + location.hash;
+    location.href = appURL({ p: p, from: "panel" });
   }
 
   // The kind of a state, for its colour and its filter chip.
@@ -976,6 +997,11 @@
     var chipsRow = el("div", "schips");
     chipsRow.setAttribute("role", "group");
     chipsRow.setAttribute("aria-label", "Filter by state");
+    var roText = "View only. To change things, open the panel with /rt.";
+    var roBanner = el("div", "banner ro", roText);
+    roBanner.hidden = true;
+    roBanner.setAttribute("role", "status");
+    head.appendChild(roBanner);
     head.appendChild(banner);
     head.appendChild(seg);
     head.appendChild(chipsRow);
@@ -1043,6 +1069,28 @@
       var anyClosed = shown.some(function (a) { return !open[a.pane]; });
       expandAll.textContent = anyClosed ? "Expand all" : "Collapse all";
       expandAll.hidden = !shown.length;
+    }
+
+    // The panel opened with the keyboard's key only shows things: a control
+    // that acts is dimmed, and a tap says why.
+    function ro() { return !!(state && state.readonly); }
+    function blocked() {
+      if (!ro()) { return false; }
+      toast({ ok: false, message: roText });
+      return true;
+    }
+    // acting marks a control that posts an action.
+    function acting(b) {
+      b.classList.add("act");
+      if (ro()) { b.setAttribute("aria-disabled", "true"); }
+      return b;
+    }
+    function syncRO() {
+      roBanner.hidden = !ro();
+      document.body.classList.toggle("readonly", ro());
+      Array.prototype.forEach.call(document.querySelectorAll(".act"), function (b) {
+        if (ro()) { b.setAttribute("aria-disabled", "true"); } else { b.removeAttribute("aria-disabled"); }
+      });
     }
 
     // --- tabs and the Telegram buttons ---
@@ -1133,6 +1181,7 @@
     }
 
     function renameSheet(a) {
+      if (blocked()) { return; }
       openSheet("Rename " + (a.name || "agent"), function (box, close) {
         box.appendChild(el("p", "shint", "Renames the topic, the Rex pane and its tab." + (a.topic && a.topic.custom ? " Named by you." : "")));
         var input = el("input", "txt big");
@@ -1277,8 +1326,9 @@
         t.addEventListener("click", function () { hap("light"); openLink(a.topic.link); });
         acts2.appendChild(t);
       } else if (a.ready) {
-        var o = button("Open topic", "btn primary");
+        var o = acting(button("Open topic", "btn primary"));
         o.addEventListener("click", function () {
+          if (blocked()) { return; }
           hap("light");
           post({ op: "open", pane: a.pane }, c).then(function (r) { toast(r); refresh(); });
         });
@@ -1290,6 +1340,16 @@
         var b = button(icon + " " + text, "btn", text + " of " + nm);
         b.addEventListener("click", function () {
           hap("light");
+          if (ro()) {
+            // no action is posted: the launch opens the page (it only reads)
+            api("api/launch?go=" + encodeURIComponent(kindKey) + "&t=" + encodeURIComponent(a.topic.thread))
+              .then(function (r) {
+                if (r.page) { goPage(r.page); return; }
+                toast({ ok: false, message: r.error || "This page could not be opened." });
+              })
+              .catch(function (e) { toast({ ok: false, message: e.message || "This page could not be opened." }); });
+            return;
+          }
           post({ op: "page", pane: a.pane, kind: kindKey }, c).then(function (r) {
             if (r.page) { goPage(r.page); return; }
             toast(r);
@@ -1303,12 +1363,13 @@
         if (state.files) { pageBtn("📂", "Files", "files"); }
         if (state.changes) { pageBtn("📝", "Changes", "changes"); }
       }
-      var rn = button("✏️ Rename", "btn", "Rename " + nm);
+      var rn = acting(button("✏️ Rename", "btn", "Rename " + nm));
       rn.addEventListener("click", function () { hap("light"); renameSheet(a); });
       acts2.appendChild(rn);
       if (a.topic) {
-        var ul = button("🔌 Unlink", "btn danger", "Unlink " + nm);
+        var ul = acting(button("🔌 Unlink", "btn danger", "Unlink " + nm));
         ul.addEventListener("click", function () {
+          if (blocked()) { return; }
           hap("light");
           confirmAsk({ title: "Unlink this session?", message: "rex-tg stops mirroring this session; the topic stays as history.", ok: "Unlink", danger: true }, function () {
             post({ op: "unlink", thread: a.topic.thread }, c).then(function (r) { toast(r); refresh(); });
@@ -1398,7 +1459,7 @@
       function cardFor(a) {
         var calm = {};
         Object.keys(a).forEach(function (k) { if (k !== "since") { calm[k] = a[k]; } });
-        var sig = JSON.stringify([calm, state.files, state.changes]);
+        var sig = JSON.stringify([calm, state.files, state.changes, ro()]);
         var cd = cards[a.pane];
         // a card whose action runs is kept until it returns
         var busy = cd && cd.el.getAttribute("aria-busy") === "true";
@@ -1489,7 +1550,9 @@
     topicsView.appendChild(tfoot);
     tsearch.addEventListener("input", function () { tquery = tsearch.value.trim().toLowerCase(); drawTopics(); });
     treload.addEventListener("click", function () { hap("light"); refresh(); });
+    cleanBtn.classList.add("act");
     cleanBtn.addEventListener("click", function () {
+      if (blocked()) { return; }
       var n = (state.topics || []).filter(function (t) { return t.status !== "live"; }).length;
       confirmAsk({ title: "Clean up stopped topics?", message: "Unlink the " + n + " stopped topic" + (n === 1 ? "" : "s") + "? Each topic stays in Telegram as history.", ok: "Clean up", danger: true }, function () {
         hap("light");
@@ -1547,12 +1610,13 @@
       var op = button("↗ Open topic", "btn primary", "Open the topic " + nm);
       op.addEventListener("click", function () { hap("light"); openLink(t.link); });
       ac.appendChild(op);
-      var rn = button("✏️ Rename", "btn", "Rename " + nm);
+      var rn = acting(button("✏️ Rename", "btn", "Rename " + nm));
       if (!t.pane) { rn.disabled = true; rn.title = "Rename is off: the agent stopped."; }
       rn.addEventListener("click", function () { hap("light"); renameSheet({ pane: t.pane, name: t.name, topic: { name: t.name, custom: t.custom } }); });
       ac.appendChild(rn);
-      var ul = button("🔌 Unlink", "btn danger", "Unlink " + nm);
+      var ul = acting(button("🔌 Unlink", "btn danger", "Unlink " + nm));
       ul.addEventListener("click", function () {
+        if (blocked()) { return; }
         hap("light");
         confirmAsk({ title: "Unlink this topic?", message: "rex-tg stops mirroring this session; the topic stays as history.", ok: "Unlink", danger: true }, function () {
           post({ op: "unlink", thread: t.thread }, c).then(function (r) { toast(r); refresh(); });
@@ -1617,7 +1681,7 @@
         tbox.appendChild(e2);
       } else {
         list.forEach(function (t) {
-          var sig = JSON.stringify(t);
+          var sig = JSON.stringify([t, ro()]);
           var cd = tcards[t.thread];
           var busy = cd && cd.el.getAttribute("aria-busy") === "true";
           if (!cd || (cd.sig !== sig && !busy)) { cd = tcards[t.thread] = { sig: sig, el: topicCard(t) }; }
@@ -1707,10 +1771,13 @@
         }
         why.textContent = paused ? "⏸ Typing is paused, so a new agent cannot start. Send /unpause in the chat." : (!s ? "Pick an agent." : (!folder ? "Pick a folder." : ""));
         startBtn.textContent = text;
-        startBtn.disabled = !ready;
+        startBtn.disabled = !ready && !ro(); // in view-only mode a tap explains
       }
 
+      startBtn.classList.add("act");
+      cleanF.classList.add("act");
       function start() {
+        if (blocked()) { return; }
         var s = chosenStarter();
         if (!s || !folder || busy || (state && state.paused)) { return; }
         busy = true;
@@ -1768,8 +1835,9 @@
           m.addEventListener("click", function () { pick(f); load(f.path); });
           row.appendChild(m);
           if (!f.pinned) {
-            var x = button("✕", "fx", "Remove " + f.shown + " from recent folders");
+            var x = acting(button("✕", "fx", "Remove " + f.shown + " from recent folders"));
             x.addEventListener("click", function () {
+              if (blocked()) { return; }
               hap("light");
               post({ op: "forget_folder", path: f.path }, row).then(function (r) { toast(r); refresh(); });
             });
@@ -1785,6 +1853,7 @@
       }
       rmore.addEventListener("click", function () { showAllF = !showAllF; drawChips(); });
       cleanF.addEventListener("click", function () {
+        if (blocked()) { return; }
         hap("light");
         confirmAsk({ title: "Clean up recent folders?", message: "Remove all recent folders from the list? Pinned folders stay. A folder comes back when an agent runs there again.", ok: "Remove", danger: true }, function () {
           post({ op: "forget_folders" }, recent).then(function (r) { toast(r); refresh(); });
@@ -1933,6 +2002,7 @@
       drawTopics();
       if (!newPanel) { newPanel = buildNew(); setTab(tab); }
       newPanel.update();
+      syncRO();
     }
 
     function refresh() {
@@ -1964,27 +2034,891 @@
     refresh();
   }
 
+  // --- the keyboard's buttons: launch ---
+
+  var viewName = { panel: "Panel", screen: "Screen", files: "Files", changes: "Changes", annotate: "Annotate" };
+
+  function skeletons(n, cls) {
+    page.className = "";
+    page.textContent = "";
+    for (var i = 0; i < n; i++) { page.appendChild(el("div", "skel " + (cls || "card-skel"))); }
+    page.style.display = "flex";
+    page.style.flexDirection = "column";
+    page.style.gap = "8px";
+  }
+
+  // launch opens the page of a keyboard button: the server makes (or finds)
+  // the page, or asks which topic.
+  function launch(go, thread) {
+    document.body.classList.remove("fill");
+    setBack(null);
+    setTitle(viewName[go] || "rex-tg");
+    skeletons(3);
+    api("api/launch?go=" + encodeURIComponent(go) + (thread ? "&t=" + encodeURIComponent(thread) : ""))
+      .then(function (r) {
+        if (r.page) { location.replace(appURL({ p: r.page, from: "kb" })); return; }
+        page.removeAttribute("style");
+        page.className = "";
+        page.textContent = "";
+        if (r.pick) { picker(go, r.pick); return; }
+        launchError(r.error || "This page could not be opened.");
+      })
+      .catch(function (e) {
+        page.removeAttribute("style");
+        launchError(e.message || "This page could not be opened.");
+      });
+  }
+
+  function launchError(msg) {
+    page.className = "";
+    page.textContent = "";
+    var box = el("div", "empty");
+    box.appendChild(el("div", "etitle", msg));
+    var back = button("Back to the panel", "btn primary");
+    back.addEventListener("click", function () { location.href = appURL({ go: "panel" }); });
+    box.appendChild(back);
+    page.appendChild(box);
+  }
+
+  function picker(go, topics) {
+    setTitle("Pick a topic");
+    var list = topics.slice().sort(function (a, b) { return (b.live ? 1 : 0) - (a.live ? 1 : 0); });
+    page.className = "";
+    page.textContent = "";
+    page.appendChild(el("p", "shint", (viewName[go] || "This page") + " of which topic?"));
+    if (!list.length) {
+      var e = el("div", "empty");
+      e.appendChild(el("div", "etitle", "No topics yet."));
+      e.appendChild(el("div", "ehint", "A topic appears when an agent's session is linked to the chat."));
+      page.appendChild(e);
+      return;
+    }
+    var box = el("div", "pick");
+    list.forEach(function (t) {
+      var b = button("", "prow", (t.live ? "Live topic " : "Topic ") + t.name);
+      var dot = el("span", "pdot" + (t.live ? " live" : ""));
+      dot.setAttribute("aria-hidden", "true");
+      b.appendChild(dot);
+      b.appendChild(el("span", "pname", t.name));
+      b.appendChild(el("span", "chev", "›"));
+      b.addEventListener("click", function () { hap("light"); launch(go, t.thread); });
+      box.appendChild(b);
+    });
+    page.appendChild(box);
+  }
+
+  // --- the Annotate page ---
+
+  var annotModes = ["send", "copy", "box"];
+  var annotModeLabel = { send: "Send to agent", copy: "Copy", box: "Put in message box (beta)" };
+  var annotModeButton = { send: "Send to agent", copy: "Copy notes", box: "Put in message box" };
+
+  // sheetUI shows a bottom sheet. build(box, close) fills it; Back closes it.
+  function sheetUI(label, build, onClose) {
+    var prev = document.activeElement;
+    var scrim = el("div", "scrim");
+    var box = el("div", "sheet");
+    box.setAttribute("role", "dialog");
+    box.setAttribute("aria-modal", "true");
+    box.setAttribute("aria-label", label);
+    box.appendChild(el("div", "grip"));
+    box.appendChild(el("h3", "stitle", label));
+    scrim.appendChild(box);
+    var vv = window.visualViewport;
+    function fit() {
+      if (!vv) { return; }
+      scrim.style.height = vv.height + "px";
+      scrim.style.top = vv.offsetTop + "px";
+      scrim.style.bottom = "auto";
+      box.style.maxHeight = Math.floor(vv.height * 0.9) + "px";
+    }
+    function onKey(e) { if (e.key === "Escape") { close(); } }
+    var closed = false;
+    function close(quiet) {
+      if (closed) { return; }
+      closed = true;
+      if (scrim.parentNode) { scrim.parentNode.removeChild(scrim); }
+      document.removeEventListener("keydown", onKey);
+      if (vv) { vv.removeEventListener("resize", fit); vv.removeEventListener("scroll", fit); }
+      document.body.style.overflow = "";
+      setBack(null);
+      if (quiet !== true && prev && prev.focus) { try { prev.focus({ preventScroll: true }); } catch (e) { /* gone */ } }
+      if (quiet !== true && onClose) { onClose(); }
+    }
+    scrim.addEventListener("click", function (e) { if (e.target === scrim) { close(); } });
+    document.addEventListener("keydown", onKey);
+    if (vv) { vv.addEventListener("resize", fit); vv.addEventListener("scroll", fit); fit(); }
+    build(box, close);
+    document.body.appendChild(scrim);
+    document.body.style.overflow = "hidden";
+    setBack(close);
+    return close;
+  }
+
+  // annotatePage shows the Annotate page (the answers of a topic, loaded
+  // here); with whole set, it makes the one answer already in page
+  // annotatable (the "Whole answer" page). pg is the page's own data.
+  function annotatePage(pg, whole) {
+    document.body.classList.remove("fill");
+    document.body.classList.add("annot");
+    if (!whole) {
+      page.className = "annot-page";
+      page.textContent = "";
+    }
+
+    // --- the saved notes of this page (kept on this phone) ---
+    var storeKey = "rex-tg.annotate." + id;
+    var notes = [], msg = "";
+    // maybeAt: when a send may have arrived although the page stayed open
+    // (asks first for an hour). pend: a signed send whose result is not
+    // known ({act, text, at}; its act is kept for 10 minutes).
+    var maybeAt = 0, pend = null;
+    var hour = 3600 * 1000, pendTTL = 10 * 60 * 1000;
+    try {
+      var saved = JSON.parse(load(storeKey) || "null");
+      if (saved && saved.notes instanceof Array) { notes = saved.notes.filter(function (n) { return n && n.id && n.note; }); }
+      if (saved && typeof saved.msg === "string") { msg = saved.msg; }
+      if (saved && typeof saved.maybe === "number" && Date.now() - saved.maybe < hour) { maybeAt = saved.maybe; }
+      if (saved && saved.pend && typeof saved.pend.act === "string" && typeof saved.pend.text === "string" && Date.now() - saved.pend.at < pendTTL) { pend = saved.pend; }
+    } catch (e) { /* no usable draft */ }
+    function persist() {
+      var keep = notes.length || msg || maybeAt || pend;
+      save(storeKey, keep ? JSON.stringify({ notes: notes, msg: msg, maybe: maybeAt || undefined, pend: pend || undefined }) : null);
+    }
+    function isMaybe() { return !!maybeAt && Date.now() - maybeAt < hour; }
+    // The notes that were sent are kept for an hour, to bring back.
+    var sentKey = storeKey + ".sent";
+    function keepSent(ns, m, maybe) {
+      save(sentKey, JSON.stringify({ notes: ns, msg: m, at: Date.now(), maybe: !!maybe }));
+      backup = readSent();
+    }
+    function dropSent() { save(sentKey, null); backup = null; }
+    function readSent() {
+      try {
+        var b = JSON.parse(load(sentKey) || "null");
+        if (b && b.notes instanceof Array && b.notes.length && Date.now() - b.at < hour) { return b; }
+      } catch (e) { /* none */ }
+      save(sentKey, null);
+      return null;
+    }
+    var backup = readSent();
+    var mode = load("rex-tg.annotate.mode");
+    if (annotModes.indexOf(mode) < 0) { mode = "send"; }
+    var bot = (pg && pg.bot) || "";
+
+    function order(a, b) {
+      return (a.item - b.item) || (a.ord - b.ord) || ((a.ts || 0) - (b.ts || 0));
+    }
+    function sorted() { return notes.slice().sort(order); }
+    function find(nid) {
+      for (var i = 0; i < notes.length; i++) { if (notes[i].id === nid) { return notes[i]; } }
+      return null;
+    }
+
+    // --- the text to send ---
+    // cut keeps 500 characters (code points: a pair is never split).
+    function cut(q) {
+      q = q.replace(/\s+$/, "");
+      if (q.length <= 500) { return q; }
+      var cps = Array.from ? Array.from(q) : q.split("");
+      return cps.length > 500 ? cps.slice(0, 500).join("") + "…" : q;
+    }
+    // scrub turns a half of a surrogate pair into U+FFFD, so the text can be encoded.
+    function scrub(t) {
+      var out = "";
+      for (var i = 0; i < t.length; i++) {
+        var c = t.charCodeAt(i);
+        if (c >= 0xd800 && c <= 0xdbff) {
+          var d = t.charCodeAt(i + 1);
+          if (d >= 0xdc00 && d <= 0xdfff) { out += t.charAt(i) + t.charAt(i + 1); i++; } else { out += "\ufffd"; }
+        } else if (c >= 0xdc00 && c <= 0xdfff) { out += "\ufffd"; } else { out += t.charAt(i); }
+      }
+      return out;
+    }
+    function compose() {
+      var parts = [];
+      if (msg.trim()) { parts.push(msg.trim()); }
+      var cur = null;
+      sorted().forEach(function (n) {
+        if (cur !== n.item) {
+          cur = n.item;
+          parts.push(n.at ? "Notes on your answer from " + n.at + ":" : "Notes on your answer:");
+        }
+        parts.push(cut(n.quote).split("\n").map(function (l) { return "> " + l; }).join("\n"));
+        parts.push(n.note.trim());
+      });
+      return scrub(parts.join("\n\n"));
+    }
+
+    // --- the layout ---
+    var list = el("div", "alist");
+    var foot = el("div", "afoot");
+    var sentinel = el("div", "asent");
+    if (!whole) {
+      page.appendChild(list);
+      page.appendChild(foot);
+      page.appendChild(sentinel);
+    }
+
+    var bar = el("div", "abar");
+    var count = el("span", "acount", "");
+    count.setAttribute("aria-live", "polite");
+    var review = button("Review", "btn primary");
+    bar.appendChild(count);
+    bar.appendChild(review);
+    document.body.appendChild(bar);
+    var pill = button("✍️ Note on selection", "selpill");
+    pill.hidden = true;
+    document.body.appendChild(pill);
+
+    var restoreRow = el("div", "abackup");
+    var restoreText = el("span", "", "");
+    var restoreBtn = button("Bring back", "btn small");
+    restoreRow.appendChild(restoreText);
+    restoreRow.appendChild(restoreBtn);
+    restoreRow.hidden = true;
+    document.body.appendChild(restoreRow);
+    restoreBtn.addEventListener("click", function () {
+      if (!backup) { return; }
+      hap("light");
+      notes = backup.notes.filter(function (n) { return n && n.id && n.note; });
+      if (!msg) { msg = backup.msg || ""; }
+      if (backup.maybe) { maybeAt = Date.now(); }
+      dropSent();
+      persist();
+      refreshBadges();
+    });
+
+    var blocks = {};   // by note id: the elements of the loaded answers
+    var items = {};    // by answer id: { at }
+    var oldest = 0, more = true, loading = false, failed = "", firstLoad = true;
+
+    function syncBar() {
+      var n = notes.length;
+      count.textContent = n + (n === 1 ? " note" : " notes");
+      review.disabled = false;
+      if (backup && Date.now() - backup.at >= hour) { dropSent(); }
+      restoreRow.hidden = !(backup && !n);
+      if (backup) {
+        var d = new Date(backup.at);
+        restoreText.textContent = "Notes sent at " + (d.getHours() < 10 ? "0" : "") + d.getHours() + ":" + (d.getMinutes() < 10 ? "0" : "") + d.getMinutes() + " · ";
+      }
+    }
+
+    // A table row cannot hold a badge: its first cell does.
+    function badgeHost(b) { return b.tagName === "TR" && b.firstElementChild ? b.firstElementChild : b; }
+
+    // refreshBadges marks the blocks that have a note, and numbers them as Review does.
+    function refreshBadges() {
+      Object.keys(blocks).forEach(function (k) {
+        blocks[k].forEach(function (b) {
+          b.classList.remove("noted");
+          var host = badgeHost(b);
+          var old = host.querySelector(".nbadge");
+          if (old && old.parentNode === host) { host.removeChild(old); }
+        });
+      });
+      sorted().forEach(function (n, i) {
+        (blocks[n.id] || []).forEach(function (b) {
+          b.classList.add("noted");
+          badgeHost(b).appendChild(el("span", "nbadge", String(i + 1)));
+        });
+      });
+      syncBar();
+    }
+
+    function setNote(n) {
+      var old = find(n.id);
+      if (old) { notes[notes.indexOf(old)] = n; } else { notes.push(n); }
+      persist();
+      refreshBadges();
+    }
+    function dropNote(nid) {
+      notes = notes.filter(function (n) { return n.id !== nid; });
+      persist();
+      refreshBadges();
+    }
+
+    // --- the note sheet ---
+    // o: { id, item, at, ord, quote }; again runs after the sheet closes.
+    function noteSheet(o, again) {
+      var existing = find(o.id);
+      hap("light");
+      sheetUI(existing ? "Edit note" : "Add a note", function (box, close) {
+        var q = el("button", "aquote", o.quote);
+        q.type = "button";
+        q.setAttribute("aria-expanded", "false");
+        q.setAttribute("aria-label", "Quoted text. Tap to show all of it.");
+        q.addEventListener("click", function () {
+          var on = q.classList.toggle("open");
+          q.setAttribute("aria-expanded", on ? "true" : "false");
+        });
+        box.appendChild(q);
+        var lab = el("label", "alabel", "Your note");
+        var ta = el("textarea", "atxt");
+        ta.id = "note-text";
+        lab.setAttribute("for", "note-text");
+        ta.rows = 4;
+        ta.value = existing ? existing.note : "";
+        ta.setAttribute("autocapitalize", "sentences");
+        box.appendChild(lab);
+        box.appendChild(ta);
+        var row = el("div", "srow");
+        var sv = button("Save", "btn primary big");
+        var del = button("Delete", "btn danger big");
+        var cancel = button("Cancel", "btn big");
+        row.appendChild(sv);
+        if (existing) { row.appendChild(del); }
+        row.appendChild(cancel);
+        box.appendChild(row);
+        function ok() { sv.disabled = !ta.value.trim(); }
+        ok();
+        ta.addEventListener("input", ok);
+        sv.addEventListener("click", function () {
+          if (!ta.value.trim()) { return; }
+          setNote({ id: o.id, item: o.item, at: o.at, ord: o.ord, quote: o.quote, note: ta.value.trim(), ts: existing ? existing.ts : Date.now() });
+          hap("success");
+          close();
+        });
+        del.addEventListener("click", function () { dropNote(o.id); hap("light"); close(); });
+        cancel.addEventListener("click", function () { close(); });
+        setTimeout(function () { try { ta.focus(); } catch (e) { /* none */ } }, 30);
+      }, again);
+    }
+
+    // --- the review sheet ---
+    var reviewClose = null;
+    // maybeSent: a send whose page Telegram did not close; the next send
+    // asks first, so the notes do not reach the agent twice by mistake.
+    
+    function reviewSheet() {
+      hap("light");
+      sheetUI("Review", function (box, close) {
+        reviewClose = close;
+        var listBox = el("div", "rlistn");
+        function draw() {
+          listBox.textContent = "";
+          var all = sorted();
+          if (!all.length) { listBox.appendChild(el("p", "shint", "No notes yet. Tap a paragraph in an answer to add one.")); }
+          all.forEach(function (n, i) {
+            var row = el("div", "rnote");
+            var main = el("button", "rmainn");
+            main.type = "button";
+            main.setAttribute("aria-label", "Edit note " + (i + 1));
+            main.appendChild(el("span", "nbadge flat", String(i + 1)));
+            var t = el("span", "rtext");
+            t.appendChild(el("span", "rquote", n.quote));
+            t.appendChild(el("span", "rbody", n.note));
+            t.appendChild(el("span", "rat", n.at));
+            main.appendChild(t);
+            main.addEventListener("click", function () {
+              close(true);
+              noteSheet({ id: n.id, item: n.item, at: n.at, ord: n.ord, quote: n.quote }, reviewSheet);
+            });
+            var x = button("✕", "fx", "Delete note " + (i + 1));
+            x.addEventListener("click", function () {
+              hap("light");
+              confirmAsk({ title: "Delete this note?", message: "The note is removed from the list.", ok: "Delete", danger: true }, function () {
+                dropNote(n.id);
+                draw();
+                sync();
+              });
+            });
+            row.appendChild(main);
+            row.appendChild(x);
+            listBox.appendChild(row);
+          });
+        }
+        box.appendChild(listBox);
+
+        var mlab = el("label", "alabel", "Message to the agent (optional)");
+        mlab.setAttribute("for", "note-msg");
+        var mta = el("textarea", "atxt");
+        mta.id = "note-msg";
+        mta.rows = 3;
+        mta.value = msg;
+        box.appendChild(mlab);
+        box.appendChild(mta);
+
+        var seg2 = el("div", "segc stack");
+        seg2.setAttribute("role", "radiogroup");
+        seg2.setAttribute("aria-label", "How to send");
+        box.appendChild(seg2);
+        var hint = el("p", "shint", "");
+        box.appendChild(hint);
+        var go = button("", "btn primary big wide");
+        box.appendChild(go);
+        var busy = false;
+
+        function canSend() { return !!(sorted().length || mta.value.trim()); }
+        function sync() {
+          go.textContent = busy ? "Sending…" : annotModeButton[mode];
+          go.disabled = busy || !canSend();
+          Array.prototype.forEach.call(seg2.children, function (b) {
+            var on = b.getAttribute("data-mode") === mode;
+            b.className = on ? "on" : "";
+            b.setAttribute("aria-checked", on ? "true" : "false");
+          });
+          hint.textContent = mode === "send" && !sendPath() ? noSendText() : "";
+        }
+        annotModes.forEach(function (m) {
+          var b = el("button", "", annotModeLabel[m]);
+          b.type = "button";
+          b.setAttribute("role", "radio");
+          b.setAttribute("data-mode", m);
+          b.addEventListener("click", function () { hap("light"); mode = m; save("rex-tg.annotate.mode", m === "send" ? null : m); sync(); });
+          seg2.appendChild(b);
+        });
+        mta.addEventListener("input", function () { msg = mta.value; persist(); sync(); });
+
+        go.addEventListener("click", function () {
+          msg = mta.value;
+          persist();
+          var text = compose();
+          if (!text) { return; }
+          if (mode === "copy") { copyText(text); return; }
+          if (mode === "box") { putInBox(text); return; }
+          if (!sendPath()) {
+            toast({ ok: false, message: noSendText() });
+            mode = "copy";
+            sync();
+            return;
+          }
+          if (utf8Length(text) > 16000) {
+            toast({ ok: false, message: "These notes are too long to send (16000 bytes at most). Remove a note, or use Copy." });
+            return;
+          }
+          if (isMaybe() && sendPath() === "draft") {
+            // An earlier send may have arrived although the page stayed open.
+            confirmAsk({ title: "Send again?", message: "These notes may have reached the agent already. Send them again only if \u201c\u270d\ufe0f Notes sent to the agent\u201d is not in the topic.", ok: "Send again" }, function () {
+              maybeAt = 0;
+              persist();
+              sendNow(text);
+            });
+            return;
+          }
+          sendNow(text);
+        });
+        // sendSigned sends through the server (signed init data). A result that
+        // is not known yet is asked again with the same act, so it never runs twice.
+        function sendSigned(text) {
+          var live = pend && Date.now() - pend.at < pendTTL ? pend : null;
+          if (live && live.text !== text) {
+            confirmAsk({ title: "Send these notes too?", message: "The earlier send may still reach the agent. Send these notes too?", ok: "Send" }, function () {
+              pend = null;
+              run(text);
+            });
+            return;
+          }
+          run(text);
+        }
+        function run(text) {
+          var live = pend && Date.now() - pend.at < pendTTL && pend.text === text ? pend : null;
+          var mine = live ? live.act : act(), tries = 0;
+          pend = { act: mine, text: text, at: live ? live.at : Date.now() };
+          // what this send holds: later notes stay when it succeeds
+          var ids = sorted().map(function (n) { return n.id; });
+          var sentNotes = sorted(), sentMsg = msg;
+          persist();
+          busy = true;
+          sync();
+          function finish(r) {
+            busy = false;
+            if (r.pending) {
+              toast(r);
+            } else {
+              pend = null;
+              if (r.ok) {
+                keepSent(sentNotes, sentMsg, false);
+                notes = notes.filter(function (n) { return ids.indexOf(n.id) < 0; });
+                if (msg === sentMsg) { msg = ""; }
+                persist();
+                refreshBadges();
+                toast(r);
+                close();
+                return;
+              }
+              persist();
+            }
+            if (!r.pending) { toast(r); }
+            sync();
+          }
+          function attempt() {
+            api("api/annotate/send?id=" + encodeURIComponent(id), { act: mine, text: text })
+              .then(function (r) {
+                if (r.pending && tries < 4) { tries++; setTimeout(attempt, 1500); return; }
+                finish(r);
+              })
+              .catch(function (e) {
+                var m = e.message || "The notes were not sent.";
+                if (!e.status || e.status >= 500) {
+                  if (tries < 4) { tries++; setTimeout(attempt, 1500); return; }
+                  finish({ ok: false, pending: true, message: m + " The notes may still arrive." });
+                  return;
+                }
+                finish({ ok: false, message: m });
+              });
+          }
+          attempt();
+        }
+        function sendNow(text) {
+          if (sendPath() === "signed") { sendSigned(text); return; }
+          busy = true;
+          sync();
+          api("api/annotate/draft?id=" + encodeURIComponent(id), { text: text })
+            .then(function (r) {
+              if (!r.draft) { throw new Error("The draft was not saved."); }
+              var held = { notes: notes, msg: msg };
+              keepSent(notes, msg, true);
+              notes = [];
+              msg = "";
+              maybeAt = 0;
+              persist();
+              refreshBadges();
+              function restore() {
+                notes = held.notes;
+                msg = held.msg;
+                dropSent();
+                persist();
+                refreshBadges();
+              }
+              try {
+                tg.sendData(JSON.stringify({ v: 1, a: "annotate", d: r.draft }));
+              } catch (e) {
+                restore();
+                throw new Error("Telegram did not take the notes. They are kept here.");
+              }
+              hap("success");
+              // Telegram closes the page when it takes the data. A page
+              // that is still open after a while was not closed: the notes
+              // come back, and the user checks the topic before sending
+              // again (the draft may have arrived).
+              setTimeout(function () {
+                maybeAt = Date.now();
+                restore();
+                busy = false;
+                sync();
+                toast({ ok: false, message: "Telegram did not close this page. Check the topic: if “✍️ Notes sent to the agent” is not there, send again." });
+              }, 6000);
+            })
+            .catch(function (e) {
+              busy = false;
+              toast({ ok: false, message: e.message || "The notes were not sent." });
+              sync();
+            });
+        }
+        draw();
+        sync();
+      }, function () { reviewClose = null; });
+    }
+    review.addEventListener("click", reviewSheet);
+
+    // sendPath: how "Send to agent" can work here. "draft": the keyboard's
+    // page sends through Telegram. "signed": a page opened from a message
+    // asks the server. "": no way.
+    function sendPath() {
+      if (tg && tg.sendData && keyMode) { return "draft"; }
+      if (!keyMode && initData && pg && pg.thread) { return "signed"; }
+      return "";
+    }
+    function noSendText() {
+      if (pg && pg.kind === "answer" && !pg.thread) { return "This answer is from before Annotate; use Copy."; }
+      return "Send to agent works when Annotate is opened from its button under the message box. Use Copy instead.";
+    }
+    function utf8Length(s) {
+      try { return unescape(encodeURIComponent(s)).length; } catch (e) { return s.length * 3; }
+    }
+
+    function copyText(text) {
+      function done() { toast({ ok: true, message: "Copied. Paste it in the topic." }); }
+      // The hidden textarea copies inside the tap (iOS needs that); the
+      // clipboard API is the second try.
+      var ta = document.createElement("textarea");
+      ta.value = text;
+      ta.readOnly = true;
+      ta.setAttribute("aria-hidden", "true");
+      ta.style.cssText = "position:fixed;top:0;left:0;width:1px;height:1px;opacity:0;";
+      document.body.appendChild(ta);
+      ta.select();
+      try { ta.setSelectionRange(0, text.length); } catch (e) { /* older browser */ }
+      var ok = false;
+      try { ok = document.execCommand("copy"); } catch (e) { ok = false; }
+      document.body.removeChild(ta);
+      if (ok) { done(); return; }
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(done, function () { byHand(text); });
+      } else {
+        byHand(text);
+      }
+    }
+    function byHand(text) {
+      toast({ ok: false, message: "Could not copy. Select the text and copy it." });
+      sheetUI("Copy by hand", function (box, close) {
+        box.appendChild(el("p", "shint", "Select the text and copy it."));
+        var ta = el("textarea", "atxt");
+        ta.readOnly = true;
+        ta.rows = 10;
+        ta.value = text;
+        box.appendChild(ta);
+        var row = el("div", "srow");
+        var ok = button("Close", "btn primary big");
+        ok.addEventListener("click", function () { close(); });
+        row.appendChild(ok);
+        box.appendChild(row);
+        setTimeout(function () { try { ta.focus(); ta.select(); } catch (e) { /* none */ } }, 30);
+      });
+    }
+
+    function putInBox(text) {
+      if (!bot) { toast({ ok: false, message: "The bot's name is not known. Use Copy." }); return; }
+      if (!tg || !tg.openTelegramLink) { toast({ ok: false, message: "This Telegram cannot do that. Use Copy." }); return; }
+      if (text.length > 3500) { toast({ ok: false, message: "These notes are too long for the message box. Use Copy or Send to agent." }); return; }
+      var link;
+      try { link = "https://t.me/" + bot + "?text=" + encodeURIComponent(text); } catch (e) {
+        toast({ ok: false, message: "These notes could not be put in the message box. Use Copy." });
+        return;
+      }
+      tg.openTelegramLink(link);
+    }
+
+    // --- the answers ---
+    // ownText is the text of an element without its nested blocks.
+    var nested = { UL: 1, OL: 1, P: 1, BLOCKQUOTE: 1, PRE: 1, TABLE: 1, DIV: 1 };
+    function ownText(e) {
+      var s = "";
+      for (var n = e.firstChild; n; n = n.nextSibling) {
+        if (n.nodeType === 1 && nested[n.tagName]) { continue; }
+        if (n.nodeType === 1 && n.classList.contains("nbadge")) { continue; }
+        s += n.textContent;
+      }
+      return s;
+    }
+    function oneLine(s) { return s.replace(/\s+/g, " ").trim(); }
+
+    // markBlocks makes the paragraphs, items, headings, quotes, table rows,
+    // and code lines of one answer tappable.
+    function markBlocks(body, it) {
+      var pres = body.querySelectorAll("pre");
+      for (var i = 0; i < pres.length; i++) {
+        var code = pres[i].querySelector("code") || pres[i];
+        if (code.children.length) { continue; } // text with markup: the whole block stays one
+        var lines = code.textContent.replace(/\n$/, "").split("\n");
+        code.textContent = "";
+        lines.forEach(function (l) {
+          var sp = el("span", "cl", l);
+          code.appendChild(sp);
+        });
+      }
+      var cand = body.querySelectorAll("p, li, h1, h2, h3, h4, h5, h6, blockquote, tr, .cl, pre");
+      var ord = 0;
+      for (var j = 0; j < cand.length; j++) {
+        var e = cand[j], tag = e.tagName, q;
+        if (tag === "PRE") { if (e.querySelector(".cl")) { continue; } q = e.textContent.replace(/\s+$/, ""); }
+        else if (tag === "TR") {
+          q = Array.prototype.map.call(e.children, function (c) { return oneLine(c.textContent); }).join(" | ");
+        }
+        else if (tag === "LI" || tag === "BLOCKQUOTE") { q = oneLine(ownText(e)); }
+        else if (e.classList.contains("cl")) { q = e.textContent.replace(/\s+$/, ""); if (!q.trim()) { continue; } }
+        else { q = oneLine(e.textContent); }
+        if (!q.trim()) { continue; }
+        var nid = it.id + ":" + ord;
+        e.setAttribute("data-bk", nid);
+        e.setAttribute("tabindex", "0");
+        e._bk = { id: nid, item: it.id, at: it.at, ord: ord, quote: q };
+        (blocks[nid] = blocks[nid] || []).push(e);
+        ord++;
+      }
+    }
+
+    function blockOf(node, body) {
+      var e = node && node.nodeType === 1 ? node : node && node.parentNode;
+      while (e && e !== body) {
+        if (e._bk) { return e; }
+        e = e.parentNode;
+      }
+      return null;
+    }
+
+    function openBlock(e) {
+      var b = e._bk;
+      noteSheet({ id: b.id, item: b.item, at: b.at, ord: b.ord, quote: b.quote });
+    }
+
+    function card(it) {
+      items[it.id] = it;
+      var c = el("article", "ans-card");
+      var h = el("div", "ans-head");
+      h.appendChild(el("span", "ans-at", it.at));
+      c.appendChild(h);
+      var body = el("div", "ans content");
+      body.innerHTML = it.html; // rendered and escaped by rex-tg
+      scrollTables(body);
+      markBlocks(body, it);
+      c.appendChild(body);
+      wire(body, it);
+      return c;
+    }
+
+    // wire makes the blocks of body tappable.
+    function wire(body, it) {
+      body.addEventListener("click", function (ev) {
+        if (ev.target.closest && ev.target.closest("a")) { return; }
+        var s = window.getSelection && window.getSelection();
+        if (s && !s.isCollapsed && String(s).trim()) { return; } // the reader is selecting
+        var b = blockOf(ev.target, body);
+        if (b) { openBlock(b); }
+      });
+      body.addEventListener("keydown", function (ev) {
+        if (ev.key !== "Enter" && ev.key !== " ") { return; }
+        if (ev.target._bk) { ev.preventDefault(); openBlock(ev.target); }
+      });
+      body._item = it;
+    }
+
+    function drawFoot() {
+      foot.textContent = "";
+      foot.className = "afoot";
+      if (loading) {
+        for (var i = 0; i < 2; i++) { foot.appendChild(el("div", "skel ans-skel")); }
+        return;
+      }
+      if (failed) {
+        foot.className = "afoot err";
+        foot.appendChild(el("div", "tnote", failed));
+        var again = button("Try again", "btn");
+        again.addEventListener("click", function () { loadMore(); });
+        foot.appendChild(again);
+        return;
+      }
+      if (more) {
+        var lm = button("Load older", "btn");
+        lm.addEventListener("click", function () { loadMore(); });
+        foot.appendChild(lm);
+      } else if (oldest) {
+        foot.appendChild(el("div", "tnote", "No older answers"));
+      } else {
+        var e = el("div", "empty");
+        e.appendChild(el("div", "eico", "💬"));
+        e.appendChild(el("div", "etitle", "No answers yet in this topic."));
+        foot.appendChild(e);
+      }
+    }
+
+    function loadMore() {
+      if (loading || (!more && !failed)) { return; }
+      loading = true;
+      failed = "";
+      drawFoot();
+      api("api/annotate?id=" + encodeURIComponent(id) + (oldest ? "&before=" + encodeURIComponent(oldest) : ""))
+        .then(function (r) {
+          if (r.title && firstLoad) { setTitle(r.title); }
+          firstLoad = false;
+          bot = r.bot || bot;
+          (r.items || []).forEach(function (it) {
+            list.appendChild(card(it));
+            oldest = it.id;
+          });
+          more = !!r.more && !!(r.items && r.items.length);
+          refreshBadges();
+        })
+        .catch(function (e) { failed = e.message || "The answers could not be loaded."; })
+        .then(function () {
+          loading = false;
+          drawFoot();
+          watch();
+        });
+    }
+
+    // Near the bottom, the next older answers load by themselves.
+    var seen = null;
+    if (window.IntersectionObserver) {
+      seen = new IntersectionObserver(function (es) {
+        if (es.some(function (x) { return x.isIntersecting; }) && !loading && more && !failed) { loadMore(); }
+      }, { rootMargin: "400px 0px" });
+    }
+    function watch() {
+      if (!seen) { return; }
+      seen.unobserve(sentinel); // observing again reports the sentinel once more
+      seen.observe(sentinel);
+    }
+
+    // --- a note on a selection ---
+    var sel = null, hideTimer = null;
+    function hidePill() { pill.hidden = true; sel = null; }
+    document.addEventListener("selectionchange", function () {
+      clearTimeout(hideTimer);
+      hideTimer = setTimeout(function () {
+        var s = window.getSelection && window.getSelection();
+        if (!s || s.isCollapsed || !s.rangeCount) { hidePill(); return; }
+        var text = s.toString().replace(/\s+$/, "").replace(/^\s+/, "");
+        var a = s.anchorNode && (s.anchorNode.nodeType === 1 ? s.anchorNode : s.anchorNode.parentNode);
+        var f = s.focusNode && (s.focusNode.nodeType === 1 ? s.focusNode : s.focusNode.parentNode);
+        var ba = a && a.closest ? a.closest(".ans") : null, bf = f && f.closest ? f.closest(".ans") : null;
+        if (!text || !ba || ba !== bf || !ba._item) { hidePill(); return; }
+        var blk = blockOf(s.getRangeAt(0).startContainer, ba);
+        sel = { item: ba._item.id, at: ba._item.at, ord: (blk ? blk._bk.ord : 0) + 0.5, quote: text };
+        pill.hidden = false;
+      }, 200);
+    });
+    pill.addEventListener("pointerdown", function (e) { e.preventDefault(); });
+    pill.addEventListener("click", function () {
+      if (!sel) { return; }
+      var o = sel;
+      hidePill();
+      try { window.getSelection().removeAllRanges(); } catch (e) { /* none */ }
+      noteSheet({ id: o.item + ":s" + Date.now(), item: o.item, at: o.at, ord: o.ord, quote: o.quote });
+    });
+
+    if (whole) {
+      var one = { id: 1, at: (pg && pg.at) || "" };
+      items[one.id] = one;
+      page.className = "ans";
+      markBlocks(page, one);
+      wire(page, one);
+      refreshBadges();
+    } else {
+      syncBar();
+      loadMore();
+    }
+  }
+
   // --- the page ---
 
+  var fromKb = params.get("from") === "kb";
+  if (!id && goView) {
+    launch(goView, params.get("t") || "");
+    return;
+  }
   api("api/page?id=" + encodeURIComponent(id))
     .then(function (p) {
       setTitle(p.title);
-      if (p.kind !== "control" && new URLSearchParams(location.search).get("from") === "panel") {
+      var from = params.get("from");
+      if (p.kind !== "control" && from === "panel") {
         rootBack = backToPanel;
         var back = el("button", "backlink", "‹ Panel");
         back.type = "button";
         back.setAttribute("aria-label", "Back to the control panel");
         back.addEventListener("click", backToPanel);
         title.parentNode.insertBefore(back, title);
+      } else if (p.kind !== "control" && fromKb) {
+        var toPanel = function () { location.href = appURL({ go: "panel" }); };
+        rootBack = toPanel;
+        var back2 = el("button", "backlink", "‹ Panel");
+        back2.type = "button";
+        back2.setAttribute("aria-label", "Back to the panel");
+        back2.addEventListener("click", toPanel);
+        title.parentNode.insertBefore(back2, title);
       }
       setBack(null);
       if (p.kind === "screen") { liveScreen(); return; }
       if (p.kind === "files") { fileBrowser(p.title || "Files"); return; }
       if (p.kind === "changes") { changesView(); return; }
       if (p.kind === "control") { controlPanel(); return; }
+      if (p.kind === "annotate") { annotatePage(p, false); return; }
       page.className = "";
       page.innerHTML = p.html; // rendered and escaped by rex-tg
       scrollTables(page);
+      if (p.kind === "answer") { annotatePage(p, true); }
     })
     .catch(function (e) {
       note(e.message || "This page could not be loaded.");

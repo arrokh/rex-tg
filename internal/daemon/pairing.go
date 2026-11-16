@@ -124,7 +124,7 @@ func (d *daemon) tryPair(m *telegram.Message) {
 	d.ownerUser, d.ownerChat = m.From.ID, m.Chat.ID
 	d.log.Info("paired", "owner", m.From.ID)
 	d.sayKeys(m.Chat.ID, m.MessageThreadID, "✅ Paired. Use /agents to list the agents in your Rex panes. /help lists the commands. "+
-		"The buttons under the message box open the panel, the screen, the files, and the changes.")
+		"The buttons under the message box open the panel, the screen, the files, the changes, and Annotate.")
 	d.keyboardShown(ctx)
 	owner := m.Chat.ID
 	d.spawn(func() {

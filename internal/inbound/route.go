@@ -38,7 +38,7 @@ type Route struct {
 var topicCommands = setOf("info", "screen", "files", "changes", "approve", "deny", "esc", "interrupt",
 	"key", "force", "model", "effort", "mode", "verbose", "reasoning", "resend", "unlink", "mute", "unmute", "rename", "at", "help")
 
-var mainCommands = setOf("start", "agents", "new", "topics", "status", "pause", "unpause", "rt", "help")
+var mainCommands = setOf("start", "agents", "new", "topics", "status", "pause", "unpause", "rt", "annotate", "rekey", "help")
 
 // Button is one button of the reply keyboard: its label, and the command
 // that a tap runs.
@@ -55,6 +55,7 @@ var Buttons = []Button{
 	{"🖥 Screen", "screen"},
 	{"📂 Files", "files"},
 	{"📝 Changes", "changes"},
+	{"✍️ Annotate", "annotate"},
 }
 
 // buttonCommands maps a label, without emoji variation selectors, to its

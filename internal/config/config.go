@@ -158,9 +158,15 @@ type Config struct {
 	// MiniApp is rex-tg's Telegram Mini App: pages too big for a message
 	// (a long answer, the changes of a turn), only for the owner.
 	MiniApp struct {
-		// URL is the public HTTPS address that reaches Listen, such as a
-		// Tailscale Funnel. Empty turns the Mini App off.
+		// URL is the HTTPS address that reaches Listen, such as
+		// "tailscale serve" on the Mac's tailnet name. Empty turns the Mini
+		// App off.
 		URL string `toml:"url"`
+		// TailnetOnly answers only requests that came through "tailscale
+		// serve" from a device of your tailnet (Tailscale's identity
+		// header). On by default: the keyboard's buttons carry a key in
+		// their address, and the Mini App must not be public (Funnel).
+		TailnetOnly bool `toml:"tailnet_only"`
 		// Listen is the local address of the Mini App's server.
 		Listen string `toml:"listen"`
 		// AnswerPreview: an answer longer than this many characters shows
@@ -260,6 +266,7 @@ func Default(home string) Config {
 	c.MiniApp.AnswerPreview = 3000
 	c.MiniApp.Files = true
 	c.MiniApp.Changes = true
+	c.MiniApp.TailnetOnly = true
 	c.Display.Stream = false // off: at its fastest it changes once a second
 	c.Display.StreamInterval = Duration{MinStreamInterval}
 	c.Display.MessageLength = 1500

@@ -32,6 +32,7 @@ func (d *daemon) housekeeping(now time.Time) {
 	}
 	d.pruneFileOffers(now)
 	d.prunePages(now)
+	d.pruneDrafts(now)
 	d.pruneControlRecords(now)
 	d.pruneActRecords(now)
 	d.pruneFolderHides()
