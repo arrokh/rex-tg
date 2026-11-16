@@ -12,6 +12,7 @@ package miniapp
 
 import (
 	"bytes"
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	_ "embed"
@@ -80,6 +81,8 @@ type Server struct {
 	redact  func(string) string  // cleans a file's text before it is shown
 	control Control              // the control panel (nil: off)
 	home    string               // where the control panel's folder explorer starts
+	reads   reads                // folder and file reads that may wait for macOS (slowread.go)
+	wait    time.Duration        // how long a request waits for such a read
 	now     func() time.Time
 	log     *slog.Logger
 	// refusedAt is when a refusal was last logged: the address is public,
@@ -97,7 +100,7 @@ func New(botToken string, owner func() int64, load func(string) (Page, bool), lo
 // NewWithSecret makes a server from the key that Secret derives, so the
 // caller need not keep the token.
 func NewWithSecret(secret []byte, owner func() int64, load func(string) (Page, bool), log *slog.Logger) *Server {
-	return &Server{secret: secret, owner: owner, load: load, now: time.Now, log: log}
+	return &Server{secret: secret, owner: owner, load: load, wait: slowRead, now: time.Now, log: log}
 }
 
 // WithScreen turns on the live screen: read returns the screen of a screen
@@ -303,7 +306,13 @@ func (s *Server) liveScreen(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(sc)
 }
 
-// fileView answers a folder or file of a files page.
+// filesKey is the key of a file browser read in Server.reads.
+func filesKey(dir, rel string) string {
+	return "files\x00" + dir + "\x00" + rel
+}
+
+// fileView answers a folder or file of a files page. The read may wait for
+// macOS (slowread.go).
 func (s *Server) fileView(w http.ResponseWriter, r *http.Request) {
 	if !s.allowed(w, r) {
 		return
@@ -316,7 +325,18 @@ func (s *Server) fileView(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"The file browser is off."}`, http.StatusNotFound)
 		return
 	}
-	v, err := Browse(r.Context(), p.Dir, r.URL.Query().Get("path"), s.redact)
+	rel := r.URL.Query().Get("path")
+	// The read may wait for macOS (slowread.go), so it does not stop when
+	// this request ends: a later request for the same path joins it.
+	ctx := context.WithoutCancel(r.Context())
+	got, err := s.reads.do(filesKey(p.Dir, rel), s.wait, func() (any, error) {
+		return Browse(ctx, p.Dir, rel, s.redact)
+	})
+	if errors.Is(err, errSlowRead) {
+		http.Error(w, slowReadText("this file or folder"), http.StatusServiceUnavailable)
+		return
+	}
+	v, _ := got.(View)
 	if err != nil {
 		http.Error(w, `{"error":"This file is not there, or it is hidden."}`, http.StatusNotFound)
 		return

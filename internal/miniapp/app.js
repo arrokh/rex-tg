@@ -75,16 +75,27 @@
     return;
   }
 
-  // api reads path; with a body it posts it as JSON.
-  function api(path, body) {
+  // api reads path; with a body it posts it as JSON. A read (no body) with
+  // wait stops after wait ms; a post is never stopped, so an action does not
+  // look failed while it runs.
+  function api(path, body, wait) {
     var opt = { headers: { "X-Telegram-Init-Data": initData } };
+    var timer = null;
     if (body !== undefined) {
       opt.method = "POST";
       opt.headers["Content-Type"] = "application/json";
       opt.body = JSON.stringify(body);
+    } else if (wait && window.AbortController) {
+      var ac = new AbortController();
+      opt.signal = ac.signal;
+      timer = setTimeout(function () { ac.abort(); }, wait);
     }
+    // The timer runs until the body is read, and stops on every path.
     return fetch(path, opt).then(function (r) {
-      return r.json().catch(function () { return null; }).then(function (body) {
+      return r.json().catch(function (e) {
+        if (e && e.name === "AbortError") { throw e; }
+        return null;
+      }).then(function (body) {
         if (!r.ok || !body) {
           var err = new Error((body && body.error) || ("HTTP " + r.status));
           err.status = r.status;
@@ -92,6 +103,14 @@
         }
         return body;
       });
+    }).then(function (body) {
+      clearTimeout(timer);
+      return body;
+    }, function (e) {
+      clearTimeout(timer);
+      // Only the timer above aborts a request.
+      if (e && e.name === "AbortError") { throw new Error("The Mac did not answer in time. Check the connection, then try again."); }
+      throw e;
     });
   }
 
@@ -1805,13 +1824,20 @@
         crumbs.scrollLeft = crumbs.scrollWidth;
       }
 
-      function drawRows(l, err) {
+      // drawRows shows the folder l, or err: why the folder at path did
+      // not open, with a way to try it again and a way back to l.
+      function drawRows(l, err, path) {
         rowsBox.textContent = "";
         if (err) {
           rowsBox.appendChild(el("div", "etitle", err));
           var rt = button("Try again", "btn small");
-          rt.addEventListener("click", function () { load(l ? l.path : (state.home.path)); });
+          rt.addEventListener("click", function () { hap("light"); load(path); });
           rowsBox.appendChild(rt);
+          if (l) {
+            var back = button("Back to " + l.shown, "btn small");
+            back.addEventListener("click", function () { hap("light"); drawRows(l); });
+            rowsBox.appendChild(back);
+          }
           return;
         }
         if (l.parent) {
@@ -1834,13 +1860,26 @@
         if (l.more) { rowsBox.appendChild(el("div", "tnote", "… more folders not shown")); }
       }
 
+      // shownPath shows a path inside home with "~", as the server does.
+      function shownPath(p) {
+        var home = (state && state.home && state.home.path) || "";
+        if (!p || p === home) { return "~"; }
+        return home && p.indexOf(home + "/") === 0 ? "~" + p.slice(home.length) : p;
+      }
+
       function load(path, keepFilter) {
         var mine = ++loading;
+        path = path || (state && state.home && state.home.path) || "";
         if (!keepFilter) { fq = ""; fin.value = ""; }
         expl.setAttribute("aria-busy", "true");
         rowsBox.textContent = "";
+        // The crumbs still show the folder before; this line names the one
+        // that opens.
+        rowsBox.appendChild(el("div", "tnote", "Opening " + shownPath(path) + "…"));
         for (var i = 0; i < 4; i++) { rowsBox.appendChild(el("div", "skel row-skel")); }
-        api("api/control/folders?id=" + encodeURIComponent(id) + "&path=" + encodeURIComponent(path || "") + (hidden ? "&hidden=1" : ""))
+        // The Mac answers within 8 seconds (it says when macOS keeps a
+        // folder closed); a longer wait is the connection.
+        api("api/control/folders?id=" + encodeURIComponent(id) + "&path=" + encodeURIComponent(path) + (hidden ? "&hidden=1" : ""), undefined, 20000)
           .then(function (l) {
             if (mine !== loading) { return; }
             list = l;
@@ -1850,7 +1889,7 @@
           })
           .catch(function (e) {
             if (mine !== loading) { return; }
-            drawRows(list, e.message || "This folder could not be loaded.");
+            drawRows(list, e.message || "This folder could not be loaded.", path);
           })
           .then(function () {
             if (mine !== loading) { return; }

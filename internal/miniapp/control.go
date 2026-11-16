@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -339,13 +340,30 @@ func (s *Server) controlState(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(st)
 }
 
-// controlFolders answers a folder of the folder explorer.
+// folderKey is the key of a folder explorer read in Server.reads.
+func folderKey(home, dir string, hidden bool) string {
+	if dir != "" {
+		dir = filepath.Clean(dir) // "/a/b/" is the read of "/a/b"
+	}
+	return "folders\x00" + home + "\x00" + dir + "\x00" + strconv.FormatBool(hidden)
+}
+
+// controlFolders answers a folder of the folder explorer. The read may wait
+// for macOS (slowread.go).
 func (s *Server) controlFolders(w http.ResponseWriter, r *http.Request) {
 	if !s.controlAllowed(w, r) {
 		return
 	}
 	q := r.URL.Query()
-	l, err := ListFolders(s.home, q.Get("path"), q.Get("hidden") == "1")
+	dir, hidden := q.Get("path"), q.Get("hidden") == "1"
+	got, err := s.reads.do(folderKey(s.home, dir, hidden), s.wait, func() (any, error) {
+		return ListFolders(s.home, dir, hidden)
+	})
+	if errors.Is(err, errSlowRead) {
+		http.Error(w, slowReadText("this folder"), http.StatusServiceUnavailable)
+		return
+	}
+	l, _ := got.(FolderList)
 	if err != nil {
 		http.Error(w, `{"error":"This folder is not there, or it cannot be read."}`, http.StatusNotFound)
 		return

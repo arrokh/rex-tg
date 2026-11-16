@@ -98,6 +98,14 @@ Setup: a real bot made with @BotFather, Threaded Mode turned on, rex-tg installe
 
 The budget of 20 edits a minute for progress is rex-tg's own choice (`sender.Options.EditsPerMinute`). The official FAQ and grammY both give 20 a minute for groups. No source gives a limit for edits in a private chat.
 
+## A folder that loaded forever in the Mini App (2026-11-16)
+
+- In the control panel's folder explorer, Documents showed loading rows and never opened. The page had no time limit, and the crumbs still showed `~`, the folder before.
+- A goroutine dump showed two folder requests stuck in `os.ReadDir` (an `open` call) of a 23-byte path in the home folder (`~/Documents` or `~/Downloads`), for 3 minutes.
+- On the Mac, macOS showed "“rex-tg” would like to access files in your Documents folder." with Don't Allow and Allow. macOS asks before a program reads Desktop, Documents, Downloads, iCloud Drive, or a network volume, and the read waits until someone answers. rex-tg runs from launchd with no window, so the user on the phone did not see the question.
+- rex-tg is signed ad hoc by the Go linker (`codesign -dv`: `Signature=adhoc`, `Identifier=a.out`). macOS probably treats each upgrade as a new program, so it may ask again after an upgrade. Not checked yet.
+- Change made: the folder explorer and the file browser answer within 8 seconds. A read that waits goes on in the background, and the page says that macOS may be asking on the Mac (design section 8.9a, control panel; test `TestFolderThatWaitsForMacOS`). The page names the folder that opens, and Try again opens that folder, not the one before.
+
 ## Still to check
 
 - `closeForumTopic` in the private chat. rex-tg uses it only when linking a new topic fails, so normal use does not reach it.
