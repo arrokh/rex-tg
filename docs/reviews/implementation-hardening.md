@@ -2,9 +2,9 @@
 
 ## Scope and result
 
-Reviewed the overall source at `d7ad809`, not just its formula change. Four audit lanes covered delivery/storage/Telegram, daemon input and lifecycle, Mini App security/resources, and transcript/registry/turn processing. Three isolated implementation lanes and two fresh acceptance reviewers supported the fixes. The parent integrated and verified their changes.
+This is a historical review of the source at `d7ad809`, not a fresh audit of current `main`. Four audit lanes covered delivery/storage/Telegram, daemon input and lifecycle, Mini App security/resources, and transcript/registry/turn processing. Three isolated implementation lanes and two fresh acceptance reviewers supported the fixes. The parent integrated and verified their changes.
 
-The initial worktree was clean. Changes remain uncommitted. No live daemon, user panes, credentials, or installed binary were changed. End-to-end tests used isolated Rex services. Task-owned worktrees were removed and their absence verified.
+At review time the initial worktree was clean and the changes were uncommitted. They were later committed as `13103e8`, merged through PR [#38](https://github.com/arrokh/rex-tg/pull/38), and released as v0.5.1. The review did not change the live daemon, user panes, credentials, or installed binary; end-to-end tests used isolated Rex services. Task-owned worktrees were removed and their absence verified.
 
 ## Findings and changes
 

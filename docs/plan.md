@@ -1,6 +1,6 @@
 # rex-tg implementation plan
 
-Status: 2026-11-11. All product questions are answered. Work starts with the Phase 0 spikes. The design is in [design.md](design.md).
+Historical planning snapshot (2026-11-11), not current implementation status. The phase and open-item tables below record the original plan. See the current [README](../README.md), [architecture and feature catalog](architecture.md), and [reference](reference.md) for shipped behavior. The design decisions are in [design.md](design.md).
 
 ## Decisions made
 
