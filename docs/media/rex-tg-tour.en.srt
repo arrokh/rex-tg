@@ -1,0 +1,70 @@
+1
+00:00:00,200 --> 00:00:04,800
+This is the shipped rex-tg Mini App in its phone layout,
+served by its Go handler.
+
+2
+00:00:04,800 --> 00:00:12,000
+It uses isolated local fixtures. No live Telegram account,
+bot, Rex pane, or agent is connected.
+
+3
+00:00:13,750 --> 00:00:18,500
+Agents shows linked sessions, status, folders, and current tasks.
+
+4
+00:00:18,500 --> 00:00:25,160
+Expand a card to open its topic, screen, files, or changes,
+or rename or unlink the session.
+
+5
+00:00:26,660 --> 00:00:29,500
+Topics separates live and stopped conversations.
+
+6
+00:00:29,500 --> 00:00:37,780
+New agent lets you choose pi, Claude Code, or Codex,
+then select a project folder. This tour stops before starting anything.
+
+7
+00:00:39,280 --> 00:00:42,700
+Screen uses the bundled xterm component to render pane output.
+
+8
+00:00:42,700 --> 00:00:45,100
+Pause refresh or fit the output to the viewport.
+
+9
+00:00:45,100 --> 00:00:47,840
+No terminal input is sent during this tour.
+
+10
+00:00:49,340 --> 00:00:52,800
+Files browses the project and opens Markdown or source.
+
+11
+00:00:52,800 --> 00:00:55,510
+Reads stay inside the selected project folder.
+
+12
+00:00:57,010 --> 00:00:59,600
+Changes compares uncommitted work and branch history.
+
+13
+00:00:59,600 --> 00:01:02,140
+Open a file to inspect the Git diff.
+
+14
+00:01:03,640 --> 00:01:08,200
+Annotate loads answers for this topic. Tap a passage
+to add a note, then review it.
+
+15
+00:01:08,200 --> 00:01:12,740
+This demo stores only a local draft;
+it sends nothing to an agent.
+
+16
+00:01:14,240 --> 00:01:21,030
+This is rex-tg's real Mini App with sample data.
+The README covers live setup, security, and known limits.
