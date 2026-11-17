@@ -1,12 +1,12 @@
 # rex-tg implementation guide
 
-This guide is the contract between the packages of rex-tg. [design.md](design.md) says what the system does; this file says how the code is split and what each package exports. Keep the two in sync.
+This guide is the contract between the packages of rex-tg. [design.md](design.md) says what the system does; this file says how the code is split and what each package exports. Keep the two in sync. Start with the [architecture, feature, and command guide](architecture.md) for diagrams and the user catalog, and the [contribution guide](../CONTRIBUTING.md) for development setup and test rules.
 
 ## Toolchain and rules
 
 - Go 1.27.3 or newer; `.tool-versions` pins 1.27.3 (mise). Module path: `rex-tg`. Run Go commands from the repository root. If `go version` is older, run `eval "$(mise env -s bash)"` first.
 - `make check` runs gofmt, `go vet`, staticcheck v0.8.2, and `go test -race ./...`.
-- **Do not change `go.mod` or `go.sum`.** Do not run `go get` or `go mod tidy`. The allowed third-party modules are already pinned (see `internal/deps/deps.go`): `github.com/BurntSushi/toml`, `github.com/fsnotify/fsnotify`, `github.com/tidwall/gjson`, `github.com/tidwall/sjson`, `github.com/yuin/goldmark`, `gopkg.in/natefinch/lumberjack.v2`, `modernc.org/sqlite`. Everything else comes from the standard library.
+- **Do not change `go.mod` or `go.sum`.** Do not run `go get` or `go mod tidy`. The direct third-party modules are already pinned in `go.mod`: `github.com/BurntSushi/toml`, `github.com/fsnotify/fsnotify`, `github.com/tidwall/gjson`, `github.com/tidwall/sjson`, `github.com/yuin/goldmark`, `golang.org/x/image`, `gopkg.in/natefinch/lumberjack.v2`, and `modernc.org/sqlite`. They also bring transitive dependencies; inspect `go list -m all` and [third-party notices](../THIRD_PARTY_NOTICES.md) rather than treating the direct-import list as the full distribution inventory.
 - **Do not change `internal/agents/agents.go`.** It is the shared event contract. If a change is needed, report it instead.
 - Each package has a package doc comment. Exported identifiers have doc comments.
 - No panics on bad input. Errors carry context (`fmt.Errorf("…: %w", err)`). I/O takes a `context.Context`.
@@ -457,7 +457,7 @@ type Delivered struct{ UpdateID int64; BodyHash, Body string; DeliveredAt time.T
 func MatchEcho(prompt string, at time.Time, delivered []Delivered) (int64, bool) // hash within 10 min, else 40-character prefix within 30 s
 ```
 
-Topic commands: `info`, `screen`, `approve`, `deny`, `esc`, `interrupt`, `key`, `force`, `model`, `effort`, `mode`, `verbose`, `reasoning`, `resend`, `unlink`, `mute`, `unmute`, `rename`, `at`, `help`. Main-chat commands: `start`, `agents`, `new`, `topics`, `status`, `pause`, `unpause`, `help`. `/cmd@<botUsername>` is the same command; a command addressed to another bot is ignored.
+The authoritative [Telegram command inventory and scope rules](architecture.md#telegram-commands) track `internal/inbound/route.go`. Main/global commands also work in linked topics. `/cmd@<botUsername>` is the same command; a command addressed to another bot is ignored.
 
 ### internal/sender
 
@@ -537,7 +537,7 @@ Flows (design sections in brackets):
 
 ### cmd/rex-tg
 
-Commands: `daemon [--config F] [--log-stderr]`, `hook <runtime>`, `login [--token-stdin]`, `pair`, `new [--config F] <pi|cux|claude|codex> [agent args...]`, `install [--only R] [--no-load]`, `uninstall [--only R] [--force] [--keep-launchd]`, `status`, `doctor`, `version`. The config path defaults to `~/.config/rex-tg/config.toml`.
+The authoritative [CLI command and flag inventory](architecture.md#mac-cli-commands) tracks `cmd/rex-tg/env.go` and each subcommand parser. The config path defaults to `~/.config/rex-tg/config.toml`; `--config` belongs to the subcommands that expose it, not the root command.
 
 - `hook`: never prints and always exits 0. Reads at most 1 MiB of stdin, takes `REX_SESSION` and `REX_BLOCK` from the environment, does nothing when `REX_BLOCK` is empty, and writes the spool file described above.
 - `login`: reads the token (from the terminal with echo off, or stdin with `--token-stdin`), checks it with `getMe`, stores it with `keychain.Set`, then runs `pair`.

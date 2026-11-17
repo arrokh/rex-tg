@@ -1,10 +1,11 @@
 # rex-tg system design
 
-Status: updated 2026-11-13. It includes the answers to plan questions Q1–Q10 and the revised topic binding (D5). The features in sections 8.9 and 8.9a are built. The assumptions that are still open are in section 14; the spikes in [plan.md](plan.md) check them.
+Detailed behavior reference, including the answers to plan questions Q1–Q10 and the revised topic binding (D5). Features in sections 8.9 and 8.9a are built. Some decision labels and observations below are historical; section 14 records their original evidence, not the current development environment. Start with the [architecture, feature, and command guide](architecture.md) for current Mermaid diagrams and supported commands. Known reliability gaps are recorded in the [hardening review](reviews/implementation-hardening.md#remaining-issues-and-limits).
 
 Related documents:
 
-- [plan.md](plan.md): decisions, traceability, spikes, phases, rollout, tests, and risks.
+- [architecture.md](architecture.md): focused Mermaid diagrams, current feature and command catalog, trust boundaries, data ownership, and source map.
+- [plan.md](plan.md): historical decisions, traceability, spikes, phases, rollout, tests, and risks.
 - [agent-transcripts.md](agent-transcripts.md): the JSONL formats and hook surfaces of pi, Claude Code, and Codex, as observed on this Mac.
 
 ## 1. Goal
@@ -70,7 +71,7 @@ Why at most once (D7): Telegram has no idempotency key. If rex-tg crashes after 
                                          (private chat, one topic per agent session)
 ```
 
-The core makes only outgoing connections, to Telegram and to Rex. It polls Telegram, so it needs no webhook, tunnel, or Tailscale setup. Its one listening port is the Mini App's (section 8.9a). It exists only when `[miniapp] url` is set, and a Tailscale Funnel (or another HTTPS address) reaches it.
+The core makes only outgoing connections, to Telegram and to Rex. It polls Telegram, so it needs no webhook, tunnel, or Tailscale setup. Its one listening port is the Mini App's (section 8.9a). It exists only when `[miniapp] url` is set. Use Tailscale Serve to reach it from your tailnet; Funnel is public and refused by default. See the [trust boundaries](architecture.md#trust-boundaries).
 
 ### 3.1 Components of the daemon
 
@@ -291,7 +292,7 @@ Rules for the hooks:
 
 - **No output.** The hook prints nothing on stdout or stderr. Claude Code adds the stdout of `SessionStart` and `UserPromptSubmit` hooks to the agent's context, so any output would leak into the conversation.
 - **Absolute path.** Hook entries call the binary by its absolute path, so they do not depend on `PATH`.
-- **Codex trust.** Codex trusts each hook by a hash of its entry, stored under a key that contains the entry's position, such as `hooks.json:session_start:0:0`. The installer appends rex-tg's entries at the end of each event's list, so the positions of existing entries stay the same. Codex then asks you once to trust the new entries (spike S3 confirms).
+- **Codex trust.** Codex trusts each hook by a hash of its entry, stored under a key that contains the entry's position, such as `hooks.json:session_start:0:0`. The installer appends rex-tg's entries at the end of each event's list, so the positions of existing entries stay the same. Start Codex and trust the new entries if prompted. The original S3 run did not validate the trust prompt or hook payloads at runtime; see section 14 for that evidence limit.
 - **Safe edits.** Other tools edit the same files. The installer finds its own entries by their exact command string, re-reads each file right before it writes, and writes through a temporary file and a rename. The plan's Rollout section has the full rules, including when `uninstall` must refuse.
 
 Hook events per runtime. This table is the full list of the hook entries that `rex-tg install` adds:
@@ -1028,7 +1029,7 @@ Housekeeping:
 ## 11. Security and privacy
 
 - **The bot can type into terminals.** Treat the Telegram account and the bot token like an SSH key. Turn on two-step verification in Telegram.
-- **Pairing.** `rex-tg login` stores the bot token, then shows a one-time code. You send `/start <code>` to the bot. The daemon saves your user ID and chat ID as the owner. Until then, the bot answers nobody. The code is random, works once, and expires after 10 minutes. Wrong codes are counted for each sender: a sender is locked after 5 wrong codes, even if the next code is right, and others can still pair, so a stranger cannot lock you out. A cap of 200 wrong codes for one code locks everyone. A wrong code gets no answer; a right code that expired gets an answer that says so. A new code (`rex-tg pair`) clears all counts.
+- **Pairing.** `rex-tg login` stores the bot token, then shows a one-time code. You send `/start <code>` to the bot. The daemon saves your user ID and chat ID as the owner. Until then, the bot answers nobody. The code is random, works once, and expires after 10 minutes. Wrong codes are counted for each sender: a sender is locked after 5 wrong codes, even if the next code is right. Other senders can still pair until the global cap of 200 wrong attempts for that code locks everyone. A wrong code gets no answer; a right code that expired gets an answer that says so. A new code (`rex-tg pair`) clears all counts.
 - **Allowlist.** After pairing, rex-tg accepts updates only from the owner's user ID in the owner's private chat. It drops everything else and logs only `update_id` and `from.id`.
 - **Token.** The bot token is stored in the macOS Keychain. It is never in the config file, the logs, or the dotfiles repository. `rex-tg login` runs `security add-generic-password -U -s rex-tg -a bot-token -w` with no value after `-w`, so `security` asks for the token, and the token never appears in a process list. The daemon reads it with `security find-generic-password`. Because `security` created the item, launchd can start the daemon without a Keychain dialog (Phase 1 checks this).
 - **Telegram is not end-to-end encrypted for bots.** Agent replies pass through Telegram's servers. rex-tg removes common secret formats before it sends text: API keys (OpenAI, Anthropic, Google, Stripe, npm), GitHub tokens, AWS keys, Slack tokens, private key blocks, JWTs, bot tokens, `Bearer` and `Basic` credentials, and the value of an assignment whose name ends in a secret word (`GITHUB_TOKEN=…`, `"api_key": "…"`, `password: …`; `tokenizer` or `max_tokens` do not count). The removal also runs on progress labels, screen captures, backfill, session titles, and topic names. It is a best effort, not a guarantee.

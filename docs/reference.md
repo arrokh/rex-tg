@@ -1,6 +1,10 @@
 # rex-tg reference
 
-This file has the details that the [README](../README.md) leaves out.
+This file has the details that the [README](../README.md) leaves out. For the full feature, CLI, Telegram, and button catalog plus component and recovery diagrams, see the [architecture and catalog guide](architecture.md).
+
+## On this page
+
+[Setup](#setup-details) · [Using rex-tg](#using-rex-tg) · [All settings](#configuration) · [Mini App](#mini-app) · [Voice](#voice-notes) · [Logs](#logs) · [Uninstall](#uninstall) · [Troubleshooting](#troubleshooting) · [Privacy](#privacy)
 
 ## Setup details
 
@@ -8,14 +12,14 @@ This file has the details that the [README](../README.md) leaves out.
 
 ```sh
 brew tap arrokh/rex-tg https://github.com/arrokh/rex-tg
-brew trust --formula arrokh/rex-tg/rex-tg   # Homebrew asks for this for a third-party tap
+brew trust --formula arrokh/rex-tg/rex-tg   # if your Homebrew version requires tap trust
 brew install rex-tg           # the newest release
 brew install --HEAD rex-tg    # or: build `main`
 ```
 
 Homebrew builds from source, so it needs Go (it installs it as a build tool).
 
-The repository is private. Homebrew gets it with `git clone`, so the tap and the install work for a GitHub account that has access, through your git login. If `brew tap` asks for a password, run `gh auth setup-git` once.
+Homebrew gets the tagged source with `git clone`. If repository access is restricted, your GitHub account must have access through your Git login; `gh auth setup-git` can configure Git to use an existing GitHub login. Public repository access does not require a project credential. The MIT license does not change repository visibility.
 
 `rex-tg install` writes the stable path `<prefix>/opt/rex-tg/bin/rex-tg`, not the versioned Cellar path. That path stays valid after an upgrade.
 
@@ -30,11 +34,7 @@ If you installed with `make install` before, move to the brew binary in two step
 
 To remove: run `rex-tg uninstall` first, then `brew uninstall rex-tg`.
 
-**Release steps.** The maintainer does these by hand:
-
-1. Tag and push: `git tag v0.1.0 && git push origin v0.1.0`.
-2. Run `make formula-release TAG=v0.1.0`. It prints the `url` lines: the git URL, the tag, and its commit.
-3. Put them into `Formula/rex-tg.rb` in place of the old ones, above `head`, then commit and push `main`. Users get the release with `brew update && brew upgrade rex-tg`.
+**Release steps (maintainers).** Test the release source and open a PR first. Tag the intended source commit, push the tag, and publish release notes with known limitations. Run `make formula-release TAG=<tag>`; put its exact URL, tag, and revision into `Formula/rex-tg.rb`. Include that formula update in a reviewed PR to `main`. Once it is merged, users get the release with `brew update && brew upgrade rex-tg`. Never move a published tag. Retain the root license and third-party notices when distributing source or binaries. See the [public-launch checklist](../CONTRIBUTING.md#maintainer-checklist-before-a-public-launch).
 
 ### Token and pairing code (`rex-tg login`)
 
@@ -69,7 +69,7 @@ Send the code after `rex-tg install`. The daemon reads the code only while it ru
 - The first valid code makes your account the owner.
 - The bot answers no one until pairing is done.
 - A code works once, for 10 minutes. Run `rex-tg pair` for a new code.
-- After 5 wrong codes from one Telegram account, that account cannot pair with this code. Other accounts still can, so a stranger cannot lock you out. `rex-tg pair` makes a new code and clears all counts.
+- After 5 wrong codes from one Telegram account, that account cannot pair with this code. After 200 wrong attempts across all accounts, pairing locks for everyone. Run `rex-tg pair` to create a new code and clear both counts.
 
 ### Doctor (`rex-tg doctor`)
 
@@ -97,9 +97,10 @@ Text that starts with `/` goes to the agent, except the commands below and the m
 | --- | --- |
 | `/info` | Shows the session, the pane, the state, and the settings. |
 | `/screen [lines]`, `/screen text [lines]` | Sends the pane's screen as a picture, or as text. See [`/screen`](#screen). |
+| `/files`, `/changes` | Opens the read-only file browser or available git comparisons in the Mini App. |
 | `/approve`, `/deny` | Answers the open prompt. |
 | `/esc`, `/interrupt`, `/key <keys>` | Presses Escape, stops the turn, or presses keys. |
-| `/force <text>` | Types text even when a prompt is open. |
+| `/force <text>` | Bypasses readiness and prompt waiting; owner, live-target, process, and pause checks remain. |
 | `/model [name]`, `/effort [level]` | Shows or changes the model and the thinking effort. See [`/model` and `/effort`](#model-and-effort). |
 | `/mode progress\|block\|final` | Sets how replies appear. |
 | `/verbose on\|full\|off` | Shows each tool call (`on`), and also its output (`full`). |
@@ -285,7 +286,7 @@ rex-tg adds a keyboard under the message box: 🎛 Panel, 🖥 Screen, 📂 File
 - `New agent` starts an agent in a new Rex tab, like `/new`. Pick the agent, then a folder: one from the list of folders, or one that you find with the folder explorer. The list has the folders in `[rex] new_folders` (📌) and the folders where agents ran recently. `✕` removes a recent folder from the list, and `Clean up` removes them all, also the ones further down; pinned folders stay. A removed folder also leaves `/new`'s buttons, and comes back when an agent starts a new session there. An agent that keeps running there does not bring it back. The explorer starts in your home folder and never leaves it. Tap a part of the path at the top to go back to it, or type in the filter to narrow the folders. A `GIT` badge marks a git repository. macOS asks on the Mac before rex-tg reads Desktop, Documents, or Downloads; until you click Allow there, such a folder does not open (see [Troubleshooting](#troubleshooting)). It shows folders only, not files, and a link to a folder only when the folder is inside your home folder too. `Hidden` also shows names that start with a dot. The panel's own bar at the bottom starts the agent, such as `Start Claude Code in ~/work/app`. It does not use Telegram's main button, because on iOS Telegram's bar is see-through and the page shows through it. The panel starts an agent only in a folder inside your home folder, or in one that `/new` offers; use `/new <agent> <folder>` for any other folder. The progress and the new topic come to the main chat. The panel goes to `Agents` and shows `Starting …` until the new agent is in the list; then it opens and marks that agent.
 - While typing is paused, the panel says so. `/pause` and `/unpause` stay chat commands, so init data that leaked cannot undo a `/pause`. The panel starts no agent while typing is paused.
 - Each tap acts at most once. The page sends a random id with each action, and rex-tg keeps the ids for a day, so a request that the network repeats does nothing a second time. When rex-tg cannot say yet how an action ended (it was busy, or the action still runs), the panel says so. Tap again to ask: the page sends the same id, so the action does not run twice.
-- The panel reads with the same signature as every page (24 hours). An action needs a signature from the last hour, so init data that leaked can change less. Close the panel and open it again with `/rt` when it says so.
+- Signed panel reads accept owner init data up to 24 hours old; signed actions need data from the last hour. Close and reopen with `/rt` if it expires. A keyboard-key launch uses the current key and allowed tailnet login instead; it can run validated panel actions too. `/rekey` revokes the key.
 - It needs the Mini App.
 
 ### Files and photos
@@ -469,7 +470,7 @@ Who may open a page:
 
 To turn the Mini App off, set `url = ""`, restart rex-tg, and run `tailscale serve --https=8443 off`.
 
-Upgrading from a setup with `tailscale funnel`: since the buttons carry a key, rex-tg refuses Funnel requests by default. Move the port to `serve`: `tailscale funnel --https=8443 off`, then `tailscale serve --bg --https=8443 http://127.0.0.1:8770`. The address stays the same. Turn on Tailscale on the phone. At the start, the log says `mini app: answers only requests from your tailnet`. To keep a public address anyway, set `tailnet_only = false`; then anyone who gets a button's address can read the pages.
+Upgrading from a setup with `tailscale funnel`: since the buttons carry a key, rex-tg refuses Funnel requests by default. Move the port to `serve`: `tailscale funnel --https=8443 off`, then `tailscale serve --bg --https=8443 http://127.0.0.1:8770`. The address stays the same. Turn on Tailscale on the phone. At the start, the log says `mini app: answers only requests from your tailnet`. Disabling `tailnet_only` removes the tailnet restriction. Anyone who obtains a current keyboard key can then read pages and run validated control-panel actions from outside the tailnet. Do not use that setting as a public-sharing feature.
 
 Answers are kept for 30 days, changes for 14, live screens, file browsers, changes views and the control panel for 7 days after the last `/screen`, `/files`, `/changes` or `/rt` that sent their button, and at most 500 pages in all. While the Mini App's server is not running, answers come whole in the chat.
 
@@ -479,11 +480,11 @@ A code block with a line longer than 80 characters does not fit a phone. It stay
 
 A table that is wider than a phone (more than 40 characters) becomes a list: one block per row, with the first cell in bold and `Column: value` for the others. A narrower table stays a monospace grid.
 
-Final answers go out in Telegram's rich message format (`[display] rich_messages`, on by default), so Telegram renders tables, code, and headings itself. An answer of up to 32768 characters goes as one rich message. If Telegram rejects one with a 400 error, rex-tg sends the answer again in its own format (Telegram HTML, with the tables as above): as one message when it is up to 4000 characters, else as a `.md` file. A rate limit (429) does not change the format: the answer waits, and it goes out as a rich message. Set `rich_messages = false` to always use rex-tg's own format. There, an answer longer than 16000 characters comes as a `.md` file. With the Mini App set up, an answer longer than `answer_preview` shows its start instead (see [Mini App](#mini-app)).
+Final answers go out in Telegram's rich message format (`[display] rich_messages`, on by default), so Telegram renders tables, code, and headings itself. An answer of up to 32768 characters goes as one rich message. If Telegram rejects one with a 400 error, rex-tg sends the answer again in its own format (Telegram HTML, with the tables as above): as one message when it fits one formatted part and at most 4000 UTF-16 units, else as a `.md` file. A rate limit (429) does not change the format: the answer waits, and it goes out as a rich message. Set `rich_messages = false` to always use rex-tg's own format. There, an answer longer than 16000 characters comes as a `.md` file. With the Mini App set up, an answer longer than `answer_preview` shows its start instead (see [Mini App](#mini-app)).
 
 ## Voice notes
 
-Voice notes need ffmpeg and whisper.cpp.
+Telegram voice notes and audio files use the same local transcription setup: ffmpeg and whisper.cpp.
 
 1. Install ffmpeg: `brew install ffmpeg`.
 2. Install whisper.cpp: `brew install whisper-cpp`. This adds the `whisper-cli` command.
@@ -498,7 +499,7 @@ model = "/Users/you/models/ggml-base.en.bin"   # absolute path; ~ is not expande
 language = "en"
 ```
 
-rex-tg converts a voice note to 16 kHz WAV with ffmpeg, and whisper-cli transcribes it. The bot replies with 🎤 and the text. The text then goes to the agent like any message.
+rex-tg converts a voice note or audio file to 16 kHz WAV with ffmpeg, and whisper-cli transcribes it. The bot replies with 🎤 and the text. The text then goes to the agent like any message.
 
 When voice is off, the bot replies `Voice notes need whisper.cpp; see the README.`
 
@@ -571,7 +572,7 @@ Some networks drop the route to Telegram for a minute or two, again and again. R
 
 - Replies pass through Telegram's servers. Bot chats are not end-to-end encrypted.
 - rex-tg removes common secret formats before it sends text: API keys, GitHub and AWS keys, Slack tokens, private key blocks, JWTs, Telegram bot tokens, and Bearer tokens. This is best effort.
-- The database keeps message text. rex-tg deletes sent messages after 30 days.
+- The database keeps message text. Housekeeping removes sent/skipped outbox rows older than 30 days, inbound/alert rows older than 30 days, and outbox rows for topics closed more than 30 days ago. Pending, failed, and unknown outbox rows of an open topic can remain longer. Upload files older than seven days are cleaned separately. None of this deletes Telegram's copies.
 - Only you can read the state folder and the spool folder.
-- Before rex-tg types, it checks that the sender is the owner, the topic is live, the agent is in front in its pane, and no permission prompt is open. `/force` skips only the last check.
+- Before ordinary typing, rex-tg checks the owner, live topic/session/pane binding, expected process, pause, readiness, and prompt state. `/force` bypasses readiness and prompt waiting, not owner, target, process, or pause checks.
 - rex-tg makes outgoing connections to Telegram and to Rex, and never starts a Rex server. Its one listening port is the Mini App's. It exists only when `[miniapp] url` is set (see [Mini App](#mini-app)).
