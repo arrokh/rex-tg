@@ -43,21 +43,17 @@ func (d *daemon) media(u telegram.Update, m *telegram.Message, th store.Thread) 
 		dir := filepath.Join(d.cfg.UploadDir(), fmt.Sprint(th.ID))
 		update, msg, caption := u.UpdateID, m.MessageID, strings.TrimSpace(m.Caption)
 		quoted := d.replyQuote(m, th)
+		f := fileRetry{FileID: fileID, Name: name, Size: size, Caption: caption, Quote: quoted}
 		d.spawn(func() {
 			path, err := d.download(fileID, dir, fmt.Sprintf("%d-%s", msg, name))
 			if err != nil {
 				if d.ctx.Err() == nil {
 					d.log.Warn("download file", "thread", th.ID, "err", err)
-					d.replyTopic(th, fmt.Sprintf("file:%d", update), fileFailText)
+					d.fileDownloadFailed(th, update, f, err)
 				}
 				return
 			}
-			text := path
-			if caption != "" {
-				text = caption + "\n" + path
-			}
-			text = inbound.WithReply(text, agentQuote(caption, quoted))
-			d.emit(evQueueText{threadID: th.ID, orig: update, tgMsg: msg, text: text, kind: "file", action: inbound.ActText})
+			d.emit(evQueueText{threadID: th.ID, orig: update, tgMsg: msg, text: filePrompt(path, f), kind: "file", action: inbound.ActText})
 		})
 	case m.Voice != nil || m.Audio != nil:
 		if !d.recorded(u, m, "voice", "", th.ID, store.InboundDone) {

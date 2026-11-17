@@ -239,6 +239,13 @@ func (d *daemon) onCallback(u telegram.Update) {
 	case quickReplyData:
 		d.quickReplyButton(u.UpdateID, cb, parts)
 		return
+	case fileRetryCallback:
+		if len(parts) == 2 {
+			if id, ok := arg(1); ok && id > 0 {
+				d.retryFileButton(u.UpdateID, cb, id)
+				return
+			}
+		}
 	case "o":
 		if id, ok := arg(1); ok {
 			var replyThread int64 // answer where the button was pressed

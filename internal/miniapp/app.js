@@ -72,8 +72,8 @@
   var id = params.get("p") || "";
   var goView = params.get("go") || "";
   var initData = tg ? tg.initData : "";
-  // The keyboard's buttons open this page with a key (k): it gives read-only
-  // access, and it is kept for the pages that follow.
+  // The keyboard's buttons open this page with a key (k): it authorizes reads
+  // and validated control-panel actions, and is kept for pages that follow.
   var key = params.get("k") || "";
   if (key) {
     try { sessionStorage.setItem("rex-tg.key", key); } catch (e) { /* the key stays in the links */ }
@@ -997,11 +997,6 @@
     var chipsRow = el("div", "schips");
     chipsRow.setAttribute("role", "group");
     chipsRow.setAttribute("aria-label", "Filter by state");
-    var roText = "View only. To change things, open the panel with /rt.";
-    var roBanner = el("div", "banner ro", roText);
-    roBanner.hidden = true;
-    roBanner.setAttribute("role", "status");
-    head.appendChild(roBanner);
     head.appendChild(banner);
     head.appendChild(seg);
     head.appendChild(chipsRow);
@@ -1069,28 +1064,6 @@
       var anyClosed = shown.some(function (a) { return !open[a.pane]; });
       expandAll.textContent = anyClosed ? "Expand all" : "Collapse all";
       expandAll.hidden = !shown.length;
-    }
-
-    // The panel opened with the keyboard's key only shows things: a control
-    // that acts is dimmed, and a tap says why.
-    function ro() { return !!(state && state.readonly); }
-    function blocked() {
-      if (!ro()) { return false; }
-      toast({ ok: false, message: roText });
-      return true;
-    }
-    // acting marks a control that posts an action.
-    function acting(b) {
-      b.classList.add("act");
-      if (ro()) { b.setAttribute("aria-disabled", "true"); }
-      return b;
-    }
-    function syncRO() {
-      roBanner.hidden = !ro();
-      document.body.classList.toggle("readonly", ro());
-      Array.prototype.forEach.call(document.querySelectorAll(".act"), function (b) {
-        if (ro()) { b.setAttribute("aria-disabled", "true"); } else { b.removeAttribute("aria-disabled"); }
-      });
     }
 
     // --- tabs and the Telegram buttons ---
@@ -1181,7 +1154,6 @@
     }
 
     function renameSheet(a) {
-      if (blocked()) { return; }
       openSheet("Rename " + (a.name || "agent"), function (box, close) {
         box.appendChild(el("p", "shint", "Renames the topic, the Rex pane and its tab." + (a.topic && a.topic.custom ? " Named by you." : "")));
         var input = el("input", "txt big");
@@ -1326,9 +1298,8 @@
         t.addEventListener("click", function () { hap("light"); openLink(a.topic.link); });
         acts2.appendChild(t);
       } else if (a.ready) {
-        var o = acting(button("Open topic", "btn primary"));
+        var o = button("Open topic", "btn primary");
         o.addEventListener("click", function () {
-          if (blocked()) { return; }
           hap("light");
           post({ op: "open", pane: a.pane }, c).then(function (r) { toast(r); refresh(); });
         });
@@ -1340,16 +1311,6 @@
         var b = button(icon + " " + text, "btn", text + " of " + nm);
         b.addEventListener("click", function () {
           hap("light");
-          if (ro()) {
-            // no action is posted: the launch opens the page (it only reads)
-            api("api/launch?go=" + encodeURIComponent(kindKey) + "&t=" + encodeURIComponent(a.topic.thread))
-              .then(function (r) {
-                if (r.page) { goPage(r.page); return; }
-                toast({ ok: false, message: r.error || "This page could not be opened." });
-              })
-              .catch(function (e) { toast({ ok: false, message: e.message || "This page could not be opened." }); });
-            return;
-          }
           post({ op: "page", pane: a.pane, kind: kindKey }, c).then(function (r) {
             if (r.page) { goPage(r.page); return; }
             toast(r);
@@ -1363,13 +1324,12 @@
         if (state.files) { pageBtn("📂", "Files", "files"); }
         if (state.changes) { pageBtn("📝", "Changes", "changes"); }
       }
-      var rn = acting(button("✏️ Rename", "btn", "Rename " + nm));
+      var rn = button("✏️ Rename", "btn", "Rename " + nm);
       rn.addEventListener("click", function () { hap("light"); renameSheet(a); });
       acts2.appendChild(rn);
       if (a.topic) {
-        var ul = acting(button("🔌 Unlink", "btn danger", "Unlink " + nm));
+        var ul = button("🔌 Unlink", "btn danger", "Unlink " + nm);
         ul.addEventListener("click", function () {
-          if (blocked()) { return; }
           hap("light");
           confirmAsk({ title: "Unlink this session?", message: "rex-tg stops mirroring this session; the topic stays as history.", ok: "Unlink", danger: true }, function () {
             post({ op: "unlink", thread: a.topic.thread }, c).then(function (r) { toast(r); refresh(); });
@@ -1459,7 +1419,7 @@
       function cardFor(a) {
         var calm = {};
         Object.keys(a).forEach(function (k) { if (k !== "since") { calm[k] = a[k]; } });
-        var sig = JSON.stringify([calm, state.files, state.changes, ro()]);
+        var sig = JSON.stringify([calm, state.files, state.changes]);
         var cd = cards[a.pane];
         // a card whose action runs is kept until it returns
         var busy = cd && cd.el.getAttribute("aria-busy") === "true";
@@ -1550,9 +1510,7 @@
     topicsView.appendChild(tfoot);
     tsearch.addEventListener("input", function () { tquery = tsearch.value.trim().toLowerCase(); drawTopics(); });
     treload.addEventListener("click", function () { hap("light"); refresh(); });
-    cleanBtn.classList.add("act");
     cleanBtn.addEventListener("click", function () {
-      if (blocked()) { return; }
       var n = (state.topics || []).filter(function (t) { return t.status !== "live"; }).length;
       confirmAsk({ title: "Clean up stopped topics?", message: "Unlink the " + n + " stopped topic" + (n === 1 ? "" : "s") + "? Each topic stays in Telegram as history.", ok: "Clean up", danger: true }, function () {
         hap("light");
@@ -1610,13 +1568,12 @@
       var op = button("↗ Open topic", "btn primary", "Open the topic " + nm);
       op.addEventListener("click", function () { hap("light"); openLink(t.link); });
       ac.appendChild(op);
-      var rn = acting(button("✏️ Rename", "btn", "Rename " + nm));
+      var rn = button("✏️ Rename", "btn", "Rename " + nm);
       if (!t.pane) { rn.disabled = true; rn.title = "Rename is off: the agent stopped."; }
       rn.addEventListener("click", function () { hap("light"); renameSheet({ pane: t.pane, name: t.name, topic: { name: t.name, custom: t.custom } }); });
       ac.appendChild(rn);
-      var ul = acting(button("🔌 Unlink", "btn danger", "Unlink " + nm));
+      var ul = button("🔌 Unlink", "btn danger", "Unlink " + nm);
       ul.addEventListener("click", function () {
-        if (blocked()) { return; }
         hap("light");
         confirmAsk({ title: "Unlink this topic?", message: "rex-tg stops mirroring this session; the topic stays as history.", ok: "Unlink", danger: true }, function () {
           post({ op: "unlink", thread: t.thread }, c).then(function (r) { toast(r); refresh(); });
@@ -1681,7 +1638,7 @@
         tbox.appendChild(e2);
       } else {
         list.forEach(function (t) {
-          var sig = JSON.stringify([t, ro()]);
+          var sig = JSON.stringify(t);
           var cd = tcards[t.thread];
           var busy = cd && cd.el.getAttribute("aria-busy") === "true";
           if (!cd || (cd.sig !== sig && !busy)) { cd = tcards[t.thread] = { sig: sig, el: topicCard(t) }; }
@@ -1771,13 +1728,10 @@
         }
         why.textContent = paused ? "⏸ Typing is paused, so a new agent cannot start. Send /unpause in the chat." : (!s ? "Pick an agent." : (!folder ? "Pick a folder." : ""));
         startBtn.textContent = text;
-        startBtn.disabled = !ready && !ro(); // in view-only mode a tap explains
+        startBtn.disabled = !ready;
       }
 
-      startBtn.classList.add("act");
-      cleanF.classList.add("act");
       function start() {
-        if (blocked()) { return; }
         var s = chosenStarter();
         if (!s || !folder || busy || (state && state.paused)) { return; }
         busy = true;
@@ -1835,9 +1789,8 @@
           m.addEventListener("click", function () { pick(f); load(f.path); });
           row.appendChild(m);
           if (!f.pinned) {
-            var x = acting(button("✕", "fx", "Remove " + f.shown + " from recent folders"));
+            var x = button("✕", "fx", "Remove " + f.shown + " from recent folders");
             x.addEventListener("click", function () {
-              if (blocked()) { return; }
               hap("light");
               post({ op: "forget_folder", path: f.path }, row).then(function (r) { toast(r); refresh(); });
             });
@@ -1853,7 +1806,6 @@
       }
       rmore.addEventListener("click", function () { showAllF = !showAllF; drawChips(); });
       cleanF.addEventListener("click", function () {
-        if (blocked()) { return; }
         hap("light");
         confirmAsk({ title: "Clean up recent folders?", message: "Remove all recent folders from the list? Pinned folders stay. A folder comes back when an agent runs there again.", ok: "Remove", danger: true }, function () {
           post({ op: "forget_folders" }, recent).then(function (r) { toast(r); refresh(); });
@@ -2002,7 +1954,6 @@
       drawTopics();
       if (!newPanel) { newPanel = buildNew(); setTab(tab); }
       newPanel.update();
-      syncRO();
     }
 
     function refresh() {

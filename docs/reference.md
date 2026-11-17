@@ -85,6 +85,10 @@ Doctor checks:
 
 ## Using rex-tg
 
+### Start from a terminal
+
+In a project folder, run `rex-tg new pi`, `rex-tg new claude`, `rex-tg new codex`, or `rex-tg new cux`. The command starts the agent in the current folder, in a tab under `[rex] new_session` (default `rex-tg`). `cux` must be installed. Arguments after the agent name are passed to it unchanged; for example, `rex-tg new cux --resume <session>` passes `--resume <session>` to cux. The daemon discovers the agent through its hook; use `/agents` in Telegram to open its topic. `rex-tg new --config FILE <agent> [agent args...]` uses another config file. If Rex does not confirm that it made the tab, check the session before running the command again; Rex may have started it anyway.
+
 ### Commands in a topic
 
 Text that starts with `/` goes to the agent, except the commands below and the main-chat commands (`/agents`, `/new`, and so on). `//name` sends `/name` to the agent. Such an agent command, like `/restart` or `/compact`, waits until the agent is idle. An agent does not record its slash commands as prompts, so the 👍 comes as soon as the command is typed.
@@ -114,7 +118,7 @@ Text that starts with `/` goes to the agent, except the commands below and the m
 rex-tg adds a keyboard under the message box: 🎛 Panel, 🖥 Screen, 📂 Files, 📝 Changes, and ✍️ Annotate. Telegram shows it in place of your normal keyboard; tap ⊞ in the message box to switch between the two.
 
 - With the Mini App on, each button opens its page at once: the control panel, the live screen, the file browser, the changes view, or [Annotate](#annotate). The page is for the topic where you tapped. In the main chat, the topic buttons first ask which topic.
-- Telegram gives a page that a keyboard button opens no signed login data. So each button's address carries a key that rex-tg made (64 random characters, kept in rex-tg's store). The key only shows pages. Anything that acts still needs Telegram: the control panel opened from a button is view only (open it with `/rt` to rename, unlink, or start agents), and Annotate sends notes back as your own message in the chat. A page opened with an old key says "This button is old".
+- Telegram gives a page that a keyboard button opens no signed login data. So each button's address carries a key that rex-tg made (64 random characters, kept in rex-tg's store). The key opens pages and authorizes validated actions in the control panel, including rename, unlink, and starting an agent; you do not need to open `/rt` first. Actions are still checked and claimed once. The key cannot pause or unpause typing, or send Annotate notes directly: Annotate sends them as your own message in the chat. A signed panel opened with Telegram init data still needs data from the last hour to act. A page opened with an old key says "This button is old"; `/rekey` revokes the old key.
 - `/rekey` makes a new key at once. The old buttons stop working, and the main chat and every open topic get new buttons in a short silent note. Use it when a button's address may have leaked.
 - Without the Mini App, the buttons are text: a tap sends the label as your message, and rex-tg reads it as `/rt`, `/screen`, `/files`, `/changes`, or `/annotate`. A button never goes to the agent as a prompt. The same text typed by hand counts as a tap too.
 - Only a new message can carry the keyboard. rex-tg sends it with the pairing answer, with the first message of each new topic, and with every `/help` answer.
@@ -153,7 +157,8 @@ rex-tg adds a keyboard under the message box: 🎛 Panel, 🖥 Screen, 📂 File
 
 - Tap the agent, then tap a folder or send a path such as `~/work/app`. cux is one of the agents when it is installed.
 - The folder buttons, at most 6: the folders in `[rex] new_folders` first, in their order, then the folder of this topic's agent, then the folders where agents ran recently, newest first. A folder that no longer exists is left out, and so is a recent folder that you removed in the control panel ([`/rt`](#rt-control-panel)), until an agent starts a new session there.
-- Every tab goes into one Rex session, `rex-tg` (`[rex] new_session`). rex-tg makes the session when it is missing. If an agent in it renames the session, rex-tg names it back within 30 seconds.
+- Every tab started by `/new` or `rex-tg new` goes into one Rex session, `rex-tg` (`[rex] new_session`). rex-tg makes the session when it is missing. If an agent in it renames the session, rex-tg tries to name it back at the next 30-second name check, no more than once every 10 minutes.
+- When the agent reports its session, rex-tg links its topic and queues the intro card before it posts the “Opened” link. The new topic is ready when you open it.
 - A tab is named after its folder and agent, such as `app · pi`. The tab follows its topic name: at link time, and at the 30-second name check when its label differs. When you (or an agent, with `rex window rename`) rename the tab, rex-tg keeps that name, and the topic takes it at the next name check. Rename the tab back to its `<folder> · <agent>` form, such as `app · pi`, and rex-tg names the tab and the topic again. When the topic has only the folder name, the tab keeps the `<folder> · <agent>` form. Two tabs with one name get ` #2`, ` #3`. Tabs in other Rex sessions are never renamed.
 - The agent starts as if you typed its name in a terminal, so your `~/.zshrc` applies.
 - If the agent asks something before it starts, such as "trust this folder?", the question comes to the chat with a button per answer. A button moves the cursor there and presses Enter. rex-tg checks the screen after each key.
@@ -285,7 +290,7 @@ rex-tg adds a keyboard under the message box: 🎛 Panel, 🖥 Screen, 📂 File
 
 ### Files and photos
 
-- Photos and files are downloaded up to `max_upload_mb` (20 MB). They are saved under the state folder, and their path is typed into the pane with your caption.
+- Photos and files are downloaded up to `max_upload_mb` (20 MB). They are saved under the state folder, and their path is typed into the pane with your caption. If a download fails, tap **↻ Retry download** on the error message. A failed retry offers the button again; a successful retry queues the file once.
 - Claude Code turns the path of an image into an attached image.
 - Stickers, videos, and other kinds get the reply `Only text is supported for now.`
 - Edited messages are not sent to the agent. The bot says so.
@@ -312,7 +317,7 @@ rate_burst = 5                          # Messages that may be sent at once abov
 [rex]
 cli = "/Applications/Rex Beta.app/Contents/Helpers/Rex Server.rex/Contents/MacOS/rex"  # Path to the rex CLI.
 scan_interval = "30s"                   # How often rex-tg scans the Rex panes, as a backup to Rex events.
-new_session = "rex-tg"                  # The Rex session where /new opens its tabs.
+new_session = "rex-tg"                  # The Rex session where /new and `rex-tg new` open tabs.
 new_folders = []                        # Folders that /new always offers first, such as ["~/work/app"].
 
 [agents]
@@ -453,7 +458,7 @@ Who may open a page:
 
 - **Only your tailnet.** With `tailnet_only = true` (the default), rex-tg answers a request only when `tailscale serve` brought it from a device of your tailnet. Tailscale marks such a request with the `Tailscale-User-Login` header, which it sets itself and removes when a client sends it. A request through Funnel has no such header and is refused, the page shell too. A tagged device has no user, so it cannot open the Mini App.
 - **Only you.** A page request carries the Mini App's init data, which Telegram signs for the account that opened it. rex-tg checks the signature with a key made from the bot token. It refuses a signature that is more than 24 hours old, or one that is not the owner's.
-- **Or the buttons' key, from your own Tailscale account.** A page opened from a button under the message box has no init data; it carries the buttons' key instead ([Buttons](#buttons-under-the-message-box)). The key works only from your own Tailscale logins, so in a shared tailnet another person's device cannot use it. rex-tg learns your login from a page that you open from a chat button (Telegram signs those), and, before it knows any, from the key's first use. `/rekey` forgets the learned logins. To name them yourself, set `tailnet_users = ["you@example.com"]` (the login that `tailscale status` shows, in any case); then only those work. In a tailnet that you share with other people, set `tailnet_users` before you turn on the Mini App or upgrade to 0.4.1: until rex-tg knows a login, the first device that uses the key is trusted. The key cannot act, but it can read everything the pages show: the agents and topics, the live screens, the agents' folders and files, the changes, the answers, and the folders of your home folder in the folder explorer. It can also keep Annotate notes as a draft (at most 20 wait at once); only your own message through Telegram sends them. Telegram sees the key, because it is in the buttons' addresses. Run `/rekey` if you think the key leaked.
+- **Or the buttons' key, from your own Tailscale account.** A page opened from a button under the message box has no init data; it carries the buttons' key instead ([Buttons](#buttons-under-the-message-box)). The key works only from your own Tailscale logins, so in a shared tailnet another person's device cannot use it. rex-tg learns your login from a page that you open from a chat button (Telegram signs those), and, before it knows any, from the key's first use. `/rekey` forgets the learned logins. To name them yourself, set `tailnet_users = ["you@example.com"]` (the login that `tailscale status` shows, in any case); then only those work. In a tailnet that you share with other people, set `tailnet_users` before you turn on the Mini App or upgrade to 0.4.1: until rex-tg knows a login, the first device that uses the key is trusted. The key can read everything the pages show: the agents and topics, the live screens, the agents' folders and files, the changes, the answers, and the folders of your home folder in the folder explorer. It can also authorize validated control-panel actions; each action is claimed once, and `/rekey` revokes the key. It cannot pause or unpause typing, or send Annotate notes directly. Annotate can keep notes as a draft (at most 20 wait at once); only your own message through Telegram sends them. Telegram sees the key, because it is in the buttons' addresses. Run `/rekey` if you think the key leaked.
 - **Only through Tailscale on this Mac.** With `tailnet_only`, `listen` must be `127.0.0.1` or `[::1]`: another address would let devices on your network reach the server directly and fake Tailscale's header. rex-tg then keeps the Mini App off, and the log and `rex-tg doctor` say why.
 - A refused request is logged as `mini app: refused requests`, with the reason, at most once a minute. A phone outside the tailnet gets a page that says "Turn on Tailscale".
 

@@ -2,6 +2,7 @@ package daemon_test
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -127,8 +128,11 @@ func TestNewStartsAnAgentAndOpensItsTopic(t *testing.T) {
 		}
 		return false
 	})
-	e.waitText(thread, "Linked")
-	e.waitText(0, "Opened app")
+	intro := e.waitText(thread, "Linked")
+	opened := e.waitText(0, "Opened app")
+	if intro.ID >= opened.ID {
+		t.Fatalf("the open link appeared before the topic intro: intro #%d, link #%d", intro.ID, opened.ID)
+	}
 
 	// The old folder button only says that the request is over.
 	e.pressButton(q, folder)
@@ -169,6 +173,70 @@ func TestNewStartsAnAgentAndOpensItsTopic(t *testing.T) {
 	if want := []string{"window", "rename", "-s", "S2", "W2", "Build the login page"}; !reflect.DeepEqual(args, want) {
 		t.Fatalf("rex %q,\nwant %q", args, want)
 	}
+}
+
+func TestTopicSetupFailureClosesTheUninitializedTopic(t *testing.T) {
+	e := newEnv(t)
+	e.seedOwner()
+	p := e.newPi("pi-intro-failure")
+	p.User("start")
+	p.Final("ready")
+	e.start()
+	e.hookPi(p, "startup")
+	e.say(0, "/agents")
+	list := e.waitText(0, "Active agents")
+	open := buttonData(list, "Open")
+	if open == "" {
+		t.Fatalf("no Open button: %+v", list.Markup)
+	}
+
+	// Fail only the intro insert. The rest of the database stays usable, so
+	// setup must close the linked topic instead of starting its tailer.
+	db, err := sql.Open("sqlite", e.cfg.DBPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = db.Exec(`CREATE TRIGGER reject_topic_intro BEFORE INSERT ON outbox
+		WHEN NEW.event_key LIKE 'intro:%' BEGIN SELECT RAISE(ABORT, 'blocked intro'); END`)
+	_ = db.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	e.pressButton(list, open)
+	var thread int64
+	e.waitFor("the new topic", func() bool {
+		topics := e.tg.Topics(chatID)
+		if len(topics) == 0 {
+			return false
+		}
+		thread = topics[0].ThreadID
+		return thread != 0
+	})
+	e.waitFor("the setup error", func() bool {
+		for _, text := range e.callbackTexts() {
+			if strings.Contains(text, "Could not finish setting up") {
+				return true
+			}
+		}
+		return false
+	})
+	st := e.peek()
+	e.waitFor("the linked topic to be closed", func() bool {
+		th, ok, err := st.ThreadByTopic(context.Background(), chatID, thread)
+		return err == nil && ok && th.Status == store.ThreadClosed
+	})
+	e.waitFor("the Telegram topic to be closed", func() bool {
+		for _, topic := range e.tg.Topics(chatID) {
+			if topic.ThreadID == thread {
+				return topic.Closed
+			}
+		}
+		return false
+	})
+	e.never("an Opened link or an intro in the failed topic", 250*time.Millisecond, func() bool {
+		return e.hasText(0, "Opened") || len(e.botMessages(thread)) > 0
+	})
 }
 
 // The question's message arrived, but Telegram's answer to the send was

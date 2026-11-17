@@ -122,6 +122,45 @@ func TestEnqueue(t *testing.T) {
 	}
 }
 
+func TestEnqueueWithInboundBodyIsAtomic(t *testing.T) {
+	s := newStore(t)
+	th, _ := topic(t, s, 1)
+	in := Inbound{
+		UpdateID: 81, ChatID: 100, MessageThreadID: 1, TGMessageID: 810, FromID: 7,
+		Kind: "file", ThreadID: th.ID, State: InboundDone, CreatedAt: t0,
+	}
+	if !must(s.InsertInbound(ctx, in)) {
+		t.Fatal("inbound not inserted")
+	}
+	it := OutboxItem{ThreadID: th.ID, Key: "file-retry:81:0", Kind: "file-retry",
+		Parts: []PartContent{{Content: "retry", Format: FormatHTML}}}
+	id, inserted, err := s.EnqueueWithInboundBody(ctx, in.UpdateID, `{"v":1}`, it)
+	noErr(t, err)
+	if !inserted {
+		t.Fatal("notice not inserted")
+	}
+	if got := must(s.OutboxRow(ctx, id)); got.Parts[0].Content != "retry" {
+		t.Fatalf("outbox row = %+v", got)
+	}
+	got, found := must2(s.InboundByID(ctx, in.UpdateID))
+	if !found || got.Body != `{"v":1}` {
+		t.Fatalf("inbound = %+v, found %v", got, found)
+	}
+
+	bad := item(th.ID, "broken", "notice")
+	bad.Parts[0].Format = "unknown"
+	if _, _, err := s.EnqueueWithInboundBody(ctx, in.UpdateID, `{"v":2}`, bad); err == nil {
+		t.Fatal("invalid notice accepted")
+	}
+	got, found = must2(s.InboundByID(ctx, in.UpdateID))
+	if !found || got.Body != `{"v":1}` {
+		t.Fatalf("failed enqueue changed inbound = %+v, found %v", got, found)
+	}
+	if _, found, err := s.OutboxIDByKey(ctx, th.ID, "broken"); err != nil || found {
+		t.Fatalf("failed enqueue left an outbox row: found %v, err %v", found, err)
+	}
+}
+
 func TestNextPartsOrderingAcrossTopics(t *testing.T) {
 	s := newStore(t)
 	th1, _ := topic(t, s, 1)

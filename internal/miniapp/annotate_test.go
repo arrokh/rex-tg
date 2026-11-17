@@ -89,9 +89,9 @@ func (c caller) do(method, path string, hdr map[string]string, body string) (int
 	return res.StatusCode, out
 }
 
-// The keyboard's key opens pages but acts on nothing; a wrong key opens
-// nothing.
-func TestKeyOnlyShows(t *testing.T) {
+// The keyboard's key opens pages and can run validated panel actions; a wrong
+// key opens nothing, and the key does not waive action validation.
+func TestKeyCanAct(t *testing.T) {
 	s, fc, _, _ := newKeyServer(t)
 	srv := httptest.NewServer(s.Handler())
 	defer srv.Close()
@@ -101,19 +101,30 @@ func TestKeyOnlyShows(t *testing.T) {
 	if code, body := c.do("GET", "/api/page?id=a1", key, ""); code != http.StatusOK || !strings.Contains(body["html"].(string), "hello") {
 		t.Fatalf("a page with the key: %d %v", code, body)
 	}
-	if code, body := c.do("GET", "/api/control?id=c1", key, ""); code != http.StatusOK || body["readonly"] != true {
+	if code, body := c.do("GET", "/api/control?id=c1", key, ""); code != http.StatusOK || body["readonly"] != nil {
 		t.Fatalf("the panel with the key: %d %v", code, body)
 	}
 	action := `{"op":"open","act":"0123456789abcdef","pane":3}`
-	code, body := c.do("POST", "/api/control/do?id=c1", map[string]string{"X-Rex-Key": testKey, "Content-Type": "application/json"}, action)
-	if msg, _ := body["error"].(string); code != http.StatusForbidden || !strings.Contains(msg, "View only") || len(fc.did) != 0 {
+	jsonKey := map[string]string{"X-Rex-Key": testKey, "Content-Type": "application/json"}
+	if code, body := c.do("POST", "/api/control/do?id=c1", jsonKey, action); code != http.StatusOK || body["ok"] != true || len(fc.did) != 1 {
 		t.Fatalf("an action with the key: %d %v, ran %d", code, body, len(fc.did))
 	}
-	code, body = c.do("GET", "/api/page?id=a1", map[string]string{"X-Rex-Key": "wrong"}, "")
+	for _, body := range []string{`{"op":"wipe","act":"0123456789abcdef"}`, `{"op":"open","act":"short","pane":3}`, `{"op":"open","act":"0123456789abcdef","pane":3,"extra":1}`, `{"op":"notes","act":"0123456789abcdef","thread":7,"conv":5,"text":"x"}`} {
+		if code, _ := c.do("POST", "/api/control/do?id=c1", jsonKey, body); code != http.StatusBadRequest {
+			t.Errorf("invalid keyed action %s: %d", body, code)
+		}
+	}
+	if len(fc.did) != 1 {
+		t.Fatalf("an invalid keyed action ran: %+v", fc.did)
+	}
+	if code, body := c.do("POST", "/api/control/do?id=c1", map[string]string{"X-Rex-Key": "wrong", "Content-Type": "application/json"}, action); code != http.StatusForbidden || len(fc.did) != 1 {
+		t.Fatalf("an action with a wrong key: %d %v, ran %d", code, body, len(fc.did))
+	}
+	code, body := c.do("GET", "/api/page?id=a1", map[string]string{"X-Rex-Key": "wrong"}, "")
 	if msg, _ := body["error"].(string); code != http.StatusForbidden || !strings.Contains(msg, "/help") {
 		t.Fatalf("a wrong key: %d %v", code, body)
 	}
-	// Signed init data still acts, and is not read-only.
+	// Signed init data still opens the panel and can act.
 	owner := map[string]string{"X-Telegram-Init-Data": sign(t, fakeToken, fields(42, time.Now()))}
 	if code, body := c.do("GET", "/api/control?id=c1", owner, ""); code != http.StatusOK || body["readonly"] != nil {
 		t.Fatalf("the panel signed: %d %v", code, body)
@@ -280,7 +291,7 @@ func (f *fakeLogins) KeyLoginOK(key, login string) bool { return key == testKey 
 // signed request teaches the owner's login; a device outside the tailnet
 // gets a page that says what to do, not raw JSON.
 func TestKeyOnlyFromTheOwnersLogin(t *testing.T) {
-	s, _, _, _ := newKeyServer(t)
+	s, fc, _, _ := newKeyServer(t)
 	fl := &fakeLogins{allow: map[string]bool{"me@example.com": true}}
 	s.WithTailnetOnly(true).WithLogins(fl)
 	srv := httptest.NewServer(s.Handler())
@@ -292,6 +303,16 @@ func TestKeyOnlyFromTheOwnersLogin(t *testing.T) {
 	code, body := c.do("GET", "/api/page?id=a1", map[string]string{"X-Rex-Key": testKey, "Tailscale-User-Login": "coworker@example.com"}, "")
 	if msg, _ := body["error"].(string); code != http.StatusForbidden || !strings.Contains(msg, "your own Tailscale account") {
 		t.Errorf("another login: %d %v", code, body)
+	}
+	action := `{"op":"open","act":"0123456789abcdef","pane":3}`
+	jsonHeaders := func(login string) map[string]string {
+		return map[string]string{"X-Rex-Key": testKey, "Tailscale-User-Login": login, "Content-Type": "application/json"}
+	}
+	if code, _ := c.do("POST", "/api/control/do?id=c1", jsonHeaders("coworker@example.com"), action); code != http.StatusForbidden || len(fc.did) != 0 {
+		t.Errorf("action from another login: %d, ran %d", code, len(fc.did))
+	}
+	if code, body := c.do("POST", "/api/control/do?id=c1", jsonHeaders("me@example.com"), action); code != http.StatusOK || body["ok"] != true || len(fc.did) != 1 {
+		t.Errorf("action from the owner's login: %d %v, ran %d", code, body, len(fc.did))
 	}
 	signed := map[string]string{"X-Telegram-Init-Data": sign(t, fakeToken, fields(42, time.Now())), "Tailscale-User-Login": "phone@example.com"}
 	if code, _ := c.do("GET", "/api/page?id=a1", signed, ""); code != http.StatusOK || len(fl.owners) != 1 || fl.owners[0] != "phone@example.com" {

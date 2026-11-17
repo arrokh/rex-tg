@@ -557,7 +557,17 @@ func (d *daemon) openTopic(paneID, replyThread int64, answer func(text string, a
 			// topic is closed before the session is linked to the new one.
 			d.emit(evSender{sender.Event{Kind: sender.ThreadGone, ThreadID: gone}})
 		}
-		d.emit(evTopicCreated{chatID: chat, threadID: ft.MessageThreadID, name: name, convID: conv.ID, title: title})
+		ready := make(chan bool, 1)
+		d.emit(evTopicCreated{chatID: chat, threadID: ft.MessageThreadID, name: name, convID: conv.ID, title: title, ready: ready})
+		select {
+		case initialized := <-ready:
+			if !initialized {
+				answer("Could not finish setting up the topic. Use /agents to open it.", true)
+				return
+			}
+		case <-ctx.Done():
+			return
+		}
 		answer("Topic created", false)
 		d.say(chat, replyThread, "🔗 Opened "+format.Escape(noAutoLink(name)), linkMarkup("Open topic", d.topicLink(ft.MessageThreadID)))
 	})
@@ -591,22 +601,36 @@ func linkMarkup(label, url string) *telegram.InlineKeyboardMarkup {
 	return &telegram.InlineKeyboardMarkup{InlineKeyboard: [][]telegram.InlineKeyboardButton{{{Text: "↗ " + label, URL: url}}}}
 }
 
+// closeForumTopic closes a Telegram topic that could not be linked or initialized.
+func (d *daemon) closeForumTopic(chatID, threadID int64) {
+	d.spawn(func() {
+		if err := d.snd.Call(sender.PriorityEdit, func(ctx context.Context, tg *telegram.Client) error {
+			return tg.CloseForumTopic(ctx, chatID, threadID)
+		}); err != nil && d.ctx.Err() == nil {
+			d.log.Warn("close unfinished topic", "thread", threadID, "err", err)
+		}
+	})
+}
+
 // onTopicCreated links the new topic and posts the intro card and backfill.
+// It acknowledges setup only after the intro is durably in the outbox, so the
+// sender cannot publish the source-chat link before the topic is initialized.
 func (d *daemon) onTopicCreated(e evTopicCreated) {
+	ready := false
+	if e.ready != nil {
+		defer func() { e.ready <- ready }()
+	}
 	ctx := d.ctx
 	conv, err := d.st.Conversation(ctx, e.convID)
 	if err != nil {
 		d.log.Warn("link topic: conversation", "err", err)
+		d.closeForumTopic(e.chatID, e.threadID)
 		return
 	}
 	th, err := d.st.LinkTopic(ctx, e.chatID, e.threadID, conv.ID, e.name, d.now())
 	if err != nil {
 		d.log.Warn("link topic", "err", err)
-		d.spawn(func() {
-			_ = d.snd.Call(sender.PriorityEdit, func(ctx context.Context, tg *telegram.Client) error {
-				return tg.CloseForumTopic(ctx, e.chatID, e.threadID)
-			})
-		})
+		d.closeForumTopic(e.chatID, e.threadID)
 		return
 	}
 	// A new topic starts in the configured display mode.
@@ -617,12 +641,19 @@ func (d *daemon) onTopicCreated(e evTopicCreated) {
 			th.Mode = m
 		}
 	}
-	d.tracker(th)
-	d.dirty[th.ID] = true
-	d.enqueue(store.OutboxItem{
+	if !d.enqueue(store.OutboxItem{
 		ThreadID: th.ID, Key: fmt.Sprintf("intro:%d", th.ID), Kind: "notice", Silent: true,
 		Parts: []store.PartContent{{Content: d.introCard(th, conv, e.title), Format: store.FormatHTML}},
-	})
+	}) {
+		// A linked topic without an intro could receive transcript output before
+		// the user can open it. Close it and let /agents create a fresh one.
+		d.closeThread(th.ID)
+		d.closeForumTopic(e.chatID, e.threadID)
+		return
+	}
+	ready = true
+	d.tracker(th)
+	d.dirty[th.ID] = true
 	if err := d.startTailer(conv, th.ID, registry.TailStart{AtEnd: true, Backfill: true}); err != nil {
 		d.log.Warn("start tailer", "thread", th.ID, "err", err)
 	}

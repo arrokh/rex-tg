@@ -1,7 +1,13 @@
 package daemon
 
 import (
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"rex-tg/internal/rex"
@@ -17,7 +23,60 @@ import (
 // fights a person who renames it on purpose (set rex.new_session then). Tabs
 // of other sessions stay the user's.
 
-const newSessionKey = "new_session_id"
+const (
+	// RexNewSessionKey stores the ID of the Rex session where new agents go.
+	RexNewSessionKey = "new_session_id"
+	newSessionKey    = RexNewSessionKey
+)
+
+// NewAgentTabLabel is the tab label shared by the Telegram and CLI launchers.
+func NewAgentTabLabel(dir, agent string) string { return tabLabel(dir, agent) }
+
+// WithNewSessionLock serializes session lookup and creation between the daemon
+// and `rex-tg new`, so simultaneous first launches still share one session.
+func WithNewSessionLock(ctx context.Context, stateDir string, f func() error) error {
+	if f == nil {
+		return errors.New("new session: no operation")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(stateDir, 0o700); err != nil {
+		return fmt.Errorf("new session: create state folder: %w", err)
+	}
+	path := filepath.Join(stateDir, "new-session.lock")
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR|syscall.O_NOFOLLOW, 0o600)
+	if err != nil {
+		return fmt.Errorf("new session: open lock: %w", err)
+	}
+	if err := file.Chmod(0o600); err != nil {
+		_ = file.Close()
+		return fmt.Errorf("new session: secure lock: %w", err)
+	}
+	defer file.Close()
+
+	tick := time.NewTicker(25 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		err = syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+		if err == nil {
+			break
+		}
+		if !errors.Is(err, syscall.EWOULDBLOCK) && !errors.Is(err, syscall.EAGAIN) {
+			return fmt.Errorf("new session: lock: %w", err)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-tick.C:
+		}
+	}
+	defer syscall.Flock(int(file.Fd()), syscall.LOCK_UN)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return f()
+}
 
 // renameBackEvery is the least time between two renames back of the session.
 const renameBackEvery = 10 * time.Minute

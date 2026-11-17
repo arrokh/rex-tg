@@ -32,6 +32,8 @@ type Env struct {
 	Stdout, Stderr io.Writer
 	Getenv         func(string) string
 	Home           string
+	// Getwd returns the folder for `rex-tg new`.
+	Getwd func() (string, error)
 	// ConfigPath overrides the default <Home>/.config/rex-tg/config.toml.
 	ConfigPath string
 	Now        func() time.Time
@@ -66,6 +68,9 @@ func (e Env) withDefaults() Env {
 	}
 	if e.Getenv == nil {
 		e.Getenv = os.Getenv
+	}
+	if e.Getwd == nil {
+		e.Getwd = os.Getwd
 	}
 	if e.Now == nil {
 		e.Now = time.Now
@@ -167,6 +172,8 @@ Usage: rex-tg <command> [flags]
 Commands:
   login [--token-stdin]   store the bot token in the Keychain, check it, and pair
   pair                    print a new pairing code for /start
+  new [--config F] <pi|cux|claude|codex> [agent args...]
+                          start in this folder; pass later arguments unchanged
   install [--only pi|claude|codex] [--no-load]
                           add the hooks, the pi extension, and the launchd agent
   uninstall [--only pi|claude|codex] [--force] [--keep-launchd]
@@ -196,6 +203,8 @@ func run(ctx context.Context, args []string, env Env) int {
 		return loginCmd(ctx, rest, env)
 	case "pair":
 		return pairCmd(ctx, rest, env)
+	case "new":
+		return newCmd(ctx, rest, env)
 	case "install":
 		return installCmd(ctx, rest, env)
 	case "uninstall":

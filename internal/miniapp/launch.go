@@ -9,9 +9,9 @@ import (
 // Mini App that a keyboard button opens no init data ("It is empty if the
 // Mini App was launched from a keyboard button", core.telegram.org/bots/
 // webapps), so such a button's address carries a key instead
-// (app?k=<key>&go=<view>[&t=<thread>]). The key only shows: anything that
-// acts still needs Telegram's signature, or comes back through Telegram as
-// the owner's own message (Annotate's sendData).
+// (app?k=<key>&go=<view>[&t=<thread>]). The key authorizes reads and validated
+// control-panel actions; Annotate notes still need the owner's own message
+// through Telegram (sendData).
 
 // Views that a keyboard button opens.
 const (

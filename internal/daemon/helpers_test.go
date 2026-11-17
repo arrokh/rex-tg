@@ -584,6 +584,7 @@ func (e *env) openTopic() int64 {
 	if data == "" {
 		e.t.Fatalf("no open button in the agents list: %+v", list.Markup)
 	}
+	beforeOpen := len(e.botMessages(0))
 	e.pressButton(list, data)
 	var thread int64
 	e.waitFor("the topic", func() bool {
@@ -595,6 +596,17 @@ func (e *env) openTopic() int64 {
 		return true
 	})
 	e.waitText(thread, "Linked")
+	// The Opened link now follows the durably queued topic intro, so wait for
+	// both before tests inject the next Telegram send outcome.
+	e.waitFor("the topic's Opened link", func() bool {
+		messages := e.botMessages(0)
+		for _, m := range messages[beforeOpen:] {
+			if strings.Contains(m.Text, "Opened") {
+				return true
+			}
+		}
+		return false
+	})
 	return thread
 }
 

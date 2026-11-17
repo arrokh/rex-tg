@@ -133,6 +133,30 @@ func (s *Store) Enqueue(ctx context.Context, item OutboxItem) (int64, bool, erro
 	return id, ok, nil
 }
 
+// EnqueueWithInboundBody stores retry metadata and its notice in one
+// transaction, so a stop cannot leave the update retryable without telling
+// the owner, or tell the owner about a button that has no metadata.
+func (s *Store) EnqueueWithInboundBody(ctx context.Context, updateID int64, body string, item OutboxItem) (int64, bool, error) {
+	var id int64
+	var ok bool
+	now := s.now()
+	err := s.tx(ctx, func(tx *sql.Tx) error {
+		res, err := tx.ExecContext(ctx, `UPDATE inbound SET body=? WHERE update_id=?`, body, updateID)
+		if err != nil {
+			return fmt.Errorf("store: set inbound body: %w", err)
+		}
+		if err := affected(res, fmt.Sprintf("store: inbound %d", updateID)); err != nil {
+			return err
+		}
+		id, ok, err = insertItem(ctx, tx, item, now)
+		return err
+	})
+	if err != nil {
+		return 0, false, err
+	}
+	return id, ok, nil
+}
+
 const partCols = `p.outbox_id, p.part, o.thread_id, t.chat_id, t.message_thread_id, o.kind, o.event_key,
 	p.content, p.format, p.filename, o.silent, p.state, p.tg_message_id, p.floor_id, p.checked`
 

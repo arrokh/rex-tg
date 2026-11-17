@@ -146,6 +146,9 @@ func installed(home, name string) bool {
 	return false
 }
 
+// HasProgram checks the same locations that make cux available to /new.
+func HasProgram(home, name string) bool { return installed(home, name) }
+
 // agentKeys is "pi|claude|codex", for help texts.
 func agentKeys(list []newAgent) string {
 	keys := make([]string, len(list))
@@ -683,28 +686,34 @@ var errNoRex = errors.New("rex sessions not listed")
 
 // startTab opens a tab that runs the agent, in the Rex session for /new
 // (rex.new_session), or in a new session of that name (worker). in says
-// where, as HTML. Starts run one at a time, so two starts make one session.
+// where, as HTML. A mutex and state-folder lock serialize its session lookup
+// and creation with other daemon and CLI starts.
 func (d *daemon) startTab(a newAgent, dir string) (st rex.Started, in string, err error) {
 	d.newMu.Lock()
 	defer d.newMu.Unlock()
-	sessions, err := d.rx.Sessions(d.ctx)
-	if err != nil {
-		d.log.Warn("new: list sessions", "err", err)
-		return rex.Started{}, "", errNoRex
-	}
 	label := strings.TrimSpace(d.cfg.Rex.NewSession)
 	tab := rex.Tab{Label: tabLabel(dir, a.key), CWD: dir, Command: a.command}
-	if s, ok := d.ownSession(sessions); ok {
-		// Found by its ID when an agent renamed it; the name check names it
-		// back (keepSessionName).
-		st, err = d.rx.NewWindow(d.ctx, s.ID, tab)
-		return st, "a new tab <b>" + esc(tab.Label) + "</b> of the Rex session <b>" + esc(label) + "</b>", err
-	}
-	st, err = d.rx.NewSession(d.ctx, label, tab)
-	if err == nil {
-		d.keepSessionID(st.SessionID)
-	}
-	return st, "the tab <b>" + esc(tab.Label) + "</b> of the new Rex session <b>" + esc(label) + "</b>", err
+	in = "the tab <b>" + esc(tab.Label) + "</b> of the new Rex session <b>" + esc(label) + "</b>"
+	err = WithNewSessionLock(d.ctx, d.cfg.State.Dir, func() error {
+		sessions, err := d.rx.Sessions(d.ctx)
+		if err != nil {
+			d.log.Warn("new: list sessions", "err", err)
+			return errNoRex
+		}
+		if s, ok := d.ownSession(sessions); ok {
+			// Found by its ID when an agent renamed it; the name check names it
+			// back (keepSessionName).
+			in = "a new tab <b>" + esc(tab.Label) + "</b> of the Rex session <b>" + esc(label) + "</b>"
+			st, err = d.rx.NewWindow(d.ctx, s.ID, tab)
+			return err
+		}
+		st, err = d.rx.NewSession(d.ctx, label, tab)
+		if err == nil {
+			d.keepSessionID(st.SessionID)
+		}
+		return err
+	})
+	return st, in, err
 }
 
 // awaitAgent waits until the new agent reports its session, then has the

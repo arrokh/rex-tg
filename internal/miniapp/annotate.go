@@ -15,8 +15,8 @@ import (
 // into one message. To send it to the agent, the page keeps it as a draft
 // here and then hands the draft's id to Telegram (WebApp.sendData): the bot
 // gets it as the owner's own message, which Telegram vouches for. A draft
-// alone sends nothing, so the keyboard's key, which only shows, cannot type
-// into a pane.
+// alone sends nothing, so the keyboard's key cannot submit Annotate notes or
+// type into a pane.
 
 // annotatePage is how many answers one request returns.
 const annotatePage = 10

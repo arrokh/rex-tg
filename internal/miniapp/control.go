@@ -29,16 +29,15 @@ const KindControl = "control"
 
 // ControlState is what the control panel shows.
 type ControlState struct {
-	Paused   bool           `json:"paused"`             // /pause: nothing is typed into panes (the panel only shows it)
-	Agents   []ControlAgent `json:"agents"`             // the agents in Rex panes, the ones that wait for you first
-	Starters []Starter      `json:"starters"`           // the agents that "New agent" can start
-	Folders  []Folder       `json:"folders"`            // folders for a new agent: the pinned ones, then recent ones
-	Home     Folder         `json:"home"`               // where the folder explorer starts
-	Topics   []TopicRow     `json:"topics"`             // every topic that is not closed, live or offline
-	Files    bool           `json:"files"`              // OpPage PageFiles is on ([miniapp] files)
-	Changes  bool           `json:"changes"`            // OpPage PageChanges is on ([miniapp] changes)
-	At       string         `json:"at"`                 // when it was read, "15:04:05"
-	ReadOnly bool           `json:"readonly,omitempty"` // opened with the keyboard's key: actions need /rt
+	Paused   bool           `json:"paused"`   // /pause: nothing is typed into panes (the panel only shows it)
+	Agents   []ControlAgent `json:"agents"`   // the agents in Rex panes, the ones that wait for you first
+	Starters []Starter      `json:"starters"` // the agents that "New agent" can start
+	Folders  []Folder       `json:"folders"`  // folders for a new agent: the pinned ones, then recent ones
+	Home     Folder         `json:"home"`     // where the folder explorer starts
+	Topics   []TopicRow     `json:"topics"`   // every topic that is not closed, live or offline
+	Files    bool           `json:"files"`    // OpPage PageFiles is on ([miniapp] files)
+	Changes  bool           `json:"changes"`  // OpPage PageChanges is on ([miniapp] changes)
+	At       string         `json:"at"`       // when it was read, "15:04:05"
 }
 
 // ControlAgent is an agent in a Rex pane.
@@ -353,7 +352,6 @@ func (s *Server) controlState(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	st.At = s.now().Format("15:04:05")
-	st.ReadOnly = s.keyed(r)
 	_ = json.NewEncoder(w).Encode(st)
 }
 
@@ -388,19 +386,18 @@ func (s *Server) controlFolders(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(l)
 }
 
-// controlDo runs an action. It takes JSON only, so a form on another site
-// cannot send one; the init data header is needed anyway.
+// controlDo runs an action. A valid owner's Telegram signature or keyboard
+// key is required; signed actions must be fresh. It takes JSON only, so a
+// form on another site cannot send one.
 func (s *Server) controlDo(w http.ResponseWriter, r *http.Request) {
 	if !s.controlAllowed(w, r) {
 		return
 	}
-	if s.keyed(r) {
-		http.Error(w, `{"error":"View only. Open the panel with /rt to change things."}`, http.StatusForbidden)
-		return
-	}
-	if _, err := CheckInitData(r.Header.Get("X-Telegram-Init-Data"), s.secret, s.now(), ActMaxAge); err != nil {
-		http.Error(w, `{"error":"This panel was opened more than an hour ago. Close it and open it again with /rt."}`, http.StatusForbidden)
-		return
+	if !s.keyed(r) {
+		if _, err := CheckInitData(r.Header.Get("X-Telegram-Init-Data"), s.secret, s.now(), ActMaxAge); err != nil {
+			http.Error(w, `{"error":"This panel was opened more than an hour ago. Close it and open it again with /rt."}`, http.StatusForbidden)
+			return
+		}
 	}
 	if ct := r.Header.Get("Content-Type"); !strings.HasPrefix(ct, "application/json") {
 		http.Error(w, `{"error":"Send JSON."}`, http.StatusUnsupportedMediaType)

@@ -135,7 +135,8 @@ func (s *Server) WithChanges(on func() bool, redact func(string) string, turn fu
 }
 
 // WithLaunch turns on the keyboard buttons' pages (launch.go). keyOK checks
-// the key that a button's address carries; the key only shows.
+// the key that a button's address carries; the key authorizes reads and
+// validated control-panel actions.
 func (s *Server) WithLaunch(l Launcher, keyOK func(string) bool) *Server {
 	s.launch, s.keyOK = l, keyOK
 	return s
@@ -335,8 +336,9 @@ func (s *Server) headers(w http.ResponseWriter, ctype string) {
 }
 
 // allowed checks that a request is the owner's: signed by Telegram, or
-// carrying the keyboard's key (keyed; it only shows). It answers a refused
-// request itself.
+// carrying the keyboard's key. The key reads pages and can submit validated
+// control-panel actions; it cannot send Annotate notes directly. It answers
+// a refused request itself.
 func (s *Server) allowed(w http.ResponseWriter, r *http.Request) bool {
 	s.headers(w, "application/json")
 	if r.Header.Get("X-Telegram-Init-Data") == "" && r.Header.Get("X-Rex-Key") != "" {
@@ -366,7 +368,7 @@ func (s *Server) allowed(w http.ResponseWriter, r *http.Request) bool {
 }
 
 // keyed tells whether r carries the keyboard's key and no init data: a page
-// that a keyboard button opened. Such a request only reads.
+// that a keyboard button opened.
 func (s *Server) keyed(r *http.Request) bool {
 	k := r.Header.Get("X-Rex-Key")
 	return k != "" && r.Header.Get("X-Telegram-Init-Data") == "" && s.keyOK != nil && s.owner() != 0 && s.keyOK(k)

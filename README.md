@@ -53,6 +53,10 @@ Details of each step: [docs/reference.md](docs/reference.md#setup-details).
 
 With Threaded Mode, every message is in a topic. A topic that is not linked to an agent works as the main chat.
 
+### Start from a terminal
+
+From a project folder, run `rex-tg new pi`, `rex-tg new claude`, `rex-tg new codex`, or `rex-tg new cux` (if installed). The agent starts in the current folder, in a tab under the configured Rex session (by default, `rex-tg`). Arguments after the agent name are passed through unchanged, for example `rex-tg new cux --resume <session>`. Use `/agents` in Telegram to open its topic.
+
 ### Main chat
 
 | Command | What it does |
@@ -113,7 +117,7 @@ Five buttons sit under the message box: 🎛 Panel, 🖥 Screen, 📂 Files, �
 
 ### Photos, files, and voice
 
-- Photos and files (up to 20 MB) are saved on the Mac. rex-tg types their path and your caption into the pane.
+- Photos and files (up to 20 MB) are saved on the Mac. rex-tg types their path and your caption into the pane. If a download fails, tap **↻ Retry download** on the error message.
 - Voice notes are turned into text, when voice is set up ([how](docs/reference.md#voice-notes)).
 - Stickers and videos are not supported. Edited messages are not sent again.
 
@@ -164,7 +168,7 @@ More cases: [docs/reference.md](docs/reference.md#troubleshooting).
 - The bot can type into your terminals. Protect your Telegram account (turn on two-step verification) and the bot token.
 - Only the owner can use the bot. rex-tg types only when the agent is in front in its pane and no prompt is open.
 - The token is only in the macOS Keychain. rex-tg opens no port, except the Mini App's local one when `[miniapp] url` is set.
-- Mini App pages are reachable only through Telegram's signed requests, and only for the owner ([details](docs/reference.md#mini-app)).
+- Mini App pages use Telegram-signed requests or a valid keyboard key. When tailnet-only is on, the key allows validated control-panel actions only from an allowed Tailscale login; `/rekey` revokes it ([details](docs/reference.md#mini-app)).
 - Telegram bot chats are not end-to-end encrypted. rex-tg removes common secrets (API keys, tokens, private keys) before it sends text, but it cannot catch every secret.
 - Sent messages are deleted from the database after 30 days.
 

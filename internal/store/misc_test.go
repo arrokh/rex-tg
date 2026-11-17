@@ -97,6 +97,14 @@ func TestInboundTransitions(t *testing.T) {
 	if in, ok := must2(s.InboundByID(ctx, 4)); !ok || in.State != InboundTyping || in.ThreadID != th.ID {
 		t.Fatalf("InboundByID(4) = %+v, %v", in, ok)
 	}
+	noErr(t, s.SetInboundBody(ctx, 4, `{"retry":"file"}`))
+	if in, ok := must2(s.InboundByID(ctx, 4)); !ok || in.Body != `{"retry":"file"}` {
+		t.Fatalf("updated inbound body = %+v, %v", in, ok)
+	}
+	noErr(t, s.SetInboundBody(ctx, 4, ""))
+	if err := s.SetInboundBody(ctx, 99, "x"); err == nil {
+		t.Fatal("setting the body of a missing update succeeded")
+	}
 	if _, ok := must2(s.InboundByID(ctx, 99)); ok {
 		t.Fatal("InboundByID found a missing update")
 	}

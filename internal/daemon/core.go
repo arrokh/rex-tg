@@ -63,6 +63,7 @@ type (
 		name             string
 		convID           int64
 		title            string
+		ready            chan bool // buffered result: true once the intro is durable
 	}
 	// evQueueText asks the core to queue text for typing (media, voice, force).
 	evQueueText struct {
@@ -71,6 +72,15 @@ type (
 		action                inbound.Action
 		ctl                   *ctlSet   // a control command: its value counts once typed
 		note                  *noteDone // a note to an alert: tell the user once queued
+	}
+	evFileRetryDone struct {
+		updateID, callbackUpdateID int64
+		thread                     store.Thread
+		chatID, messageID          int64
+		tgMessageID                int64
+		file                       fileRetry
+		path                       string
+		err                        error
 	}
 	evOpenDone struct{ paneID int64 }
 	evTailScan tailScan
@@ -233,6 +243,7 @@ type daemon struct {
 	macSwept             bool                    // with MacNotice off, holds from before the start were cleared
 	ctlPending           map[int64]ctlSet        // queued control commands, by row id
 	vimNoticed           map[int64]bool          // inbound rows told that pi-vim did not react
+	mediaRetryBusy       map[int64]bool          // media downloads started by retry buttons
 	alertBusy            map[int64]bool
 	opening              map[int64]bool      // panes whose topic is being created
 	newFlows             map[string]*newFlow // /new requests, by the token that their buttons carry
@@ -253,44 +264,45 @@ func newDaemon(cfg config.Config, home string, log *slog.Logger, now func() time
 	}
 	d := &daemon{
 		cfg: cfg, timing: timing, home: home, log: log, now: now, st: st, tg: tg, rx: rx, snd: snd, adapters: adapters,
-		polled:       &atomic.Int64{}, // Run shares its own with the sender
-		kb:           &keyboardSource{},
-		logins:       &miniLogins{},
-		below:        map[int64]bool{},
-		promptChecks: map[int64]time.Time{},
-		blockedSince: map[int64]time.Time{},
-		recheckAt:    map[int64]time.Time{},
-		goneReads:    goneConfirm{},
-		turnTrees:    map[int64]turnTree{},
-		events:       make(chan any, 256),
-		regq:         newJobQueue(),
-		tailers:      map[int64]*tailer{},
-		pending:      map[int64]pendingTail{},
-		trackers:     map[int64]*turn.Tracker{},
-		snaps:        map[int64]string{},
-		shown:        map[int64]*shownTurn{},
-		joining:      map[int64]int64{},
-		extra:        map[int64][]int64{},
-		actions:      map[int64]inbound.Action{},
-		dirty:        map[int64]bool{},
-		busy:         map[int64]bool{},
-		nextPrep:     map[int64]time.Time{},
-		delivering:   map[int64]*delivery{},
-		waitNoticed:  map[int64]bool{},
-		waitTexts:    map[int64]string{},
-		macNotes:     map[int64]*macNote{},
-		drafts:       map[int64]*draft{},
-		deadlines:    map[int64]alertDeadline{},
-		follows:      map[int64]alertFollow{},
-		alertWanted:  map[int64]string{},
-		liveText:     map[int64]liveText{},
-		reminders:    map[int64]*reminder{},
-		sched:        map[int64]schedule{},
-		ctlPending:   map[int64]ctlSet{},
-		vimNoticed:   map[int64]bool{},
-		alertBusy:    map[int64]bool{},
-		opening:      map[int64]bool{},
-		newFlows:     map[string]*newFlow{},
+		polled:         &atomic.Int64{}, // Run shares its own with the sender
+		kb:             &keyboardSource{},
+		logins:         &miniLogins{},
+		below:          map[int64]bool{},
+		promptChecks:   map[int64]time.Time{},
+		blockedSince:   map[int64]time.Time{},
+		recheckAt:      map[int64]time.Time{},
+		goneReads:      goneConfirm{},
+		turnTrees:      map[int64]turnTree{},
+		events:         make(chan any, 256),
+		regq:           newJobQueue(),
+		tailers:        map[int64]*tailer{},
+		pending:        map[int64]pendingTail{},
+		trackers:       map[int64]*turn.Tracker{},
+		snaps:          map[int64]string{},
+		shown:          map[int64]*shownTurn{},
+		joining:        map[int64]int64{},
+		extra:          map[int64][]int64{},
+		actions:        map[int64]inbound.Action{},
+		dirty:          map[int64]bool{},
+		busy:           map[int64]bool{},
+		nextPrep:       map[int64]time.Time{},
+		delivering:     map[int64]*delivery{},
+		waitNoticed:    map[int64]bool{},
+		waitTexts:      map[int64]string{},
+		macNotes:       map[int64]*macNote{},
+		drafts:         map[int64]*draft{},
+		deadlines:      map[int64]alertDeadline{},
+		follows:        map[int64]alertFollow{},
+		alertWanted:    map[int64]string{},
+		liveText:       map[int64]liveText{},
+		reminders:      map[int64]*reminder{},
+		sched:          map[int64]schedule{},
+		ctlPending:     map[int64]ctlSet{},
+		vimNoticed:     map[int64]bool{},
+		mediaRetryBusy: map[int64]bool{},
+		alertBusy:      map[int64]bool{},
+		opening:        map[int64]bool{},
+		newFlows:       map[string]*newFlow{},
 	}
 	d.logins.d = d
 	d.hasProgram = func(name string) bool { return installed(home, name) }
@@ -445,6 +457,8 @@ func (d *daemon) handle(ev any) {
 		if e.note != nil {
 			d.noteQueued(e.threadID, e.note, queued)
 		}
+	case evFileRetryDone:
+		d.fileRetryDone(e)
 	case evTailScan:
 		d.onTailScan(e)
 	case evRestart:
@@ -654,9 +668,8 @@ func (d *daemon) nextN(key string) int64 {
 	return n
 }
 
-// enqueue puts an item in the outbox and wakes the sender.
-// markBelow notes that a message goes into a topic below its progress
-// message, so the progress message moves down (any goroutine).
+// markBelow notes that a message goes below the topic's progress message, so
+// the progress message moves down (any goroutine).
 func (d *daemon) markBelow(threadID int64) {
 	if threadID == 0 {
 		return
@@ -666,18 +679,21 @@ func (d *daemon) markBelow(threadID int64) {
 	d.belowMu.Unlock()
 }
 
-func (d *daemon) enqueue(it store.OutboxItem) {
+// enqueue puts an item in the outbox and wakes the sender. It reports whether
+// the row is durable.
+func (d *daemon) enqueue(it store.OutboxItem) bool {
 	if len(it.Parts) == 0 && !it.Skip {
-		return
+		return false
 	}
 	if !it.Skip {
 		d.markBelow(it.ThreadID)
 	}
 	if _, _, err := d.st.Enqueue(d.ctx, it); err != nil {
 		d.log.Warn("enqueue", "thread", it.ThreadID, "kind", it.Kind, "err", err)
-		return
+		return false
 	}
 	d.snd.Wake()
+	return true
 }
 
 // notice enqueues one HTML message for a topic. The key must be built from

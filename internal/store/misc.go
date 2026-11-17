@@ -296,6 +296,16 @@ func (s *Store) SetInboundState(ctx context.Context, updateID int64, state, reas
 	return affected(res, fmt.Sprintf("store: inbound %d", updateID))
 }
 
+// SetInboundBody replaces the stored body of an update. It is used for
+// short-lived metadata that lets an owner retry a failed media download.
+func (s *Store) SetInboundBody(ctx context.Context, updateID int64, body string) error {
+	res, err := s.db.ExecContext(ctx, `UPDATE inbound SET body=? WHERE update_id=?`, body, updateID)
+	if err != nil {
+		return fmt.Errorf("store: set inbound body: %w", err)
+	}
+	return affected(res, fmt.Sprintf("store: inbound %d", updateID))
+}
+
 // InboundByID returns the update with this update_id; ok is false when there
 // is none.
 func (s *Store) InboundByID(ctx context.Context, updateID int64) (Inbound, bool, error) {

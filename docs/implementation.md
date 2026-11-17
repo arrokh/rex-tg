@@ -4,7 +4,7 @@ This guide is the contract between the packages of rex-tg. [design.md](design.md
 
 ## Toolchain and rules
 
-- Go 1.26.1, pinned in `.tool-versions` (mise). Module path: `rex-tg`. Run Go commands from the repository root. If `go version` is not 1.26.x, run `eval "$(mise env -s bash)"` first.
+- Go 1.27.3 or newer; `.tool-versions` pins 1.27.3 (mise). Module path: `rex-tg`. Run Go commands from the repository root. If `go version` is older, run `eval "$(mise env -s bash)"` first.
 - `make check` runs gofmt, `go vet`, staticcheck v0.8.2, and `go test -race ./...`.
 - **Do not change `go.mod` or `go.sum`.** Do not run `go get` or `go mod tidy`. The allowed third-party modules are already pinned (see `internal/deps/deps.go`): `github.com/BurntSushi/toml`, `github.com/fsnotify/fsnotify`, `github.com/tidwall/gjson`, `github.com/tidwall/sjson`, `github.com/yuin/goldmark`, `gopkg.in/natefinch/lumberjack.v2`, `modernc.org/sqlite`. Everything else comes from the standard library.
 - **Do not change `internal/agents/agents.go`.** It is the shared event contract. If a change is needed, report it instead.
@@ -36,10 +36,10 @@ This guide is the contract between the packages of rex-tg. [design.md](design.md
 | `internal/inbound` | Safety checks, waiting queue policy, echo matching | `agents` |
 | `internal/sender` | The only writer to Telegram: outbox, parts, rate limits, progress messages | `format`, `store`, `telegram` |
 | `internal/keychain` | The bot token in the macOS Keychain, through `security` | stdlib |
-| `internal/miniapp` | Mini App server: page signature check, the buttons' key (read only), tailnet-only check, page rendering, live screen, read-only file browser, changes view, control panel (`Control`, `ControlAction.Check`, `ListFolders`), keyboard pages (`Launcher`, `/api/launch`), Annotate (`Annotations`, `/api/annotate`, `/api/annotate/draft`) | goldmark |
+| `internal/miniapp` | Mini App server: page signature check, the buttons' key (reads and validated panel actions), tailnet-only check, page rendering, live screen, read-only file browser, changes view, control panel (`Control`, `ControlAction.Check`, `ListFolders`), keyboard pages (`Launcher`, `/api/launch`), Annotate (`Annotations`, `/api/annotate`, `/api/annotate/draft`) | goldmark |
 | `internal/termimg` | The `/screen` picture (PNG), from terminal lines | `golang.org/x/image` |
 | `internal/daemon` | Wiring: core loop, sender, router, alerts, housekeeping | everything |
-| `cmd/rex-tg` | CLI: `daemon`, `hook`, `login`, `install`, `uninstall`, `status`, `doctor` | everything |
+| `cmd/rex-tg` | CLI: `daemon`, `hook`, `login`, `new`, `install`, `uninstall`, `status`, `doctor` | everything |
 
 ## internal/agents/{pi,claude,codex}
 
@@ -534,13 +534,14 @@ Flows (design sections in brackets):
 
 ### cmd/rex-tg
 
-Commands: `daemon [--config F] [--log-stderr]`, `hook <runtime>`, `login [--token-stdin]`, `pair`, `install [--only R] [--no-load]`, `uninstall [--only R] [--force] [--keep-launchd]`, `status`, `doctor`, `version`. The config path defaults to `~/.config/rex-tg/config.toml`.
+Commands: `daemon [--config F] [--log-stderr]`, `hook <runtime>`, `login [--token-stdin]`, `pair`, `new [--config F] <pi|cux|claude|codex> [agent args...]`, `install [--only R] [--no-load]`, `uninstall [--only R] [--force] [--keep-launchd]`, `status`, `doctor`, `version`. The config path defaults to `~/.config/rex-tg/config.toml`.
 
 - `hook`: never prints and always exits 0. Reads at most 1 MiB of stdin, takes `REX_SESSION` and `REX_BLOCK` from the environment, does nothing when `REX_BLOCK` is empty, and writes the spool file described above.
 - `login`: reads the token (from the terminal with echo off, or stdin with `--token-stdin`), checks it with `getMe`, stores it with `keychain.Set`, then runs `pair`.
 - `pair`: opens the store, calls `daemon.NewPairingCode`, and prints "Send /start <code> to @<bot> within 10 minutes." The running daemon handles the code.
 - `daemon`: logs JSON to `LogDir()/rex-tg.log` through lumberjack (10 MB, 3 backups), plus stderr with `--log-stderr`; reads the token with `keychain.Get`; stops cleanly on SIGINT and SIGTERM.
 - `doctor` checks and prints one line each: the Rex CLI path and `whoami`, the token, `getMe` with `has_topics_enabled`, the pairing, the hooks and files from `install.Inspect`, the launchd agent, the database, the folder modes, and whether a daemon holds the lock.
+- `new`: takes one agent key and uses the current working folder. It finds the Rex session by its configured name or remembered ID, then adds a tab; if missing, it creates that session. `cux` uses the installed `cux` command. Arguments after the agent name are appended unchanged to the configured launch command. A file lock in the state folder serializes it with `/new`, so simultaneous first launches share a session. The daemon discovers the new agent from its hook; `/agents` opens its Telegram topic.
 - `status` opens the store read-only and prints topics, queued and unknown messages, and open alerts.
 
 ### Images in answers
