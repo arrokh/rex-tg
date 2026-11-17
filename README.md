@@ -6,6 +6,10 @@ rex-tg connects pi, Claude Code, and Codex running in Rex terminal panes to topi
 
 [Install](#install) · [First conversation](#your-first-conversation) · [Commands](docs/architecture.md#telegram-commands) · [Configuration](docs/reference.md#configuration) · [Troubleshooting](#troubleshooting) · [Architecture and catalog](docs/architecture.md) · [Contribute](CONTRIBUTING.md)
 
+[![Silent phone-layout preview of the real rex-tg Mini App](docs/media/rex-tg-tour-preview.gif)](docs/media/rex-tg-tour.mp4)
+
+*The shipped Mini App, served by its Go handler with isolated local fixtures. No live Telegram account, bot, Rex pane, or agent was connected. [Watch the narrated 81-second tour](docs/media/rex-tg-tour.mp4) · [English captions (SRT)](docs/media/rex-tg-tour.en.srt).*
+
 ## What it does
 
 - **One topic per agent session.** List agents, open topics, or start an agent in a new Rex tab.
