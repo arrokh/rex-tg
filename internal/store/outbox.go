@@ -179,7 +179,11 @@ func scanPart(r scanner) (Part, error) {
 }
 
 func queryParts(ctx context.Context, q querier, where string, args ...any) ([]Part, error) {
-	rows, err := q.QueryContext(ctx, `SELECT `+partCols+partFrom+where, args...)
+	return queryPartsQuery(ctx, q, `SELECT `+partCols+partFrom+where, args...)
+}
+
+func queryPartsQuery(ctx context.Context, q querier, query string, args ...any) ([]Part, error) {
+	rows, err := q.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("store: query parts: %w", err)
 	}
@@ -199,13 +203,27 @@ func queryParts(ctx context.Context, q querier, where string, args ...any) ([]Pa
 // topic that has no part in flight (sending). Rows that are unknown, failed,
 // skipped, or sent do not block later rows. Closed topics are left out.
 func (s *Store) NextParts(ctx context.Context) ([]Part, error) {
-	return queryParts(ctx, s.db, `WHERE p.state='pending' AND t.status<>'closed'
-		AND NOT EXISTS (SELECT 1 FROM outbox_part p2 JOIN outbox o2 ON o2.id=p2.outbox_id
-			WHERE o2.thread_id=o.thread_id AND p2.state='sending')
-		AND NOT EXISTS (SELECT 1 FROM outbox_part p3 JOIN outbox o3 ON o3.id=p3.outbox_id
-			WHERE o3.thread_id=o.thread_id AND p3.state='pending'
-			  AND (o3.id<o.id OR (o3.id=o.id AND p3.part<p.part)))
-		ORDER BY o.id, p.part`)
+	// Rank pending parts once per topic, then exclude topics with any in-flight
+	// part. The correlated anti-joins here used to rescan the full backlog for
+	// every candidate part.
+	return queryPartsQuery(ctx, s.db, `WITH ranked AS (
+		SELECT p.outbox_id, p.part, o.thread_id,
+			ROW_NUMBER() OVER (PARTITION BY o.thread_id ORDER BY o.id, p.part) AS rank
+		FROM outbox_part p
+		JOIN outbox o ON o.id=p.outbox_id
+		JOIN thread t ON t.id=o.thread_id
+		WHERE p.state='pending' AND t.status<>'closed'
+	), sending AS (
+		SELECT o.thread_id
+		FROM outbox_part p JOIN outbox o ON o.id=p.outbox_id
+		WHERE p.state='sending'
+		GROUP BY o.thread_id
+	)
+	SELECT `+partCols+partFrom+`
+		JOIN ranked r ON r.outbox_id=p.outbox_id AND r.part=p.part
+		LEFT JOIN sending s ON s.thread_id=o.thread_id
+	WHERE r.rank=1 AND s.thread_id IS NULL
+	ORDER BY o.id, p.part`)
 }
 
 // recompute derives the row state from its parts.
@@ -492,10 +510,65 @@ func (s *Store) MarkPartChecked(ctx context.Context, outboxID int64, part int) e
 	return nil
 }
 
-// PartsToCheck returns the unknown parts whose arrival can still be
-// checked: not checked yet, and with a known floor. Oldest first.
+// MarkPartCheckedAndDeleteKey atomically records a terminal check result and
+// forgets the check's resume key. It is used after converting the check note
+// into the terminal notice, so recovery cannot delete that notice as stale.
+func (s *Store) MarkPartCheckedAndDeleteKey(ctx context.Context, outboxID int64, part int, key string) error {
+	err := s.tx(ctx, func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx, `UPDATE outbox_part SET checked=1 WHERE outbox_id=? AND part=?`, outboxID, part); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM kv WHERE key=?`, key); err != nil {
+			return err
+		}
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("store: mark part checked and delete key: %w", err)
+	}
+	return nil
+}
+
+// MarkPartCheckedWithNotice stores a terminal notice for an unknown part and
+// marks the part checked in one transaction. A crash cannot leave the part
+// checked without its durable notice.
+func (s *Store) MarkPartCheckedWithNotice(ctx context.Context, outboxID int64, part int, notice OutboxItem) error {
+	if notice.Skip {
+		return fmt.Errorf("store: terminal notice cannot be skipped")
+	}
+	now := s.now()
+	err := s.tx(ctx, func(tx *sql.Tx) error {
+		var threadID int64
+		err := tx.QueryRowContext(ctx, `SELECT o.thread_id FROM outbox_part p
+			JOIN outbox o ON o.id=p.outbox_id
+			WHERE p.outbox_id=? AND p.part=? AND p.state='unknown'`, outboxID, part).Scan(&threadID)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil // it was resent or otherwise settled while the notice waited
+		}
+		if err != nil {
+			return err
+		}
+		if notice.ThreadID != threadID {
+			return fmt.Errorf("store: notice thread %d does not match part thread %d", notice.ThreadID, threadID)
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE outbox_part SET checked=1 WHERE outbox_id=? AND part=? AND state='unknown'`, outboxID, part); err != nil {
+			return err
+		}
+		if _, _, err := insertItem(ctx, tx, notice, now); err != nil {
+			return err
+		}
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("store: mark part checked with notice: %w", err)
+	}
+	return nil
+}
+
+// PartsToCheck returns unchecked unknown parts, including parts without a
+// known floor that still need a durable terminal notice. Oldest first.
 func (s *Store) PartsToCheck(ctx context.Context) ([]Part, error) {
-	return queryParts(ctx, s.db, `WHERE p.state='unknown' AND p.checked=0 AND p.floor_id IS NOT NULL ORDER BY o.id, p.part`)
+	return queryParts(ctx, s.db, `WHERE p.state='unknown' AND p.checked=0 ORDER BY o.id, p.part`)
 }
 
 // Part returns one outbox part.

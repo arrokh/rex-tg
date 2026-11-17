@@ -338,11 +338,15 @@ func (d *daemon) sendNowButton(cb *telegram.CallbackQuery, id int64) {
 	}
 	n := 0
 	for _, q := range d.waitingInbound(th.ID) {
-		if q.UpdateID != id && !steerable(q) {
+		if !steerable(q) {
 			break
 		}
 		d.actions[q.UpdateID] = inbound.ActSendNow
 		n++
+	}
+	if n == 0 {
+		d.answerCallback(cb.ID, "Commands and prompt notes wait until the agent is idle.", false)
+		return
 	}
 	d.dirty[th.ID] = true
 	delete(d.nextPrep, th.ID)

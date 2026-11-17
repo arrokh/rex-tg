@@ -321,7 +321,10 @@ func (d *daemon) quickReplyButton(upd int64, cb *telegram.CallbackQuery, parts [
 // a page.
 
 // turnTree is the snapshot of a session's repository at its turn's start.
-type turnTree struct{ top, tree string }
+type turnTree struct {
+	top, tree, key string
+	answered       bool // retained for replay until the transcript commit succeeds
+}
 
 type evTurnTree struct {
 	conv int64
@@ -348,25 +351,26 @@ func (d *daemon) changesOn() bool { return d.miniAppReady() && d.cfg.Display.Sho
 // for a prompt that joins a running turn (a steered message): that turn
 // keeps the snapshot of its start. A new turn always takes a fresh one, so
 // a turn that ended without an answer leaves nothing behind.
-func (d *daemon) turnStarted(conv int64, cwd string, joins bool) {
+func (d *daemon) turnStarted(conv int64, cwd, key string, joins bool) {
 	if !d.changesOn() || cwd == "" {
 		return
 	}
-	if _, ok := d.turnTrees[conv]; ok && joins {
-		return
+	if old, ok := d.turnTrees[conv]; ok && (old.key == key || joins && !old.answered) {
+		return // replay must keep the original start, even after a failed commit
 	}
-	d.turnTrees[conv] = turnTree{} // taken; filled when the snapshot is done
+	d.turnTrees[conv] = turnTree{key: key} // taken; filled when the snapshot is done
 	d.spawn(func() {
 		top, tree, err := gitTree(d.ctx, cwd)
 		if err != nil {
 			return // not a repository, or git failed: no changes for this turn
 		}
-		d.emit(evTurnTree{conv: conv, t: turnTree{top: top, tree: tree}})
+		d.emit(evTurnTree{conv: conv, t: turnTree{top: top, tree: tree, key: key}})
 	})
 }
 
 func (d *daemon) onTurnTree(e evTurnTree) {
-	if _, ok := d.turnTrees[e.conv]; ok {
+	if current, ok := d.turnTrees[e.conv]; ok && current.key == e.t.key {
+		e.t.answered = current.answered
 		d.turnTrees[e.conv] = e.t
 	}
 }
@@ -374,8 +378,14 @@ func (d *daemon) onTurnTree(e evTurnTree) {
 // turnAnswered compares the repository with the turn's start, and keeps the
 // changes as a page of the answer (core).
 func (d *daemon) turnAnswered(conv, thread int64, key string) {
+	// Keep the start until the transcript transaction commits. A failed
+	// final-answer batch may replay the prompt and answer together.
 	start, ok := d.turnTrees[conv]
-	delete(d.turnTrees, conv)
+	if ok {
+		retained := start
+		retained.answered = true
+		d.turnTrees[conv] = retained
+	}
 	if !ok || start.tree == "" {
 		return
 	}

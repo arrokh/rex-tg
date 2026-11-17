@@ -251,3 +251,18 @@ func TestBrowseCapsBigFolders(t *testing.T) {
 		t.Errorf("%d entries, note %q, %v", len(v.Entries), v.Note, err)
 	}
 }
+
+// An oversized directory is read only to the fixed scan limit and says that
+// the returned subset may be incomplete.
+func TestBrowseBoundsVeryLargeFolders(t *testing.T) {
+	root := t.TempDir()
+	for i := 0; i <= maxDirectoryEntries; i++ {
+		if err := os.WriteFile(filepath.Join(root, fmt.Sprintf("entry-%05d.txt", i)), nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	v, err := Browse(context.Background(), root, "", nil)
+	if err != nil || len(v.Entries) != maxEntries || !strings.Contains(v.Note, "too large to list completely") || !strings.Contains(v.Note, "omitted") {
+		t.Errorf("%d entries, note %q, %v", len(v.Entries), v.Note, err)
+	}
+}

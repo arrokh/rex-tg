@@ -133,6 +133,10 @@ type vimStuckMark struct {
 // check, errVimStuck when a key shows no effect, and errRetryBefore or a
 // context error when a call fails on the way.
 func (d *daemon) settlePiVim(ctx context.Context, pane store.Pane, want vimMode) (pressed bool, err error) {
+	return d.settlePiVimChecked(ctx, pane, want, func() error { return d.safeKey(ctx, pane) })
+}
+
+func (d *daemon) settlePiVimChecked(ctx context.Context, pane store.Pane, want vimMode, check func() error) (pressed bool, err error) {
 	screen, err := d.rx.Capture(ctx, pane.Session, pane.Block)
 	if err != nil {
 		return false, nil
@@ -151,13 +155,8 @@ func (d *daemon) settlePiVim(ctx context.Context, pane store.Pane, want vimMode)
 		if _, ok := d.vimStuck.Load(pane.ID); ok {
 			return pressed, errVimStuck
 		}
-		switch paused, front, err := d.safeNow(pane); {
-		case err != nil:
-			return pressed, errRetryBefore
-		case paused:
-			return pressed, errPausedBefore
-		case !front:
-			return pressed, errGoneBefore
+		if err := check(); err != nil {
+			return pressed, err
 		}
 		if err := d.rx.SendKeys(ctx, pane.Session, pane.Block, key); err != nil {
 			return pressed, errRetryBefore

@@ -21,7 +21,8 @@ const defaultQueueExpiry = 30 * time.Minute
 type delivery struct {
 	in      store.Inbound
 	started time.Time
-	echoKey string // set when the transcript recorded the prompt before Enter was confirmed
+	echoKey string             // set when the transcript recorded the prompt before Enter was confirmed
+	cancel  context.CancelFunc // stops in-flight work when its topic closes
 }
 
 type prepKind int
@@ -292,7 +293,7 @@ func (d *daemon) prepare(th store.Thread, in store.Inbound, act inbound.Action) 
 	}
 	canSteer = steerable(in) && d.steers(rt)
 	steer := false
-	if act == inbound.ActText {
+	if act == inbound.ActText || act == inbound.ActSendNow && !steerable(in) {
 		ready, why, err := d.reg.Ready(ctx, pane.ID, d.now())
 		if err != nil {
 			return wait("the registry is busy")
@@ -490,7 +491,8 @@ func (d *daemon) startTyping(th store.Thread, in store.Inbound, res prepResult) 
 		return
 	}
 	delete(d.actions, in.UpdateID)
-	d.delivering[th.ID] = &delivery{in: in, started: d.now()}
+	ctx, cancel := context.WithCancel(d.ctx)
+	d.delivering[th.ID] = &delivery{in: in, started: d.now(), cancel: cancel}
 	prof := d.cfg.Input(res.rt)
 	delay := prof.PasteEnterDelay.Duration
 	submit := "enter"
@@ -505,7 +507,8 @@ func (d *daemon) startTyping(th store.Thread, in store.Inbound, res prepResult) 
 	}
 	pane, text, piVim, claudeVim, guard := res.pane, in.Body, res.rt == agents.Pi, res.rt == agents.Claude, res.guard
 	d.spawn(func() {
-		err := d.typeInto(pane, text, delay, submit, piVim, claudeVim, guard)
+		defer cancel()
+		err := d.typeInto(ctx, th.ID, pane, text, delay, submit, piVim, claudeVim, guard)
 		d.emit(evTyped{thread: th.ID, in: in, err: err})
 	})
 }
@@ -514,6 +517,7 @@ func (d *daemon) startTyping(th store.Thread, in store.Inbound, res prepResult) 
 var (
 	errPausedBefore = errors.New("typing is paused")
 	errGoneBefore   = errors.New("the agent is not in front")
+	errTargetBefore = errors.New("the topic or agent session changed")
 	errRetryBefore  = errors.New("the pane could not be checked")
 	errPromptBefore = errors.New("a prompt is on the screen")
 	errStoppedAfter = errors.New("the text was pasted but Enter was not pressed")
@@ -523,21 +527,73 @@ var (
 
 // safeNow re-checks, right before a key goes out, that typing is not paused
 // and that the prepared agent process is still in front of the pane.
-func (d *daemon) safeNow(pane store.Pane) (paused, inFront bool, err error) {
+func (d *daemon) safeNow(ctx context.Context, pane store.Pane) (paused, inFront bool, err error) {
 	if d.paused.Load() {
 		return true, false, nil
 	}
-	proc, err := d.rx.Process(d.ctx, pane.Session, pane.Block)
+	proc, err := d.rx.Process(ctx, pane.Session, pane.Block)
 	if err != nil {
 		return false, false, err
 	}
 	return false, registry.AgentInFront(proc, pane.PID, pane.ProcessName), nil
 }
 
+func (d *daemon) safeKey(ctx context.Context, pane store.Pane) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	paused, front, err := d.safeNow(ctx, pane)
+	switch {
+	case err != nil:
+		return errRetryBefore
+	case paused:
+		return errPausedBefore
+	case !front:
+		return errGoneBefore
+	}
+	return nil
+}
+
+// deliveryCheck binds an in-flight delivery to the topic, conversation and
+// pane checked by prepare. A /clear or resume can replace the conversation
+// without replacing the foreground process. Re-read the binding after the
+// process RPC, which may have been in flight when the topic changed.
+func (d *daemon) deliveryCheck(ctx context.Context, threadID int64, pane store.Pane) error {
+	if ctx.Err() != nil {
+		return errTargetBefore
+	}
+	paused, front, err := d.safeNow(ctx, pane)
+	if ctx.Err() != nil {
+		return errTargetBefore
+	}
+	switch {
+	case err != nil:
+		return errRetryBefore
+	case paused:
+		return errPausedBefore
+	case !front:
+		return errGoneBefore
+	}
+	th, err := d.st.Thread(ctx, threadID)
+	if err != nil {
+		return errRetryBefore
+	}
+	current, err := d.st.Pane(ctx, pane.ID)
+	if err != nil {
+		return errRetryBefore
+	}
+	if th.Status != store.ThreadLive || th.CurrentConversationID != pane.ConversationID ||
+		current.ConversationID != pane.ConversationID || !current.GoneAt.IsZero() ||
+		current.Session != pane.Session || current.Block != pane.Block || current.PID != pane.PID || current.ProcessName != pane.ProcessName {
+		return errTargetBefore
+	}
+	return nil
+}
+
 // promptShown reads the screen and tells whether it shows a prompt that
 // waits for a key (a numbered list with a cursor at the bottom).
-func (d *daemon) promptShown(pane store.Pane) (bool, error) {
-	screen, err := d.rx.Capture(d.ctx, pane.Session, pane.Block)
+func (d *daemon) promptShown(ctx context.Context, pane store.Pane) (bool, error) {
+	screen, err := d.rx.Capture(ctx, pane.Session, pane.Block)
 	if err != nil {
 		return false, err
 	}
@@ -549,60 +605,37 @@ func (d *daemon) promptShown(pane store.Pane) (bool, error) {
 // (the agent works), the screen must also show no prompt at both points: a
 // paste would go into the prompt, and Enter would pick its answer. Errors
 // never carry Rex's output, which could hold the typed text.
-func (d *daemon) typeInto(pane store.Pane, text string, delay time.Duration, submit string, piVim, claudeVim, guard bool) error {
-	ctx := d.ctx
-	paused, front, err := d.safeNow(pane)
-	switch {
-	case err != nil:
-		return errRetryBefore
-	case paused:
-		return errPausedBefore
-	case !front:
-		return errGoneBefore
+func (d *daemon) typeInto(ctx context.Context, threadID int64, pane store.Pane, text string, delay time.Duration, submit string, piVim, claudeVim, guard bool) error {
+	check := func() error { return d.deliveryCheck(ctx, threadID, pane) }
+	if err := check(); err != nil {
+		return err
 	}
 	// pi-vim drops a paste unless it is in INSERT mode. A pending vim command
 	// or an EX line is cancelled on the way there. Nothing is pasted when
 	// this fails, so the next try reads the screen again.
 	if piVim {
-		pressed, err := d.settlePiVim(ctx, pane, vimInsert)
-		if err != nil {
+		if _, err := d.settlePiVimChecked(ctx, pane, vimInsert, check); err != nil {
 			return err
-		}
-		if pressed { // that took time: check again right before the paste
-			switch paused, front, err := d.safeNow(pane); {
-			case err != nil:
-				return errRetryBefore
-			case paused:
-				return errPausedBefore
-			case !front:
-				return errGoneBefore
-			}
 		}
 	}
 	// Claude Code takes a paste in every vim mode, but Enter does not submit in
 	// VISUAL mode. Leave it with one Escape, and only when the footer shows it.
 	if claudeVim {
-		pressed, err := d.settleClaudeVim(ctx, pane)
-		if err != nil {
+		if _, err := d.settleClaudeVimChecked(ctx, pane, check); err != nil {
 			return err
-		}
-		if pressed {
-			switch paused, front, err := d.safeNow(pane); {
-			case err != nil:
-				return errRetryBefore
-			case paused:
-				return errPausedBefore
-			case !front:
-				return errGoneBefore
-			}
 		}
 	}
 	if guard {
-		switch shown, err := d.promptShown(pane); {
+		switch shown, err := d.promptShown(ctx, pane); {
 		case err != nil:
 			return errRetryBefore
 		case shown:
 			return errPromptBefore
+		}
+	}
+	if piVim || claudeVim || guard {
+		if err := check(); err != nil {
+			return err
 		}
 	}
 	if err := d.rx.Paste(ctx, pane.Session, pane.Block, text); err != nil {
@@ -612,12 +645,15 @@ func (d *daemon) typeInto(pane store.Pane, text string, delay time.Duration, sub
 		return ctx.Err()
 	}
 	// Enter must not reach a shell, and /pause must stop it too.
-	if paused, front, err := d.safeNow(pane); err != nil || paused || !front {
+	if err := check(); err != nil {
 		return errStoppedAfter
 	}
 	if guard {
-		if shown, err := d.promptShown(pane); err != nil || shown {
+		if shown, err := d.promptShown(ctx, pane); err != nil || shown {
 			return errStoppedAfter // a prompt came up after the paste
+		}
+		if err := check(); err != nil {
+			return errStoppedAfter
 		}
 	}
 	if err := d.rx.SendKeys(ctx, pane.Session, pane.Block, submit); err != nil {
@@ -631,12 +667,19 @@ func (d *daemon) typeInto(pane store.Pane, text string, delay time.Duration, sub
 
 func (d *daemon) onTyped(e evTyped) {
 	dl := d.delivering[e.thread]
+	if dl != nil && dl.cancel != nil {
+		dl.cancel()
+	}
 	delete(d.delivering, e.thread)
 	delete(d.busy, e.thread)
 	d.dirty[e.thread] = true
 	now := d.now()
 	switch {
 	case errors.Is(e.err, errPausedBefore), errors.Is(e.err, errRetryBefore), errors.Is(e.err, errPromptBefore):
+		if th, err := d.st.Thread(d.ctx, e.thread); err == nil && th.Status == store.ThreadClosed {
+			d.refuse(th, e.in, inbound.ReasonTopicNotLive)
+			return
+		}
 		// Nothing was typed. The message waits and is checked again; after
 		// a prompt on the screen, not before a second has passed.
 		if err := d.st.SetInboundState(d.ctx, e.in.UpdateID, store.InboundQueued, e.in.Reason, now); err != nil {
@@ -644,6 +687,11 @@ func (d *daemon) onTyped(e evTyped) {
 		}
 		if errors.Is(e.err, errPromptBefore) {
 			d.nextPrep[e.thread] = now.Add(max(time.Second, d.timing.Prep))
+		}
+		return
+	case errors.Is(e.err, errTargetBefore):
+		if th, err := d.st.Thread(d.ctx, e.thread); err == nil {
+			d.refuse(th, e.in, errTargetBefore.Error()+"; send it again")
 		}
 		return
 	case errors.Is(e.err, errGoneBefore):

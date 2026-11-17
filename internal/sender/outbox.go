@@ -9,7 +9,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"rex-tg/internal/format"
 	"rex-tg/internal/store"
@@ -144,11 +143,10 @@ func (s *Sender) sendRich(ctx context.Context, p store.Part, silent bool) (int64
 		return m.MessageID, s.judge(err, p.ThreadID), err
 	}
 	s.log.Warn("rich message rejected; falling back", "outbox", p.OutboxID, "part", p.Part, "err", err)
-	if utf8.RuneCountInString(p.Content) <= maxFallbackText {
+	if format.UTF16Len(p.Content) <= maxFallbackText {
 		if ms := format.Messages(p.Content, maxFallbackText, maxFallbackText); len(ms) == 1 {
 			return s.sendText(ctx, p.ThreadID, p.ChatID, p.MessageThreadID, ms[0].HTML, true, silent, markup)
 		}
-		return s.sendText(ctx, p.ThreadID, p.ChatID, p.MessageThreadID, p.Content, false, silent, markup)
 	}
 	if err := s.token(ctx); err != nil {
 		return 0, vUnknown, err
@@ -213,10 +211,19 @@ func isPartNotice(p store.Part) bool {
 // make them pile up.
 const partNoticeKind = "part-notice"
 
-// notice enqueues the "may not have arrived" message for a part, once.
-func (s *Sender) notice(ctx context.Context, p store.Part) {
+// notice durably completes an unknown part with its "may not have arrived"
+// message. The store commits the notice and checked flag together.
+func (s *Sender) notice(ctx context.Context, p store.Part) error {
+	if isPartNotice(p) {
+		return s.st.MarkPartChecked(ctx, p.OutboxID, p.Part)
+	}
 	text := fmt.Sprintf("⚠️ Part %d of reply #%d may not have arrived.", p.Part+1, p.OutboxID)
-	s.enqueuePartNotice(ctx, p, noticeKey(p.OutboxID, p.Part), text)
+	item := partNoticeItem(p, noticeKey(p.OutboxID, p.Part), text)
+	if err := s.st.MarkPartCheckedWithNotice(ctx, p.OutboxID, p.Part, item); err != nil {
+		return err
+	}
+	s.Wake()
+	return nil
 }
 
 // failNotice enqueues the "could not be sent" message for a part that
@@ -226,17 +233,20 @@ func (s *Sender) failNotice(ctx context.Context, p store.Part, reason string) {
 	s.enqueuePartNotice(ctx, p, fmt.Sprintf("notice:failed:%d:%d", p.OutboxID, p.Part), text)
 }
 
-func (s *Sender) enqueuePartNotice(ctx context.Context, p store.Part, key, text string) {
-	if isPartNotice(p) {
-		return
-	}
-	_, _, err := s.st.Enqueue(ctx, store.OutboxItem{
+func partNoticeItem(p store.Part, key, text string) store.OutboxItem {
+	return store.OutboxItem{
 		ThreadID: p.ThreadID,
 		Key:      key,
 		Kind:     partNoticeKind,
 		Parts:    []store.PartContent{{Content: text, Format: store.FormatHTML}},
-	})
-	if err != nil {
+	}
+}
+
+func (s *Sender) enqueuePartNotice(ctx context.Context, p store.Part, key, text string) {
+	if isPartNotice(p) {
+		return
+	}
+	if _, _, err := s.st.Enqueue(ctx, partNoticeItem(p, key, text)); err != nil {
 		s.log.Error("notice not stored", "outbox", p.OutboxID, "part", p.Part, "err", err)
 		return
 	}
@@ -252,7 +262,9 @@ func (s *Sender) Recover(ctx context.Context) error {
 	}
 	for _, p := range parts {
 		if !p.HasFloor {
-			s.notice(ctx, p) // claimed without a known floor: it cannot be checked
+			if err := s.notice(ctx, p); err != nil {
+				s.log.Warn("recovered part notice not stored", "outbox", p.OutboxID, "part", p.Part, "err", err)
+			}
 		}
 		s.emit(Event{Kind: PartUnknown, ThreadID: p.ThreadID, OutboxID: p.OutboxID, Part: p.Part})
 	}
@@ -464,7 +476,10 @@ func (s *Sender) checkPart(ctx context.Context, j *job, c *partCheck, outboxID i
 		return s.judgePart(ctx, bg, p, c)
 	}
 	if !p.HasFloor || s.sentTooOften(ctx, outboxID) {
-		s.giveUpCheck(bg, p)
+		if err := s.giveUpCheck(bg, p); err != nil {
+			s.log.Warn("part notice not stored", "outbox", p.OutboxID, "part", p.Part, "err", err)
+			return jobResult{retry: true, delay: time.Second}
+		}
 		return jobResult{}
 	}
 	text := fmt.Sprintf("⏳ Telegram did not confirm part %d of reply #%d. Checking whether it arrived…", p.Part+1, p.OutboxID)
@@ -491,13 +506,22 @@ func (s *Sender) checkPart(ctx context.Context, j *job, c *partCheck, outboxID i
 		if j.attempts++; j.attempts < 3 {
 			return jobResult{retry: true, delay: s.checkDelay}
 		}
-		s.giveUpCheck(bg, p)
+		if err := s.giveUpCheck(bg, p); err != nil {
+			s.log.Warn("part notice not stored", "outbox", p.OutboxID, "part", p.Part, "err", err)
+			return jobResult{retry: true, delay: time.Second}
+		}
 		return jobResult{}
 	case vGone, vBlocked:
-		_ = s.st.MarkPartChecked(bg, p.OutboxID, p.Part)
+		if err := s.st.MarkPartChecked(bg, p.OutboxID, p.Part); err != nil {
+			s.log.Warn("part check not saved", "outbox", p.OutboxID, "part", p.Part, "err", err)
+			return jobResult{retry: true, delay: time.Second}
+		}
 		return jobResult{}
 	default:
-		s.giveUpCheck(bg, p)
+		if err := s.giveUpCheck(bg, p); err != nil {
+			s.log.Warn("part notice not stored", "outbox", p.OutboxID, "part", p.Part, "err", err)
+			return jobResult{retry: true, delay: time.Second}
+		}
 		return jobResult{}
 	}
 	return s.judgePart(ctx, bg, p, c)
@@ -611,31 +635,31 @@ func (s *Sender) judgePart(ctx, bg context.Context, p store.Part, c *partCheck) 
 		if s.now().Sub(c.waitFrom) < maxPollWait {
 			return jobResult{retry: true, delay: 500 * time.Millisecond}
 		}
-		c.forget(bg, s.st, p.OutboxID, p.Part)
 		s.log.Info("part check: no getUpdates after the note; asking", "outbox", p.OutboxID, "part", p.Part)
-		if err := s.st.MarkPartChecked(bg, p.OutboxID, p.Part); err != nil {
-			s.log.Warn("part check not saved", "outbox", p.OutboxID, "part", p.Part, "err", err)
+		if err := s.notice(bg, p); err != nil {
+			s.log.Warn("part notice not stored", "outbox", p.OutboxID, "part", p.Part, "err", err)
+			return jobResult{retry: true, delay: time.Second}
 		}
+		c.forget(bg, s.st, p.OutboxID, p.Part)
 		s.deleteMessage(th, id)
-		s.notice(bg, p)
 		return jobResult{}
 	}
-	c.forget(bg, s.st, p.OutboxID, p.Part) // judged now, one way or the other
 	unseen, err := s.st.UnseenBetween(bg, p.ChatID, p.Floor, id)
 	if err == nil && unseen == 0 {
-		if ok, err := s.st.ResendPart(bg, p.OutboxID, p.Part); err != nil {
+		ok, err := s.st.ResendPart(bg, p.OutboxID, p.Part)
+		if err != nil {
 			s.log.Error("part not sent again", "outbox", p.OutboxID, "part", p.Part, "err", err)
-		} else if ok {
+			return jobResult{retry: true, delay: time.Second}
+		}
+		if ok {
 			s.log.Info("part did not arrive; sending it again", "outbox", p.OutboxID, "part", p.Part)
 		}
+		c.forget(bg, s.st, p.OutboxID, p.Part)
 		s.deleteMessage(th, id)
 		s.Wake()
 		return jobResult{}
 	}
 	s.log.Info("part may have arrived; asking before sending again", "outbox", p.OutboxID, "part", p.Part, "unseen", unseen)
-	if err := s.st.MarkPartChecked(bg, p.OutboxID, p.Part); err != nil {
-		s.log.Warn("part check not saved", "outbox", p.OutboxID, "part", p.Part, "err", err)
-	}
 	notice := fmt.Sprintf("⚠️ Part %d of reply #%d may not have arrived.", p.Part+1, p.OutboxID)
 	markup := &telegram.InlineKeyboardMarkup{InlineKeyboard: [][]telegram.InlineKeyboardButton{{
 		{Text: "🔁 Send again", CallbackData: ResendButtonData(p.OutboxID)},
@@ -645,20 +669,26 @@ func (s *Sender) judgePart(ctx, bg context.Context, p store.Part, c *partCheck) 
 			ChatID: p.ChatID, MessageID: id, Text: notice, ParseMode: "HTML", ReplyMarkup: markup,
 		})
 		if v := s.judge(err, p.ThreadID); v == vOK || v == vNotModified {
+			if err := s.st.MarkPartCheckedAndDeleteKey(bg, p.OutboxID, p.Part, checkNoteKey(p.OutboxID, p.Part)); err != nil {
+				s.log.Warn("part check not saved", "outbox", p.OutboxID, "part", p.Part, "err", err)
+				return jobResult{retry: true, delay: time.Second}
+			}
 			return jobResult{}
 		}
 	}
-	s.notice(bg, p) // the note could not become the notice: post the notice
+	if err := s.notice(bg, p); err != nil { // the note could not become the notice
+		s.log.Warn("part notice not stored", "outbox", p.OutboxID, "part", p.Part, "err", err)
+		return jobResult{retry: true, delay: time.Second}
+	}
+	c.forget(bg, s.st, p.OutboxID, p.Part)
+	s.deleteMessage(th, id)
 	return jobResult{}
 }
 
 // giveUpCheck ends the check of a part without an answer: the part gets the
 // "may not have arrived" notice and waits for /resend.
-func (s *Sender) giveUpCheck(ctx context.Context, p store.Part) {
-	if err := s.st.MarkPartChecked(ctx, p.OutboxID, p.Part); err != nil {
-		s.log.Warn("part check not saved", "outbox", p.OutboxID, "part", p.Part, "err", err)
-	}
-	s.notice(ctx, p)
+func (s *Sender) giveUpCheck(ctx context.Context, p store.Part) error {
+	return s.notice(ctx, p)
 }
 
 // sentTooOften reports a row that was sent maxAutoSends times or more.

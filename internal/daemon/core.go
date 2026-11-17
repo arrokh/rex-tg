@@ -244,6 +244,7 @@ type daemon struct {
 	ctlPending           map[int64]ctlSet        // queued control commands, by row id
 	vimNoticed           map[int64]bool          // inbound rows told that pi-vim did not react
 	mediaRetryBusy       map[int64]bool          // media downloads started by retry buttons
+	mediaSlots           chan struct{}           // bounds concurrent downloads and transcriptions
 	alertBusy            map[int64]bool
 	opening              map[int64]bool      // panes whose topic is being created
 	newFlows             map[string]*newFlow // /new requests, by the token that their buttons carry
@@ -300,6 +301,7 @@ func newDaemon(cfg config.Config, home string, log *slog.Logger, now func() time
 		ctlPending:     map[int64]ctlSet{},
 		vimNoticed:     map[int64]bool{},
 		mediaRetryBusy: map[int64]bool{},
+		mediaSlots:     make(chan struct{}, maxMediaWorkers),
 		alertBusy:      map[int64]bool{},
 		opening:        map[int64]bool{},
 		newFlows:       map[string]*newFlow{},
@@ -451,6 +453,9 @@ func (d *daemon) handle(ev any) {
 			d.keepPending(-e.orig, *e.ctl) // the row's id; kept before the row, so a stop between loses neither
 		}
 		queued := d.queueText(e.threadID, e.orig, e.tgMsg, e.text, e.kind, e.action)
+		if queued && (e.kind == "file" || e.kind == "voice") {
+			d.clearFileRetry(e.orig)
+		}
 		if !queued && e.ctl != nil {
 			d.controlTyped(-e.orig, false)
 		}
@@ -595,6 +600,9 @@ func (d *daemon) closeThread(threadID int64) {
 	th, err := d.st.Thread(d.ctx, threadID)
 	if err != nil {
 		return
+	}
+	if dl := d.delivering[threadID]; dl != nil && dl.cancel != nil {
+		dl.cancel()
 	}
 	d.forgetMac(threadID)
 	if err := d.st.Delete(d.ctx, lastTurnKey(threadID)); err != nil {

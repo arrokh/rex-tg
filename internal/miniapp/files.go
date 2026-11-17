@@ -28,9 +28,10 @@ import (
 
 // Limits of the file browser.
 const (
-	maxEntries    = 2000      // entries of one folder
-	maxTextBytes  = 512 << 10 // of a text file; a longer one shows its start
-	maxImageBytes = 4 << 20   // of an image shown as a picture
+	maxEntries          = 2000      // entries of one folder
+	maxDirectoryEntries = 4096      // raw names retained from one folder listing
+	maxTextBytes        = 512 << 10 // of a text file; a longer one shows its start
+	maxImageBytes       = 4 << 20   // of an image shown as a picture
 )
 
 // Entry is a file or folder in a listing.
@@ -154,10 +155,30 @@ func within(root, p string) bool {
 	return p == root || strings.HasPrefix(p, strings.TrimSuffix(root, string(filepath.Separator))+string(filepath.Separator))
 }
 
+// readDirPrefix retains at most maxDirectoryEntries names and reads one extra
+// to detect truncation. File.ReadDir returns directory order, so callers sort
+// the bounded prefix themselves.
+func readDirPrefix(dir string) ([]os.DirEntry, bool, error) {
+	f, err := os.Open(dir)
+	if err != nil {
+		return nil, false, err
+	}
+	defer f.Close()
+	entries, err := f.ReadDir(maxDirectoryEntries + 1)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return nil, false, err
+	}
+	if len(entries) > maxDirectoryEntries {
+		return entries[:maxDirectoryEntries], true, nil
+	}
+	return entries, false, nil
+}
+
 // listDir lists the folder real, which is rel as asked and realRel inside
-// base. Of a big folder, only the first maxEntries names are looked at.
+// base. A large folder is only read up to maxDirectoryEntries raw names; a
+// partial listing says so rather than implying it is complete.
 func listDir(ctx context.Context, base, rel, realRel, real string, repo bool) (View, error) {
-	des, err := os.ReadDir(real)
+	des, partial, err := readDirPrefix(real)
 	if err != nil {
 		return View{}, ErrNoFile
 	}
@@ -177,8 +198,12 @@ func listDir(ctx context.Context, base, rel, realRel, real string, repo bool) (V
 		}
 		return strings.ToLower(a.Name()) < strings.ToLower(b.Name())
 	})
-	if len(shown) > maxEntries {
+	if partial {
+		v.Note = "This folder is too large to list completely; some entries may be omitted."
+	} else if len(shown) > maxEntries {
 		v.Note = fmt.Sprintf("The first %d of %d entries.", maxEntries, len(shown))
+	}
+	if len(shown) > maxEntries {
 		shown = shown[:maxEntries]
 	}
 	var ign map[string]bool

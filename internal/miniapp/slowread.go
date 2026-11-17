@@ -20,9 +20,18 @@ import (
 // browser's git calls take at most 5 seconds each.
 const slowRead = 8 * time.Second
 
+// At most this many distinct reads may be outstanding. A macOS permission
+// prompt can hold a read forever, so timed-out reads keep their slots until
+// the underlying work actually finishes.
+const maxOutstandingReads = 8
+
 // errSlowRead is a read that did not end within slowRead. It goes on in the
 // background.
 var errSlowRead = errors.New("miniapp: the read did not end in time")
+
+// errReadLimit refuses a new distinct read while all outstanding slots are
+// in use. The caller can retry when one of those reads finishes.
+var errReadLimit = errors.New("miniapp: too many reads are still in progress")
 
 // slowReadText is the page's error for errSlowRead: what is "this
 // folder" or "this file or folder".
@@ -30,7 +39,12 @@ func slowReadText(what string) string {
 	return `{"error":"The Mac did not let rex-tg read ` + what + ` in time. macOS may be asking on the Mac whether rex-tg may read it: click Allow there, then try again."}`
 }
 
-// reads runs reads that may wait for macOS: one at a time for each key.
+func readLimitText(what string) string {
+	return `{"error":"Too many ` + what + ` reads are still in progress. Try again shortly."}`
+}
+
+// reads runs reads that may wait for macOS: one at a time for each key and
+// no more than maxOutstandingReads distinct keys at once.
 type reads struct {
 	mu sync.Mutex
 	on map[string]*read
@@ -49,6 +63,10 @@ func (rs *reads) do(key string, wait time.Duration, f func() (any, error)) (any,
 	rs.mu.Lock()
 	r := rs.on[key]
 	if r == nil {
+		if len(rs.on) >= maxOutstandingReads {
+			rs.mu.Unlock()
+			return nil, errReadLimit
+		}
 		r = &read{done: make(chan struct{})}
 		if rs.on == nil {
 			rs.on = map[string]*read{}

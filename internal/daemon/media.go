@@ -16,12 +16,13 @@ import (
 )
 
 const (
-	onlyTextText  = "Only text is supported for now."
-	noVoiceText   = "Voice notes need whisper.cpp; see the README."
-	voiceFailText = "❌ Could not turn the voice note into text."
-	fileFailText  = "❌ Could not download the file."
-	mediaTimeout  = 2 * time.Minute
-	defaultMaxMB  = 20
+	onlyTextText    = "Only text is supported for now."
+	noVoiceText     = "Voice notes need whisper.cpp; see the README."
+	voiceFailText   = "❌ Could not turn the voice note into text."
+	fileFailText    = "❌ Could not download the file."
+	mediaTimeout    = 2 * time.Minute
+	defaultMaxMB    = 20
+	maxMediaWorkers = 4 // downloads, ffmpeg and Whisper share this budget
 )
 
 // media handles a topic message without text (flow 9). Photos and documents
@@ -31,20 +32,32 @@ const (
 func (d *daemon) media(u telegram.Update, m *telegram.Message, th store.Thread) {
 	switch {
 	case len(m.Photo) > 0 || m.Document != nil:
-		if !d.recorded(u, m, "file", "", th.ID, store.InboundDone) {
+		fileID, name, size := fileOf(m)
+		update, msg, caption := u.UpdateID, m.MessageID, strings.TrimSpace(m.Caption)
+		f := fileRetry{FileID: fileID, Name: name, Size: size, Caption: caption, Quote: d.replyQuote(m, th)}
+		body, err := encodeFileRetry(f)
+		if err != nil {
+			d.log.Warn("encode file download", "err", err)
 			return
 		}
-		fileID, name, size := fileOf(m)
+		if size > d.maxUpload() {
+			body = "" // oversized files need no recoverable download
+		}
+		if !d.recorded(u, m, "file", body, th.ID, store.InboundDone) {
+			return
+		}
 		if limit := d.maxUpload(); size > limit {
 			d.replyTopic(th, fmt.Sprintf("file:%d", u.UpdateID),
 				fmt.Sprintf("❌ The file is too large. The limit is %d MB.", limit>>20))
 			return
 		}
 		dir := filepath.Join(d.cfg.UploadDir(), fmt.Sprint(th.ID))
-		update, msg, caption := u.UpdateID, m.MessageID, strings.TrimSpace(m.Caption)
-		quoted := d.replyQuote(m, th)
-		f := fileRetry{FileID: fileID, Name: name, Size: size, Caption: caption, Quote: quoted}
+		if !d.tryMediaSlot() {
+			d.fileDownloadFailed(th, update, f, errors.New("media workers are busy"))
+			return
+		}
 		d.spawn(func() {
+			defer d.releaseMediaSlot()
 			path, err := d.download(fileID, dir, fmt.Sprintf("%d-%s", msg, name))
 			if err != nil {
 				if d.ctx.Err() == nil {
@@ -56,14 +69,18 @@ func (d *daemon) media(u telegram.Update, m *telegram.Message, th store.Thread) 
 			d.emit(evQueueText{threadID: th.ID, orig: update, tgMsg: msg, text: filePrompt(path, f), kind: "file", action: inbound.ActText})
 		})
 	case m.Voice != nil || m.Audio != nil:
-		if !d.recorded(u, m, "voice", "", th.ID, store.InboundDone) {
+		fileID, size := voiceFile(m.Voice, m.Audio)
+		pending := ""
+		if d.cfg.Voice.WhisperCLI != "" && d.cfg.Voice.Model != "" && size <= d.maxUpload() {
+			pending = voicePendingBody
+		}
+		if !d.recorded(u, m, "voice", pending, th.ID, store.InboundDone) {
 			return
 		}
 		if d.cfg.Voice.WhisperCLI == "" || d.cfg.Voice.Model == "" {
 			d.replyTopic(th, fmt.Sprintf("voice:%d", u.UpdateID), noVoiceText)
 			return
 		}
-		fileID, size := voiceFile(m.Voice, m.Audio)
 		if limit := d.maxUpload(); size > limit {
 			d.replyTopic(th, fmt.Sprintf("voice:%d", u.UpdateID),
 				fmt.Sprintf("❌ The voice note is too large. The limit is %d MB.", limit>>20))
@@ -72,12 +89,17 @@ func (d *daemon) media(u telegram.Update, m *telegram.Message, th store.Thread) 
 		dir := filepath.Join(d.cfg.UploadDir(), fmt.Sprint(th.ID))
 		update, msg := u.UpdateID, m.MessageID
 		quoted := d.replyQuote(m, th)
+		if !d.tryMediaSlot() {
+			d.mediaWorkNotice(th, update, fmt.Sprintf("reply:voice:%d", update), "❌ The Mac is busy processing uploads. Send the voice note again shortly.")
+			return
+		}
 		d.spawn(func() {
+			defer d.releaseMediaSlot()
 			text, err := d.transcribe(fileID, dir, fmt.Sprintf("%d-voice", msg))
 			if err != nil || strings.TrimSpace(text) == "" {
 				if d.ctx.Err() == nil {
 					d.log.Warn("voice note", "thread", th.ID, "err", err)
-					d.replyTopic(th, fmt.Sprintf("voice:%d", update), voiceFailText)
+					d.mediaWorkNotice(th, update, fmt.Sprintf("reply:voice:%d", update), voiceFailText)
 				}
 				return
 			}
@@ -92,6 +114,20 @@ func (d *daemon) media(u telegram.Update, m *telegram.Message, th store.Thread) 
 		}
 	}
 }
+
+// tryMediaSlot refuses excess work instead of starting goroutines that wait
+// indefinitely. Files keep their durable retry metadata; voice notes ask the
+// owner to try again. A slot is held until the real worker finishes.
+func (d *daemon) tryMediaSlot() bool {
+	select {
+	case d.mediaSlots <- struct{}{}:
+		return true
+	default:
+		return false
+	}
+}
+
+func (d *daemon) releaseMediaSlot() { <-d.mediaSlots }
 
 // maxUpload is the download limit in bytes.
 func (d *daemon) maxUpload() int64 {

@@ -942,6 +942,46 @@ func TestRecover(t *testing.T) {
 	}
 }
 
+func TestRecoverPersistsUnknownNoticeBeforeCheckingPart(t *testing.T) {
+	e := newEnv(t, sender.Options{})
+	th := e.topic(1)
+	id := e.enqueue(th, "reply", store.FormatPlain, "answer")
+	if ok, err := e.st.ClaimPart(ctx, id, 0, -1); err != nil || !ok {
+		t.Fatalf("claim: %v %v", ok, err)
+	}
+	if err := e.s.Recover(ctx); err != nil {
+		t.Fatal(err)
+	}
+	p, err := e.st.Part(ctx, id, 0)
+	if err != nil || p.State != store.OutboxUnknown || !p.Checked {
+		t.Fatalf("recovered part = %+v, err %v", p, err)
+	}
+	key := fmt.Sprintf("notice:unknown:%d:0", id)
+	noticeID, found, err := e.st.OutboxIDByKey(ctx, th.ID, key)
+	if err != nil || !found {
+		t.Fatalf("durable notice id = %d, found %v, err %v", noticeID, found, err)
+	}
+
+	// A new sender recovers the same database; the notice remains queued and
+	// the unknown original stays checked rather than being sent again.
+	e.s = sender.New(e.st, e.srv.Client(), sender.Options{Now: e.clk.Now, Sleep: e.clk.Sleep})
+	if err := e.s.Recover(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got, found, err := e.st.OutboxIDByKey(ctx, th.ID, key); err != nil || !found || got != noticeID {
+		t.Fatalf("notice after restart = %d, found %v, err %v", got, found, err)
+	}
+	e.start()
+	e.waitState(noticeID, store.OutboxSent)
+	if p, err := e.st.Part(ctx, id, 0); err != nil || p.State != store.OutboxUnknown || !p.Checked {
+		t.Fatalf("original part after recovery send = %+v, err %v", p, err)
+	}
+	ms := e.srv.Messages(chat)
+	if len(ms) != 1 || ms[0].Text != noticeText(id, 0) || len(e.srv.Calls("sendMessage")) != 1 {
+		t.Fatalf("messages = %+v; calls = %d", ms, len(e.srv.Calls("sendMessage")))
+	}
+}
+
 func TestPlainFromHTML(t *testing.T) {
 	got := sender.PlainFromHTML(`<a href="x">a &amp;lt; b</a> &lt;i&gt; <pre><code>x&quot;y</code></pre>`)
 	if want := `a &lt; b <i> x"y`; got != want {
@@ -1002,6 +1042,23 @@ func TestRichFallbackToDocument(t *testing.T) {
 	e.waitState(id, store.OutboxSent)
 	ms := e.srv.Messages(chat)
 	if len(ms) != 1 || string(ms[0].File) != long || !strings.HasSuffix(ms[0].Filename, ".md") {
+		t.Fatalf("messages = %+v", ms)
+	}
+	if n := len(e.srv.Calls("sendMessage")); n != 0 {
+		t.Fatalf("sendMessage calls = %d, want 0", n)
+	}
+}
+
+func TestRichFallbackEmojiUsesUTF16Limit(t *testing.T) {
+	e := newEnv(t, sender.Options{})
+	th := e.topic(1)
+	text := strings.Repeat("😀", 2049) // 4098 UTF-16 units, though only 2049 runes
+	id := e.enqueue(th, "k", store.FormatRich, text)
+	e.srv.FailNext("sendRichMessage", 1, 400, "Bad Request: bad", 0)
+	e.start()
+	e.waitState(id, store.OutboxSent)
+	ms := e.srv.Messages(chat)
+	if len(ms) != 1 || string(ms[0].File) != text || !strings.HasSuffix(ms[0].Filename, ".md") {
 		t.Fatalf("messages = %+v", ms)
 	}
 	if n := len(e.srv.Calls("sendMessage")); n != 0 {
@@ -1315,8 +1372,86 @@ func TestCheckResumesWithItsNoteAfterARestart(t *testing.T) {
 	}
 }
 
-// TestStaleCheckNoteIsSweptAtStart: a check stops while it waits, and its
-// part is settled while rex-tg is down. The next start deletes that note
+// If the process stops after the Telegram edit but before local completion,
+// recovery must resume the same note rather than sweeping the converted
+// notice as a stale check note.
+func TestRecoverKeepsConvertedTerminalNotice(t *testing.T) {
+	e := newEnv(t, sender.Options{CheckDelay: time.Millisecond, PolledSince: func(time.Time) bool { return true }})
+	th := e.topic(1)
+	id := e.enqueue(th, "k", store.FormatPlain, "original answer")
+	if ok, err := e.st.ClaimPart(ctx, id, 0, 0); err != nil || !ok {
+		t.Fatalf("claim: %v %v", ok, err)
+	}
+	if err := e.st.MarkPartUnknown(ctx, id, 0); err != nil {
+		t.Fatal(err)
+	}
+	// The first message number is an unrecorded possible arrival. The second
+	// is the check note, so the verdict conservatively edits it into the notice.
+	e.srv.PushMessage(chat, 1, 7, "possible unknown arrival")
+	note, err := e.srv.Client().SendMessage(ctx, telegram.SendMessageParams{
+		ChatID: chat, MessageThreadID: 1, Text: "Checking whether the part arrived…", ParseMode: "HTML",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.st.NoteMessage(ctx, chat, note.MessageID, t0); err != nil {
+		t.Fatal(err)
+	}
+	key := fmt.Sprintf("check_note:%d:0", id)
+	value := fmt.Sprintf("%d:%d:%d:%d", note.MessageID, t0.UnixNano(), chat, th.ID)
+	if err := e.st.Set(ctx, key, value); err != nil {
+		t.Fatal(err)
+	}
+	markup := &telegram.InlineKeyboardMarkup{InlineKeyboard: [][]telegram.InlineKeyboardButton{{
+		{Text: "🔁 Send again", CallbackData: sender.ResendButtonData(id)},
+	}}}
+	if _, err := e.srv.Client().EditMessageText(ctx, telegram.EditMessageTextParams{
+		ChatID: chat, MessageID: note.MessageID, Text: noticeText(id, 0), ParseMode: "HTML", ReplyMarkup: markup,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Crash boundary: Telegram has converted the note, but SQLite still has
+	// the unchecked part and resume key. Recovery must retain that note.
+	e.s = sender.New(e.st, e.srv.Client(), sender.Options{
+		Now: e.clk.Now, Sleep: e.clk.Sleep, CheckDelay: time.Millisecond,
+		PolledSince: func(time.Time) bool { return true },
+	})
+	if err := e.s.Recover(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if p, err := e.st.Part(ctx, id, 0); err != nil || p.Checked {
+		t.Fatalf("part before resumed completion = %+v, err %v", p, err)
+	}
+	if _, ok, err := e.st.Get(ctx, key); err != nil || !ok {
+		t.Fatalf("resume key after Recover: found %v, err %v", ok, err)
+	}
+	if n := len(e.srv.Calls("deleteMessage")); n != 0 {
+		t.Fatalf("Recover deleted the converted notice (%d delete calls)", n)
+	}
+
+	e.start()
+	waitFor(t, "atomic check completion", func() bool {
+		p, err := e.st.Part(ctx, id, 0)
+		_, hasKey, keyErr := e.st.Get(ctx, key)
+		return err == nil && keyErr == nil && p.Checked && !hasKey
+	})
+	for _, m := range e.srv.Messages(chat) {
+		if m.ID == note.MessageID {
+			if m.Deleted || m.Text != noticeText(id, 0) {
+				t.Fatalf("converted notice after recovery = %+v", m)
+			}
+			if n := len(e.srv.Calls("sendMessage")); n != 1 {
+				t.Fatalf("sendMessage calls = %d, want only the check note", n)
+			}
+			return
+		}
+	}
+	t.Fatalf("converted notice %d is missing after recovery", note.MessageID)
+}
+
+// TestStaleCheckNoteIsSweptAtStart: a check stops while it waits, and its part is
+// settled while rex-tg is down. The next start deletes that note
 // (by the number stored with it) and its row, and checks nothing.
 func TestStaleCheckNoteIsSweptAtStart(t *testing.T) {
 	var stopping atomic.Bool

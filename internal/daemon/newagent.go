@@ -17,6 +17,7 @@ import (
 	"rex-tg/internal/agents"
 	"rex-tg/internal/format"
 	"rex-tg/internal/inbound"
+	"rex-tg/internal/registry"
 	"rex-tg/internal/rex"
 	"rex-tg/internal/sender"
 	"rex-tg/internal/store"
@@ -729,7 +730,7 @@ func (d *daemon) awaitAgent(chat, thread int64, a newAgent, st rex.Started, toke
 	poll := time.NewTicker(d.timing.NewAgentPoll)
 	defer poll.Stop()
 	var q *shownQuestion
-	seq, seen := 0, ""
+	seq, seen, seenPID := 0, "", 0
 	defer func() { d.closeQuestion(chat, q, "") }()
 	for {
 		select {
@@ -757,6 +758,9 @@ func (d *daemon) awaitAgent(chat, thread int64, a newAgent, st rex.Started, toke
 			return
 		}
 		m, ok, err := d.readStartupMenu(d.ctx, st)
+		if got, detected := registry.Detect(d.rules, p.Foreground); !detected || got != rt || p.Foreground.PID <= 0 {
+			ok = false // a shell or an unverified process cannot ask for keys
+		}
 		now := time.Now()
 		switch {
 		case err != nil: // keep what is shown; the next read decides
@@ -767,12 +771,13 @@ func (d *daemon) awaitAgent(chat, thread int64, a newAgent, st rex.Started, toke
 			}
 			// A list counts once it shows on two reads in a row, so a frame
 			// drawn halfway is never posted.
-			if id := m.id(); (q == nil || q.id != id) && seen == id {
+			if id := m.id(); (q == nil || q.id != id || q.pid != p.Foreground.PID) && seen == id && seenPID == p.Foreground.PID {
 				d.closeQuestion(chat, q, "")
 				seq++
 				q = d.postQuestion(chat, thread, token, name, m, seq)
+				q.pid = p.Foreground.PID
 			}
-			seen = m.id()
+			seen, seenPID = m.id(), p.Foreground.PID
 		default:
 			seen = ""
 			if q != nil {
@@ -812,6 +817,7 @@ func minTime(a, b time.Time) time.Time {
 
 // shownQuestion is a startup question that awaitAgent posted.
 type shownQuestion struct {
+	pid      int // the process that showed this question; a replacement invalidates its buttons
 	id       string
 	seq      int
 	labels   []string
@@ -874,7 +880,7 @@ func (d *daemon) onStartupAnswer(chat int64, st rex.Started, rt agents.Runtime, 
 	label := esc(q.labels[a.index])
 	keep := false // keep the buttons, so you can tap again
 	var note string
-	switch err := d.answerStartup(d.ctx, st, rt, q.id, a.index); {
+	switch err := d.answerStartup(d.ctx, st, rt, q.pid, q.id, a.index); {
 	case err == nil:
 		q.answered = true
 		note = "✅ Answered: " + label

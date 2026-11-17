@@ -114,7 +114,7 @@ func TestAnswerStartupMovesTheCursorThenPressesEnter(t *testing.T) {
 		{target: 0, keys: "enter", end: "exited"},
 	} {
 		p := trustPane()
-		if err := startupDaemon(t, p).answerStartup(t.Context(), trustStarted, agents.Pi, id, c.target); err != nil {
+		if err := startupDaemon(t, p).answerStartup(t.Context(), trustStarted, agents.Pi, memPID, id, c.target); err != nil {
 			t.Fatalf("target %d: %v", c.target, err)
 		}
 		if got := p.pressed(); got != c.keys || p.state != c.end {
@@ -134,6 +134,7 @@ func TestAnswerStartupNeverPressesOnAGuess(t *testing.T) {
 		{"another question", func(p *memPane, d *daemon) string { return "other" }, errStartupGone, ""},
 		{"paused", func(p *memPane, d *daemon) string { d.paused.Store(true); return id }, errPausedBefore, ""},
 		{"a shell in front", func(p *memPane, d *daemon) string { p.gone = map[string]bool{"no": true}; return id }, errGoneBefore, ""},
+		{"another agent of the same runtime", func(p *memPane, d *daemon) string { p.pid = memPID + 1; return id }, errGoneBefore, ""},
 		{"the cursor does not move", func(p *memPane, d *daemon) string { delete(p.moves["no"], "down"); return id }, errStartupStuck, "down"},
 		{"Enter does not take", func(p *memPane, d *daemon) string { delete(p.moves["yes"], "enter"); return id }, errStartupStuck, "down enter"},
 		{"the agent leaves after a key", func(p *memPane, d *daemon) string { p.gone = map[string]bool{"yes": true}; return id }, errGoneBefore, "down"},
@@ -144,7 +145,7 @@ func TestAnswerStartupNeverPressesOnAGuess(t *testing.T) {
 		d := startupDaemon(t, p)
 		qid := c.setup(p, d)
 		start := time.Now()
-		err := d.answerStartup(t.Context(), trustStarted, agents.Pi, qid, 1)
+		err := d.answerStartup(t.Context(), trustStarted, agents.Pi, memPID, qid, 1)
 		if !errors.Is(err, c.want) || p.pressed() != c.keys {
 			t.Errorf("%s: %v, keys %q; want %v, %q", c.name, err, p.pressed(), c.want, c.keys)
 		}

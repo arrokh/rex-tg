@@ -561,18 +561,9 @@ func (d *daemon) keysCommand(th store.Thread, upd int64, keys []string, piVim bo
 			d.replyTopic(th, tag, "⛔ Not sent: "+format.Escape(reason)+".")
 			return
 		}
+		check := func() error { return d.deliveryCheck(d.ctx, th.ID, pane) }
 		if piVim {
-			pressed, err := d.settlePiVim(d.ctx, pane, vimNormal)
-			if err == nil && pressed { // that took time: check again
-				switch paused, front, cerr := d.safeNow(pane); {
-				case cerr != nil:
-					err = errRetryBefore
-				case paused:
-					err = errPausedBefore
-				case !front:
-					err = errGoneBefore
-				}
-			}
+			_, err := d.settlePiVimChecked(d.ctx, pane, vimNormal, check)
 			switch {
 			case errors.Is(err, errVimStuck):
 				d.replyTopic(th, tag, "⚠️ The pi editor did not react to Escape, so nothing more was pressed. Check with /screen.")
@@ -587,6 +578,10 @@ func (d *daemon) keysCommand(th store.Thread, upd int64, keys []string, piVim bo
 				d.replyTopic(th, tag, "Could not press the keys.")
 				return
 			}
+		}
+		if err := check(); err != nil {
+			d.replyTopic(th, tag, "⛔ Not sent: "+format.Escape(err.Error())+".")
+			return
 		}
 		if err := d.rx.SendKeys(d.ctx, pane.Session, pane.Block, keys...); err != nil {
 			d.replyTopic(th, tag, "Could not press the keys.")
