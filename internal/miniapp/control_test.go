@@ -79,6 +79,21 @@ func TestListFolders(t *testing.T) {
 	}
 }
 
+// A capped scan of a very large folder still returns a bounded list and
+// marks the result as possibly incomplete.
+func TestListFoldersBoundsVeryLargeFolder(t *testing.T) {
+	home := t.TempDir()
+	for i := 0; i <= maxDirectoryEntries; i++ {
+		if err := os.Mkdir(filepath.Join(home, fmt.Sprintf("dir-%05d", i)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	l, err := ListFolders(home, "", false)
+	if err != nil || len(l.Dirs) != maxFolders || !l.More {
+		t.Errorf("%d folders, more %v, %v", len(l.Dirs), l.More, err)
+	}
+}
+
 func folderNames(fs []Folder) string {
 	var s []string
 	for _, f := range fs {

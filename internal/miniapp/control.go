@@ -107,7 +107,7 @@ type FolderList struct {
 	Parent string   `json:"parent,omitempty"` // "" in the home folder: the explorer goes no higher
 	Dirs   []Folder `json:"dirs"`             // its folders; Shown is the name
 	Git    bool     `json:"git"`              // it is the top folder of a git repository
-	More   bool     `json:"more"`             // it has more folders than the list holds
+	More   bool     `json:"more"`             // more folders may not be shown (also when scanning was capped)
 }
 
 // Operations of ControlAction.
@@ -271,11 +271,11 @@ func ListFolders(home, dir string, hidden bool) (FolderList, error) {
 	if err != nil || !within(realHome, real) || !within(filepath.Clean(home), dir) && !within(realHome, dir) {
 		return FolderList{}, ErrNoFolder
 	}
-	des, err := os.ReadDir(real)
+	des, partial, err := readDirPrefix(real)
 	if err != nil {
 		return FolderList{}, ErrNoFolder
 	}
-	l := FolderList{Folder: Folder{Path: dir, Shown: tilde(home, dir)}, Dirs: []Folder{}}
+	l := FolderList{Folder: Folder{Path: dir, Shown: tilde(home, dir)}, Dirs: []Folder{}, More: partial}
 	if real != realHome {
 		l.Parent = filepath.Dir(dir)
 	}
@@ -376,6 +376,10 @@ func (s *Server) controlFolders(w http.ResponseWriter, r *http.Request) {
 	})
 	if errors.Is(err, errSlowRead) {
 		http.Error(w, slowReadText("this folder"), http.StatusServiceUnavailable)
+		return
+	}
+	if errors.Is(err, errReadLimit) {
+		http.Error(w, readLimitText("folder"), http.StatusServiceUnavailable)
 		return
 	}
 	l, _ := got.(FolderList)

@@ -316,6 +316,12 @@ func (s *Store) InboundByID(ctx context.Context, updateID int64) (Inbound, bool,
 	return ins[0], true, nil
 }
 
+// MediaWork lists original media updates whose work metadata is still
+// present. A worker may have failed or been interrupted before queuing text.
+func (s *Store) MediaWork(ctx context.Context) ([]Inbound, error) {
+	return queryInbound(ctx, s.db, `WHERE update_id>0 AND kind IN ('file','voice') AND state='done' AND body<>'' ORDER BY update_id`)
+}
+
 // QueuedInbound lists a topic's queued updates, oldest first.
 func (s *Store) QueuedInbound(ctx context.Context, threadID int64) ([]Inbound, error) {
 	return queryInbound(ctx, s.db, `WHERE thread_id=? AND state='queued' ORDER BY created_at, update_id`, threadID)
@@ -351,6 +357,22 @@ func (s *Store) RecoverTyping(ctx context.Context, at time.Time) ([]Inbound, err
 func (s *Store) DeliveredSince(ctx context.Context, threadID int64, since time.Time) ([]Inbound, error) {
 	return queryInbound(ctx, s.db, `WHERE thread_id=? AND state='delivered' AND delivered_at>=? ORDER BY delivered_at, update_id`,
 		threadID, toMsNN(since))
+}
+
+// AcknowledgedEcho reports whether this exact transcript event already
+// acknowledged input in this topic. Its identity remains useful when a
+// failed transcript transaction replays after the acknowledgment was saved.
+func (s *Store) AcknowledgedEcho(ctx context.Context, threadID int64, eventKey string) (bool, error) {
+	if eventKey == "" {
+		return false, nil
+	}
+	var found bool
+	err := s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM inbound
+		WHERE thread_id=? AND state='acked' AND acked_event_key=?)`, threadID, eventKey).Scan(&found)
+	if err != nil {
+		return false, fmt.Errorf("store: acknowledged echo: %w", err)
+	}
+	return found, nil
 }
 
 // AckInbound marks an update as confirmed by a transcript line.

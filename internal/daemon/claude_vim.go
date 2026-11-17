@@ -57,6 +57,10 @@ func claudeFooter(screen string) (box, visual bool) {
 // whether it pressed a key. A pane without the indicator is left alone, and a
 // screen that cannot be read counts as no indicator.
 func (d *daemon) settleClaudeVim(ctx context.Context, pane store.Pane) (pressed bool, err error) {
+	return d.settleClaudeVimChecked(ctx, pane, func() error { return d.safeKey(ctx, pane) })
+}
+
+func (d *daemon) settleClaudeVimChecked(ctx context.Context, pane store.Pane, check func() error) (pressed bool, err error) {
 	screen, err := d.rx.Capture(ctx, pane.Session, pane.Block)
 	if err != nil || !claudeVisual(screen) {
 		if v, ok := d.vimStuck.Load(pane.ID); ok && v.(vimStuckMark).label == claudeStuckLabel {
@@ -70,13 +74,8 @@ func (d *daemon) settleClaudeVim(ctx context.Context, pane store.Pane) (pressed 
 		}
 		d.vimStuck.Delete(pane.ID)
 	}
-	switch paused, front, err := d.safeNow(pane); {
-	case err != nil:
-		return false, errRetryBefore
-	case paused:
-		return false, errPausedBefore
-	case !front:
-		return false, errGoneBefore
+	if err := check(); err != nil {
+		return false, err
 	}
 	if err := d.rx.SendKeys(ctx, pane.Session, pane.Block, "escape"); err != nil {
 		return false, errRetryBefore

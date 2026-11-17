@@ -134,10 +134,12 @@ func writeAtomic(path string, data []byte, mode fs.FileMode, replace bool) error
 		return err
 	}
 	if !replace {
-		if _, err := os.Lstat(path); err == nil {
-			cleanup()
-			return fmt.Errorf("%s already exists", path)
-		}
+		// A check followed by Rename races another installer and can replace
+		// its backup. Linking the finished file publishes it only if the
+		// destination is still absent, atomically on the same filesystem.
+		err := os.Link(name, path)
+		cleanup()
+		return err
 	}
 	if err := os.Rename(name, path); err != nil {
 		cleanup()

@@ -1,6 +1,7 @@
 package daemon_test
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"strings"
@@ -10,6 +11,35 @@ import (
 	"rex-tg/internal/telegram"
 	"rex-tg/internal/telegram/tgtest"
 )
+
+func TestInterruptedPhotoCanBeRetried(t *testing.T) {
+	e, _, thread := piTopic(t, "pi-interrupted-photo")
+	e.tg.AddFile("interrupted-photo", "photos/interrupted.jpg", []byte("synthetic photo"))
+	e.tg.Delay("getFile", 300*time.Millisecond)
+	update := e.tg.PushUpdate(telegram.Update{Message: &telegram.Message{
+		MessageID: 9301, MessageThreadID: thread, IsTopicMessage: true,
+		From: &telegram.User{ID: ownerID}, Chat: telegram.Chat{ID: chatID, Type: "private"},
+		Photo: []telegram.PhotoSize{{FileID: "interrupted-photo", FileSize: 15}}, Caption: "resume this download",
+	}})
+	e.waitFor("the download to start", func() bool { return len(e.tg.Calls("getFile")) == 1 })
+	e.stop() // cancels the worker after the update's poll offset was advanced
+	e.tg.Delay("getFile", 0)
+	e.start()
+	notice := e.waitText(thread, "Could not download the file")
+	if len(e.pastes()) != 0 {
+		t.Fatal("an interrupted download was typed automatically")
+	}
+	e.pressButton(notice, buttonData(notice, "Retry"))
+	e.waitFor("the recovered download to be typed", func() bool { return len(e.pastes()) == 1 })
+	if !strings.HasPrefix(e.pastes()[0], "resume this download\n") {
+		t.Fatalf("caption was lost: %q", e.pastes()[0])
+	}
+	st := e.peek()
+	e.waitFor("the download metadata to be cleared", func() bool {
+		in, ok, err := st.InboundByID(context.Background(), update.UpdateID)
+		return err == nil && ok && in.Body == ""
+	})
+}
 
 func TestFailedPhotoCanBeRetried(t *testing.T) {
 	e, _, thread := piTopic(t, "pi-photo-retry")

@@ -1685,6 +1685,22 @@ func TestLargeUploadIsRefused(t *testing.T) {
 	e.waitText(thread, "too large")
 	e.never("typing a refused file", 400*time.Millisecond, func() bool { return len(e.pastes()) > 0 })
 
+	// Telegram can omit the size. A streaming-size rejection must clear
+	// the pre-worker metadata with its notice, so restart offers no retry.
+	e.tg.AddFile("doc-stream-big", "docs/large.bin", make([]byte, (1<<20)+1))
+	before := e.countText(thread, "too large")
+	streamed := e.tg.PushUpdate(telegram.Update{Message: &telegram.Message{
+		MessageID: 9402, MessageThreadID: thread, IsTopicMessage: true,
+		From: &telegram.User{ID: ownerID}, Chat: telegram.Chat{ID: chatID, Type: "private"},
+		Document: &telegram.Document{FileID: "doc-stream-big", FileName: "large.bin"},
+	}})
+	e.waitFor("the streamed-size refusal", func() bool { return e.countText(thread, "too large") > before })
+	st := e.peek()
+	in, found, err := st.InboundByID(context.Background(), streamed.UpdateID)
+	if err != nil || !found || in.Body != "" {
+		t.Fatalf("oversized download still has recovery metadata: %+v, %v, %v", in, found, err)
+	}
+
 	// A small document keeps only a safe base name.
 	e.tg.AddFile("doc-small", "docs/a.txt", []byte("hi"))
 	e.tg.PushUpdate(telegram.Update{Message: &telegram.Message{

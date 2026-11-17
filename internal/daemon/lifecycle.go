@@ -106,6 +106,9 @@ func (d *daemon) startup(ctx context.Context) error {
 		}
 	}
 
+	if err := d.recoverMediaWork(ctx); err != nil {
+		return err
+	}
 	if err := d.getMe(ctx); err != nil {
 		return err
 	}
@@ -325,26 +328,35 @@ func (d *daemon) rexEventLoop(ctx context.Context) {
 	for ctx.Err() == nil {
 		started := d.now()
 		evs, errs := d.rx.Events(ctx)
-		for ev := range evs {
-			ev := ev
-			d.regq.push(regJob{run: func(ctx context.Context) ([]registry.Change, error) {
-				return d.reg.RexEvent(ctx, ev)
-			}})
-		}
-		for err := range errs {
-			if ctx.Err() != nil {
-				break
-			}
-			var pe *rex.ParseError
-			var de *rex.DroppedError
-			switch {
-			case errors.As(err, &pe):
-				d.log.Debug("rex events: unreadable line")
-			case errors.As(err, &de):
-				d.log.Warn("rex events: events dropped", "count", de.Count)
-				d.requestScan()
-			default:
-				d.log.Warn("rex events stream ended", "err", err)
+		for evs != nil || errs != nil {
+			select {
+			case <-ctx.Done():
+				return
+			case event, ok := <-evs:
+				if !ok {
+					evs = nil
+					continue
+				}
+				jobEvent := event
+				d.regq.push(regJob{run: func(ctx context.Context) ([]registry.Change, error) {
+					return d.reg.RexEvent(ctx, jobEvent)
+				}})
+			case err, ok := <-errs:
+				if !ok {
+					errs = nil
+					continue
+				}
+				var pe *rex.ParseError
+				var de *rex.DroppedError
+				switch {
+				case errors.As(err, &pe):
+					d.log.Debug("rex events: unreadable line")
+				case errors.As(err, &de):
+					d.log.Warn("rex events: events dropped", "count", de.Count)
+					d.requestScan()
+				default:
+					d.log.Warn("rex events stream ended", "err", err)
+				}
 			}
 		}
 		if ctx.Err() != nil {

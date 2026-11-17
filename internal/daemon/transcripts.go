@@ -51,13 +51,14 @@ type pendingTail struct {
 
 // tailScan is the result of scanning a transcript to its end in a worker.
 type tailScan struct {
-	conv   store.Conversation
-	thread int64
-	token  int
-	ok     bool
-	pos    tail.Position
-	newest time.Time // the last event time, so a later replay of the file is recognized
-	finals []agents.Event
+	conv     store.Conversation
+	thread   int64
+	token    int
+	ok       bool
+	pos      tail.Position
+	newest   time.Time // the last event time, so a later replay of the file is recognized
+	finals   []agents.Event
+	backfill int
 }
 
 // startTailer starts (or restarts) the tailer of a session at the place its
@@ -83,7 +84,9 @@ func (d *daemon) startTailer(conv store.Conversation, threadID int64, start regi
 		case ok:
 			d.follow(conv, threadID, tail.Position{Offset: cur.Offset, DevIno: cur.DevIno})
 		default:
-			d.scanThenFollow(conv, threadID, 0)
+			// A live topic with no cursor after restart may be recovering an
+			// interrupted start-at-end scan; retain its configured backfill.
+			d.scanThenFollow(conv, threadID, d.cfg.Display.Backfill)
 		}
 	}
 	return nil
@@ -119,7 +122,7 @@ func (d *daemon) scanThenFollow(conv store.Conversation, threadID int64, n int) 
 	d.pending[conv.ID] = pendingTail{thread: threadID, token: token}
 	d.spawn(func() {
 		res := d.scanEnd(conv, n)
-		res.thread, res.token = threadID, token
+		res.thread, res.token, res.backfill = threadID, token, n
 		d.emit(evTailScan(res))
 	})
 }
@@ -165,27 +168,56 @@ func (d *daemon) onTailScan(e evTailScan) {
 	if !ok || p.token != e.token {
 		return // stopped or restarted meanwhile
 	}
-	delete(d.pending, e.conv.ID)
 	if e.ok {
-		cur, _, _ := d.st.Cursor(d.ctx, e.conv.Transcript)
+		cur, _, err := d.st.Cursor(d.ctx, e.conv.Transcript)
+		if err != nil {
+			d.log.Warn("read cursor for backfill", "err", err)
+			d.retryTailScan(e)
+			return
+		}
 		cur.Transcript, cur.DevIno, cur.Offset, cur.UpdatedAt = e.conv.Transcript, e.pos.DevIno, e.pos.Offset, d.now()
 		if e.newest.After(cur.LastEventAt) {
 			cur.LastEventAt = e.newest
 		}
-		if err := d.st.SaveCursor(d.ctx, cur); err != nil {
-			d.log.Warn("save cursor", "err", err)
-		}
+		var items []store.OutboxItem
 		for _, f := range e.finals {
-			d.enqueue(store.OutboxItem{
+			it := store.OutboxItem{
 				ThreadID: e.thread, Key: "backfill:" + f.Key, Kind: "backfill", Silent: true,
 				Parts: d.markdownParts(f.Text, "backfill", false),
-			})
+			}
+			if len(it.Parts) > 0 {
+				items = append(items, it)
+			}
 		}
+		if _, err := d.st.CommitTranscriptBatch(d.ctx, cur, items, "", ""); err != nil {
+			d.log.Warn("commit transcript backfill", "conversation", e.conv.ID, "err", err)
+			d.retryTailScan(e)
+			return
+		}
+		for _, it := range items {
+			d.markBelow(it.ThreadID)
+		}
+		d.snd.Wake()
 	}
+	delete(d.pending, e.conv.ID)
 	d.follow(e.conv, e.thread, e.pos)
 	if !p.stopAt.IsZero() { // the session stopped while the scan ran
 		d.tailers[e.conv.ID].stopAt = p.stopAt
 	}
+}
+
+// retryTailScan leaves the pending start in place and rescans from byte 0
+// after a transient storage failure. The scan result is never committed until
+// its backfill and cursor can be stored together.
+func (d *daemon) retryTailScan(e evTailScan) {
+	d.spawn(func() {
+		if !sleepCtx(d.ctx, d.timing.TailRestart) {
+			return
+		}
+		res := d.scanEnd(e.conv, e.backfill)
+		res.thread, res.token, res.backfill = e.thread, e.token, e.backfill
+		d.emit(evTailScan(res))
+	})
 }
 
 // restartTailer starts a stopped tailer again from the stored cursor (after a
@@ -498,8 +530,13 @@ func (d *daemon) onBatch(ev evBatch) {
 		guard = tl.replayUntil
 	}
 	now := d.now()
-	tr := d.tracker(th)
+	base := d.tracker(th)
+	tr := base.Clone()
+	// Keep the candidate isolated from every other tracker update until its
+	// cursor, outbox rows, and snapshot commit together.
+	d.trackers[th.ID] = tr
 	lastAt := cur.LastEventAt
+	finishedTree := ""
 	var items []store.OutboxItem
 
 	for _, ln := range ev.b.Lines {
@@ -528,7 +565,7 @@ func (d *daemon) onBatch(ev evBatch) {
 			switch e.Kind {
 			case agents.UserPrompt:
 				d.shownReset(th.ID) // a new turn: the images of the last one are not its own
-				d.turnStarted(conv.ID, conv.CWD, tr.Running())
+				d.turnStarted(conv.ID, conv.CWD, e.Key, tr.Running())
 				if !e.Auto { // no person typed it, so it is no Telegram message
 					echo = d.echo(th, e, now)
 					if !echo && d.cfg.Display.MacNotice && d.typedRecently(th.ID, e.At, now) {
@@ -542,6 +579,7 @@ func (d *daemon) onBatch(ev evBatch) {
 			case agents.AssistantText:
 				if e.Phase == agents.Final {
 					d.signal(conv.ID, registry.Signal{State: "idle", At: at})
+					finishedTree = d.turnTrees[conv.ID].key
 					d.turnAnswered(conv.ID, th.ID, e.Key)
 				} else {
 					d.checkPromptGone(conv.ID, now)
@@ -570,20 +608,35 @@ func (d *daemon) onBatch(ev evBatch) {
 		Transcript: conv.Transcript, DevIno: ev.b.End.DevIno, Offset: ev.b.End.Offset,
 		LastEventAt: lastAt, UpdatedAt: now,
 	}
-	if _, err := d.st.CommitBatch(ctx, c, items); err != nil {
-		// The tracker already took these lines. Read them again from the
-		// stored cursor; the outbox keys stop a repeat from posting twice.
-		d.log.Error("commit batch; reading the lines again", "conversation", conv.ID, "err", err)
-		d.stopTailer(conv.ID, false)
-		d.spawn(func() {
-			if sleepCtx(d.ctx, time.Second) {
-				d.emit(evRestart{conv: conv.ID})
-			}
-		})
+	snapshot, err := json.Marshal(tr.Snapshot())
+	if err != nil {
+		d.trackers[th.ID] = base
+		d.retryBatch(conv.ID, err)
 		return
 	}
+	snapshotValue := string(snapshot)
+	if _, err := d.st.CommitTranscriptBatch(ctx, c, items, fmt.Sprintf("turn:%d", th.ID), snapshotValue); err != nil {
+		d.trackers[th.ID] = base
+		d.retryBatch(conv.ID, err)
+		return
+	}
+	d.snaps[th.ID] = snapshotValue
+	if start, ok := d.turnTrees[conv.ID]; ok && finishedTree != "" && start.key == finishedTree {
+		delete(d.turnTrees, conv.ID)
+	}
 	d.snd.Wake()
-	d.saveSnapshot(th.ID, tr)
+}
+
+// retryBatch stops the follower and restarts it from the last durable cursor.
+// The staged tracker is discarded by the caller before this runs.
+func (d *daemon) retryBatch(convID int64, err error) {
+	d.log.Error("commit batch; reading the lines again", "conversation", convID, "err", err)
+	d.stopTailer(convID, false)
+	d.spawn(func() {
+		if sleepCtx(d.ctx, d.timing.TailRestart) {
+			d.emit(evRestart{conv: convID})
+		}
+	})
 }
 
 // typedRecentlyWindow is how long after typing a prompt that does not match
@@ -641,7 +694,14 @@ func (d *daemon) echo(th store.Thread, e agents.Event, now time.Time) bool {
 	}
 	id, ok := inbound.MatchEcho(e.Text, at, cands)
 	if !ok {
-		return false
+		// A previous attempt may already have acknowledged this event before
+		// its transcript transaction failed. Preserve its Telegram origin on
+		// replay, including after restart, without acknowledging it twice.
+		acked, err := d.st.AcknowledgedEcho(d.ctx, th.ID, e.Key)
+		if err != nil {
+			d.log.Warn("echo: acknowledged event", "err", err)
+		}
+		return acked
 	}
 	if dl != nil && dl.in.UpdateID == id {
 		dl.echoKey = e.Key // the Enter is still being confirmed; onTyped acknowledges

@@ -1,7 +1,10 @@
 package store
 
 import (
+	"context"
 	"errors"
+	"fmt"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -200,6 +203,22 @@ func TestNextPartsOrderingAcrossTopics(t *testing.T) {
 
 func mustID(id int64, ok bool, err error) (int64, error) { return id, err }
 
+func TestNextPartsAnySendingPartBlocksThread(t *testing.T) {
+	s := newStore(t)
+	th1, _ := topic(t, s, 1)
+	th2, _ := topic(t, s, 2)
+	must(mustID(s.Enqueue(ctx, item(th1.ID, "older", "older"))))
+	newer := must(mustID(s.Enqueue(ctx, item(th1.ID, "newer", "newer"))))
+	other := must(mustID(s.Enqueue(ctx, item(th2.ID, "other", "other"))))
+	if ok := must(s.ClaimPart(ctx, newer, 0, -1)); !ok {
+		t.Fatal("claim failed")
+	}
+	got := must(s.NextParts(ctx))
+	if len(got) != 1 || got[0].OutboxID != other {
+		t.Fatalf("pending part from a topic with a later sending part was returned: %+v", got)
+	}
+}
+
 func TestNonPendingRowsDoNotBlock(t *testing.T) {
 	s := newStore(t)
 	th, _ := topic(t, s, 1)
@@ -340,6 +359,81 @@ func TestRecoverSending(t *testing.T) {
 	// Sending continues at the next part; the unknown part is not re-sent.
 	if p := must(s.NextParts(ctx)); len(p) != 1 || p[0].OutboxID != a || p[0].Part != 1 {
 		t.Fatalf("%+v", p)
+	}
+}
+
+func TestMarkPartCheckedWithNoticeIsAtomic(t *testing.T) {
+	s := newStore(t)
+	th, _ := topic(t, s, 1)
+	id := must(mustID(s.Enqueue(ctx, item(th.ID, "reply", "answer"))))
+	if ok := must(s.ClaimPart(ctx, id, 0, -1)); !ok {
+		t.Fatal("claim failed")
+	}
+	noErr(t, s.MarkPartUnknown(ctx, id, 0))
+
+	bad := OutboxItem{ThreadID: th.ID, Key: "notice:unknown:reply:0", Kind: "part-notice",
+		Parts: []PartContent{{Content: "notice", Format: "invalid"}}}
+	if err := s.MarkPartCheckedWithNotice(ctx, id, 0, bad); err == nil {
+		t.Fatal("invalid notice accepted")
+	}
+	if p := must(s.Part(ctx, id, 0)); p.Checked {
+		t.Fatal("part marked checked despite failed notice insert")
+	}
+	if _, found := must2(s.OutboxIDByKey(ctx, th.ID, bad.Key)); found {
+		t.Fatal("failed transaction left a notice behind")
+	}
+
+	good := bad
+	good.Parts = []PartContent{{Content: "durable notice", Format: FormatHTML}}
+	noErr(t, s.MarkPartCheckedWithNotice(ctx, id, 0, good))
+	if p := must(s.Part(ctx, id, 0)); !p.Checked {
+		t.Fatal("part not marked checked")
+	}
+	noticeID, found, err := s.OutboxIDByKey(ctx, th.ID, good.Key)
+	noErr(t, err)
+	if !found || must(s.OutboxRow(ctx, noticeID)).Parts[0].Content != "durable notice" {
+		t.Fatal("notice was not persisted")
+	}
+	// Retrying after an ambiguous commit does not create another notice.
+	noErr(t, s.MarkPartCheckedWithNotice(ctx, id, 0, good))
+	if got, found, err := s.OutboxIDByKey(ctx, th.ID, good.Key); err != nil || !found || got != noticeID {
+		t.Fatalf("notice after retry = %d, %v, %v", got, found, err)
+	}
+}
+
+func TestMarkPartCheckedAndDeleteKeyIsAtomic(t *testing.T) {
+	s := newStore(t)
+	th, _ := topic(t, s, 1)
+	id := must(mustID(s.Enqueue(ctx, item(th.ID, "reply", "answer"))))
+	if ok := must(s.ClaimPart(ctx, id, 0, 0)); !ok {
+		t.Fatal("claim failed")
+	}
+	noErr(t, s.MarkPartUnknown(ctx, id, 0))
+	key := "check_note:atomic:0"
+	noErr(t, s.Set(ctx, key, "101:102:100:1"))
+	if _, err := s.db.ExecContext(ctx, `CREATE TRIGGER fail_check_note_delete BEFORE DELETE ON kv
+		BEGIN SELECT RAISE(ABORT, 'test failure'); END`); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.MarkPartCheckedAndDeleteKey(ctx, id, 0, key); err == nil {
+		t.Fatal("failed to delete the resume key without returning an error")
+	}
+	if p := must(s.Part(ctx, id, 0)); p.Checked {
+		t.Fatal("part was marked checked although deleting its resume key failed")
+	}
+	if _, ok, err := s.Get(ctx, key); err != nil || !ok {
+		t.Fatalf("resume key after rollback: found %v, err %v", ok, err)
+	}
+	if _, err := s.db.ExecContext(ctx, `DROP TRIGGER fail_check_note_delete`); err != nil {
+		t.Fatal(err)
+	}
+
+	noErr(t, s.MarkPartCheckedAndDeleteKey(ctx, id, 0, key))
+	if p := must(s.Part(ctx, id, 0)); !p.Checked {
+		t.Fatal("part not marked checked")
+	}
+	if _, ok, err := s.Get(ctx, key); err != nil || ok {
+		t.Fatalf("resume key remains: found %v, err %v", ok, err)
 	}
 }
 
@@ -512,4 +606,89 @@ func TestAnswersBeforeOneSession(t *testing.T) {
 	if got := keys(must(s.AnswersBefore(ctx, th.ID, 0, 10, ""))); strings.Count(got, " ")+1 != 7 {
 		t.Errorf("every session: %q", got)
 	}
+}
+
+type nextPartsQuery func(context.Context, *Store) ([]Part, error)
+
+func nextPartsCorrelatedBaseline(ctx context.Context, s *Store) ([]Part, error) {
+	return queryParts(ctx, s.db, `WHERE p.state='pending' AND t.status<>'closed'
+		AND NOT EXISTS (SELECT 1 FROM outbox_part p2 JOIN outbox o2 ON o2.id=p2.outbox_id
+			WHERE o2.thread_id=o.thread_id AND p2.state='sending')
+		AND NOT EXISTS (SELECT 1 FROM outbox_part p3 JOIN outbox o3 ON o3.id=p3.outbox_id
+			WHERE o3.thread_id=o.thread_id AND p3.state='pending'
+			  AND (o3.id<o.id OR (o3.id=o.id AND p3.part<p.part)))
+		ORDER BY o.id, p.part`)
+}
+
+func BenchmarkNextPartsManyTopics(b *testing.B) {
+	const topics = 2000
+	variants := []struct {
+		name  string
+		query nextPartsQuery
+	}{
+		{name: "ranked", query: func(ctx context.Context, s *Store) ([]Part, error) { return s.NextParts(ctx) }},
+		{name: "correlated-baseline", query: nextPartsCorrelatedBaseline},
+	}
+	for _, variant := range variants {
+		b.Run(variant.name, func(b *testing.B) {
+			s := seedNextPartsBacklog(b, topics)
+			defer s.Close()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				parts, err := variant.query(ctx, s)
+				if err != nil {
+					b.Fatal(err)
+				}
+				if len(parts) != topics {
+					b.Fatalf("got %d parts, want %d", len(parts), topics)
+				}
+			}
+		})
+	}
+}
+
+func seedNextPartsBacklog(b *testing.B, topics int) *Store {
+	b.Helper()
+	s, err := Open(filepath.Join(b.TempDir(), "state", "rex-tg.db"))
+	if err != nil {
+		b.Fatal(err)
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		b.Fatal(err)
+	}
+	for i := 0; i < topics; i++ {
+		name := fmt.Sprintf("benchmark-%d", i)
+		res, err := tx.ExecContext(ctx, `INSERT INTO conversation(runtime,native_id,transcript,first_seen_at) VALUES('claude',?,?,?)`, name, "/"+name, toMsNN(t0))
+		if err != nil {
+			b.Fatal(err)
+		}
+		conversationID, err := res.LastInsertId()
+		if err != nil {
+			b.Fatal(err)
+		}
+		res, err = tx.ExecContext(ctx, `INSERT INTO thread(chat_id,message_thread_id,current_conversation_id,name,created_at) VALUES(100,?,?, 'topic',?)`, i+1, conversationID, toMsNN(t0))
+		if err != nil {
+			b.Fatal(err)
+		}
+		threadID, err := res.LastInsertId()
+		if err != nil {
+			b.Fatal(err)
+		}
+		res, err = tx.ExecContext(ctx, `INSERT INTO outbox(thread_id,event_key,kind,body,state,created_at) VALUES(?, 'reply', 'answer', 'text', 'pending', ?)`, threadID, toMsNN(t0))
+		if err != nil {
+			b.Fatal(err)
+		}
+		outboxID, err := res.LastInsertId()
+		if err != nil {
+			b.Fatal(err)
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO outbox_part(outbox_id,part,state,content,format) VALUES(?,0,'pending','text','plain')`, outboxID); err != nil {
+			b.Fatal(err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		b.Fatal(err)
+	}
+	return s
 }

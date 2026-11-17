@@ -468,6 +468,10 @@ func (s *Server) fileView(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, slowReadText("this file or folder"), http.StatusServiceUnavailable)
 		return
 	}
+	if errors.Is(err, errReadLimit) {
+		http.Error(w, readLimitText("file or folder"), http.StatusServiceUnavailable)
+		return
+	}
 	v, _ := got.(View)
 	if err != nil {
 		http.Error(w, `{"error":"This file is not there, or it is hidden."}`, http.StatusNotFound)

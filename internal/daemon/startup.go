@@ -165,7 +165,7 @@ func (d *daemon) readStartupMenu(ctx context.Context, st rex.Started) (startupMe
 
 // startupSafe is the check before each key: typing is not paused, and the
 // pane's foreground process is the agent that /new started.
-func (d *daemon) startupSafe(ctx context.Context, st rex.Started, rt agents.Runtime) error {
+func (d *daemon) startupSafe(ctx context.Context, st rex.Started, rt agents.Runtime, expectedPID int) error {
 	if d.paused.Load() {
 		return errPausedBefore
 	}
@@ -173,7 +173,7 @@ func (d *daemon) startupSafe(ctx context.Context, st rex.Started, rt agents.Runt
 	if err != nil {
 		return errRetryBefore
 	}
-	if got, ok := registry.Detect(d.rules, p.Foreground); !ok || got != rt {
+	if got, ok := registry.Detect(d.rules, p.Foreground); !ok || got != rt || expectedPID <= 0 || p.Foreground.PID != expectedPID {
 		return errGoneBefore
 	}
 	return nil
@@ -185,7 +185,7 @@ func (d *daemon) startupSafe(ctx context.Context, st rex.Started, rt agents.Runt
 // the question is not (or no longer) on the screen, errStartupStuck when a
 // key shows no effect, errPausedBefore or errGoneBefore from the check
 // before a key, and errRetryBefore when a call fails.
-func (d *daemon) answerStartup(ctx context.Context, st rex.Started, rt agents.Runtime, id string, target int) error {
+func (d *daemon) answerStartup(ctx context.Context, st rex.Started, rt agents.Runtime, expectedPID int, id string, target int) error {
 	m, ok, err := d.readStartupMenu(ctx, st)
 	switch {
 	case err != nil:
@@ -201,7 +201,7 @@ func (d *daemon) answerStartup(ctx context.Context, st rex.Started, rt agents.Ru
 		if target < m.cursor {
 			key = "up"
 		}
-		if err := d.startupSafe(ctx, st, rt); err != nil {
+		if err := d.startupSafe(ctx, st, rt, expectedPID); err != nil {
 			return err
 		}
 		if err := d.rx.SendKeys(ctx, st.SessionID, st.BlockID, key); err != nil {
@@ -216,7 +216,7 @@ func (d *daemon) answerStartup(ctx context.Context, st rex.Started, rt agents.Ru
 	if m.cursor != target {
 		return errStartupStuck
 	}
-	if err := d.startupSafe(ctx, st, rt); err != nil {
+	if err := d.startupSafe(ctx, st, rt, expectedPID); err != nil {
 		return err
 	}
 	if err := d.rx.SendKeys(ctx, st.SessionID, st.BlockID, "enter"); err != nil {
