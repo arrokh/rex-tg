@@ -286,6 +286,10 @@ var controlBusy = miniapp.ControlResult{Message: "rex-tg is busy. Wait a moment.
 // holds: the daemon stopped while the action ran, or it may still run.
 var controlUnknown = controlFail("This action may still run, or rex-tg stopped while it ran. Check the list before you try again.")
 
+// Notes keep an unknown result pending, so Annotate retries the same act
+// instead of creating a second queued message.
+var controlUnknownNotes = miniapp.ControlResult{Message: controlUnknown.Message, Pending: true}
+
 func (c *controlPanel) storeResult(act string, r miniapp.ControlResult) error {
 	b, _ := json.Marshal(r)
 	return c.d.st.Set(c.d.ctx, controlActPrefix+act, fmt.Sprintf("%d|%s", c.d.now().Unix(), b))
@@ -338,7 +342,11 @@ func (c *controlPanel) start(a miniapp.ControlAction) (miniapp.ControlResult, <-
 		case c.isLive(a.Act):
 			r = controlRunning
 		default:
-			r = controlUnknown // a placeholder that no run of this process holds
+			if a.Op == miniapp.OpNotes {
+				r = controlUnknownNotes // never create a second queued note on uncertainty
+			} else {
+				r = controlUnknown // a placeholder that no run of this process holds
+			}
 		}
 		return r, nil
 	}

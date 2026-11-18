@@ -209,6 +209,10 @@ func (d *daemon) createAlert(th store.Thread, kind, follow string) {
 		}
 	}
 	c := d.alertContent(lines, kind, conv.Runtime)
+	if c.kind != store.AlertPermission && c.kind != store.AlertQuestion {
+		d.log.Debug("alert: blocked prompt not recognized", "kind", kind, "runtime", conv.Runtime)
+		return
+	}
 	id, err := d.st.CreateAlert(ctx, store.Alert{
 		ThreadID: th.ID, Kind: c.kind, ScreenHash: alertHash(lines), Options: c.opts,
 		State: store.AlertOpen, CreatedAt: d.now(),
@@ -277,6 +281,11 @@ func (d *daemon) alertContent(lines []string, kind string, rt agents.Runtime) al
 	if v := parsePromptView(lines, kind == store.AlertPermission); v.ok {
 		if v.isQuestion() {
 			c.kind = store.AlertQuestion // Claude Code reports a question as a permission
+		} else if kind == "" {
+			c.kind = inferAlertKind(v)
+		}
+		if c.kind == "" {
+			return c
 		}
 		c.text, c.head, c.opts = alertHTML(v, agent, c.kind, c.dl), alertHead(v, agent, c.kind), v.alertOptions()
 		if format.VisibleLen(c.text) <= alertMaxText {

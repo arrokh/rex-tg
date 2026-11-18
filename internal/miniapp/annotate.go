@@ -12,11 +12,10 @@ import (
 
 // The Annotate page shows the agent's answers in a topic, newest first, ten
 // at a time. The owner adds notes to parts of them; the page joins the notes
-// into one message. To send it to the agent, the page keeps it as a draft
-// here and then hands the draft's id to Telegram (WebApp.sendData): the bot
-// gets it as the owner's own message, which Telegram vouches for. A draft
-// alone sends nothing, so the keyboard's key cannot submit Annotate notes or
-// type into a pane.
+// into one message. Current pages submit through a one-time, page-bound action.
+// A keyboard page needs its current key and the owner's verified Tailscale
+// login; a signed page needs fresh Telegram init data. A draft alone sends
+// nothing. Legacy web_app_data drafts remain supported for old open pages.
 
 // annotatePage is how many answers one request returns.
 const annotatePage = 10
@@ -108,8 +107,8 @@ func (s *Server) annotateList(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(out)
 }
 
-// annotateDraft keeps the notes of an Annotate page as a draft. It sends
-// nothing: the page then gives the draft's id to Telegram.
+// annotateDraft keeps a draft for an older Annotate page. It sends nothing:
+// that page then gives the draft's id to Telegram through sendData.
 func (s *Server) annotateDraft(w http.ResponseWriter, r *http.Request) {
 	if !s.allowed(w, r) {
 		return
@@ -152,16 +151,16 @@ func (s *Server) annotateDraft(w http.ResponseWriter, r *http.Request) {
 }
 
 // annotateSend sends the notes of an Annotate or answer page to its topic's
-// agent. It needs Telegram's signature from the last hour, like the control
-// panel's actions: the page then runs it as the action OpNotes, at most once
-// for its act. A page that a keyboard button opened has no signature; it
-// sends through Telegram instead (annotateDraft and WebApp.sendData).
+// agent, with an action id so retries do not send twice. A signed page needs
+// fresh Telegram init data. A keyboard page needs the current key and the
+// owner's verified Tailscale login (keyCanSendNotes).
 func (s *Server) annotateSend(w http.ResponseWriter, r *http.Request) {
 	if !s.allowed(w, r) {
 		return
 	}
-	if s.keyed(r) {
-		http.Error(w, `{"error":"Open Annotate from its button under the message box to send from there."}`, http.StatusForbidden)
+	keyed := s.keyed(r)
+	if keyed && !s.keyCanSendNotes(r) {
+		http.Error(w, `{"error":"Sending notes requires your verified Tailscale login."}`, http.StatusForbidden)
 		return
 	}
 	p, ok := s.loadKind(w, r, "")
@@ -176,9 +175,11 @@ func (s *Server) annotateSend(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"Sending notes is off."}`, http.StatusNotFound)
 		return
 	}
-	if _, err := CheckInitData(r.Header.Get("X-Telegram-Init-Data"), s.secret, s.now(), ActMaxAge); err != nil {
-		http.Error(w, `{"error":"This page was opened more than an hour ago. Close it and open it again."}`, http.StatusForbidden)
-		return
+	if !keyed {
+		if _, err := CheckInitData(r.Header.Get("X-Telegram-Init-Data"), s.secret, s.now(), ActMaxAge); err != nil {
+			http.Error(w, `{"error":"This page was opened more than an hour ago. Close it and open it again."}`, http.StatusForbidden)
+			return
+		}
 	}
 	if ct := r.Header.Get("Content-Type"); !strings.HasPrefix(ct, "application/json") {
 		http.Error(w, `{"error":"Send JSON."}`, http.StatusUnsupportedMediaType)

@@ -610,7 +610,9 @@ func (d *daemon) onState(c registry.Change) {
 	} else {
 		d.forgetBlocked(c.ConversationID)
 	}
-	if c.State == "blocked" && (c.StateKind == store.AlertPermission || c.StateKind == store.AlertQuestion) {
+	if c.State == "blocked" && (c.StateKind == store.AlertPermission || c.StateKind == store.AlertQuestion || c.StateKind == "") {
+		// An untyped blocked state is safe to expose only if alertContent can
+		// recognize the screen as a question or explicit Yes/No confirmation.
 		d.openAlert(th, c.StateKind)
 		return
 	}

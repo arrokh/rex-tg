@@ -7,6 +7,76 @@ import (
 	"time"
 )
 
+// A shell tool's explicit yes/no approval can arrive without a prompt kind
+// from the Pi status reporter. It must still be answerable in Telegram.
+const untypedShellApprovalScreen = `Dangerous shell command
+  rm -rf "$TARGET"/build
+(use an explicit path when a variable may be empty)
+
+Do you want to proceed?
+> 1. Yes
+  2. No
+
+Esc to cancel · Tab to amend
+`
+
+func TestPiShellApprovalQueuesMessagesUntilAnsweredWithoutMiniApp(t *testing.T) {
+	e, _, thread := piTopicCfg(t, "pi-shell-approval", func(e *env) {
+		e.cfg.MiniApp.URL = "https://mac.example.ts.net:8443"
+		e.cfg.InputSettings.WhileBusy = "steer"
+	})
+
+	first := e.say(thread, "normal message before the prompt")
+	e.waitFor("the message to arrive without opening the Mini App", func() bool {
+		return len(e.pastes()) == 1
+	})
+	e.waitFor("the received message reaction", func() bool {
+		m, _ := e.message(first)
+		return m.Reaction == "👀"
+	})
+
+	e.setScreen(untypedShellApprovalScreen)
+	e.setStatus("blocked", "")
+	alert := e.waitText(thread, "Permission needed")
+	if buttonData(alert, "1 Yes") == "" || buttonData(alert, "2 No") == "" {
+		t.Fatalf("approval options missing: %+v", alert.Markup)
+	}
+
+	second := e.say(thread, "continue after the approval")
+	e.waitText(thread, "Waiting until the prompt is answered")
+	e.never("typing before the prompt is answered", 300*time.Millisecond, func() bool {
+		return len(e.pastes()) > 1
+	})
+
+	keysBeforeNo := len(e.keys()) // the first message already sent Enter
+	e.pressButton(alert, buttonData(alert, "2 No"))
+	e.waitFor("the No key", func() bool { return len(e.keys()) > keysBeforeNo })
+	e.setScreen("agent working\n> ")
+	e.setStatus("working", "")
+	e.waitFor("the queued message to arrive after the prompt", func() bool {
+		return len(e.pastes()) == 2
+	})
+	if got := e.pastes()[1]; got != "continue after the approval" {
+		t.Errorf("pasted %q", got)
+	}
+	e.waitFor("the queued message reaction", func() bool {
+		m, _ := e.message(second)
+		return m.Reaction == "👀"
+	})
+}
+
+func TestCuxShellApprovalWithUntypedBlockedStateGetsTelegramAlert(t *testing.T) {
+	// cux runs Claude Code; prompt recognition is shared across runtimes.
+	e, thread := cuxTopic(t)
+	e.setScreen(untypedShellApprovalScreen)
+	e.setStatus("blocked", "")
+
+	alert := e.waitText(thread, "Permission needed")
+	if buttonData(alert, "1 Yes") == "" || buttonData(alert, "2 No") == "" {
+		t.Fatalf("approval options missing: %+v", alert.Markup)
+	}
+}
+
 // limitScreen is a Claude Code safety check that blocks itself after a
 // time limit, as on screen.
 func limitScreen(limit string) string {

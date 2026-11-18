@@ -21,9 +21,9 @@ import (
 )
 
 // The keyboard's pages (Launch) and the Annotate page (Answers, SaveDraft,
-// BotName). Notes that the owner sends come back as a web_app_data message
-// (webAppData); only that message, which Telegram vouches for, types text
-// into a pane. The page's key alone cannot.
+// BotName). Current keyboard pages send notes through the page-bound action,
+// with the current key and the owner's verified Tailscale login. The legacy
+// web_app_data handler still accepts drafts from pages opened before this path.
 
 var (
 	_ miniapp.Launcher    = (*daemon)(nil)
