@@ -2,7 +2,8 @@
 // live screen of a topic's pane, the files of the agent's folder, the
 // changes of its repository, or the control panel (the agents in Rex panes:
 // open, rename, start, unlink; their screen, files and changes).
-// Every request carries Telegram's signed init data; the server checks it.
+// API requests carry Telegram's signed init data or the keyboard key; the
+// server checks it before returning page data or accepting an action.
 (function () {
   var tg = window.Telegram && window.Telegram.WebApp;
   if (tg) { tg.ready(); tg.expand(); }
@@ -2128,40 +2129,24 @@
 
     // --- the saved notes of this page (kept on this phone) ---
     var storeKey = "rex-tg.annotate." + id;
-    var notes = [], msg = "";
-    // maybeAt: when a send may have arrived although the page stayed open
-    // (asks first for an hour). pend: a signed send whose result is not
-    // known ({act, text, at}; its act is kept for 10 minutes).
-    var maybeAt = 0, pend = null;
-    var hour = 3600 * 1000, pendTTL = 10 * 60 * 1000;
+    // Older builds kept successfully sent notes in a "Bring back" backup.
+    // Drop those copies: a sent note should not appear as a pending note.
+    save(storeKey + ".sent", null);
+    var notes = [], msg = "", pend = null;
+    // pend keeps the action id while a direct send's result is unknown, so a
+    // retry cannot send the same notes twice. After ten minutes, ask before
+    // starting a new action; the owner must check the topic first.
+    var pendTTL = 10 * 60 * 1000;
     try {
       var saved = JSON.parse(load(storeKey) || "null");
       if (saved && saved.notes instanceof Array) { notes = saved.notes.filter(function (n) { return n && n.id && n.note; }); }
       if (saved && typeof saved.msg === "string") { msg = saved.msg; }
-      if (saved && typeof saved.maybe === "number" && Date.now() - saved.maybe < hour) { maybeAt = saved.maybe; }
-      if (saved && saved.pend && typeof saved.pend.act === "string" && typeof saved.pend.text === "string" && Date.now() - saved.pend.at < pendTTL) { pend = saved.pend; }
+      if (saved && saved.pend && typeof saved.pend.act === "string" && typeof saved.pend.text === "string" && isFinite(saved.pend.at)) { pend = saved.pend; }
     } catch (e) { /* no usable draft */ }
     function persist() {
-      var keep = notes.length || msg || maybeAt || pend;
-      save(storeKey, keep ? JSON.stringify({ notes: notes, msg: msg, maybe: maybeAt || undefined, pend: pend || undefined }) : null);
+      var keep = notes.length || msg || pend;
+      save(storeKey, keep ? JSON.stringify({ notes: notes, msg: msg, pend: pend || undefined }) : null);
     }
-    function isMaybe() { return !!maybeAt && Date.now() - maybeAt < hour; }
-    // The notes that were sent are kept for an hour, to bring back.
-    var sentKey = storeKey + ".sent";
-    function keepSent(ns, m, maybe) {
-      save(sentKey, JSON.stringify({ notes: ns, msg: m, at: Date.now(), maybe: !!maybe }));
-      backup = readSent();
-    }
-    function dropSent() { save(sentKey, null); backup = null; }
-    function readSent() {
-      try {
-        var b = JSON.parse(load(sentKey) || "null");
-        if (b && b.notes instanceof Array && b.notes.length && Date.now() - b.at < hour) { return b; }
-      } catch (e) { /* none */ }
-      save(sentKey, null);
-      return null;
-    }
-    var backup = readSent();
     var mode = load("rex-tg.annotate.mode");
     if (annotModes.indexOf(mode) < 0) { mode = "send"; }
     var bot = (pg && pg.bot) || "";
@@ -2231,24 +2216,6 @@
     pill.hidden = true;
     document.body.appendChild(pill);
 
-    var restoreRow = el("div", "abackup");
-    var restoreText = el("span", "", "");
-    var restoreBtn = button("Bring back", "btn small");
-    restoreRow.appendChild(restoreText);
-    restoreRow.appendChild(restoreBtn);
-    restoreRow.hidden = true;
-    document.body.appendChild(restoreRow);
-    restoreBtn.addEventListener("click", function () {
-      if (!backup) { return; }
-      hap("light");
-      notes = backup.notes.filter(function (n) { return n && n.id && n.note; });
-      if (!msg) { msg = backup.msg || ""; }
-      if (backup.maybe) { maybeAt = Date.now(); }
-      dropSent();
-      persist();
-      refreshBadges();
-    });
-
     var blocks = {};   // by note id: the elements of the loaded answers
     var items = {};    // by answer id: { at }
     var oldest = 0, more = true, loading = false, failed = "", firstLoad = true;
@@ -2257,12 +2224,6 @@
       var n = notes.length;
       count.textContent = n + (n === 1 ? " note" : " notes");
       review.disabled = false;
-      if (backup && Date.now() - backup.at >= hour) { dropSent(); }
-      restoreRow.hidden = !(backup && !n);
-      if (backup) {
-        var d = new Date(backup.at);
-        restoreText.textContent = "Notes sent at " + (d.getHours() < 10 ? "0" : "") + d.getHours() + ":" + (d.getMinutes() < 10 ? "0" : "") + d.getMinutes() + " · ";
-      }
     }
 
     // A table row cannot hold a badge: its first cell does.
@@ -2348,9 +2309,7 @@
 
     // --- the review sheet ---
     var reviewClose = null;
-    // maybeSent: a send whose page Telegram did not close; the next send
-    // asks first, so the notes do not reach the agent twice by mistake.
-    
+
     function reviewSheet() {
       hap("light");
       sheetUI("Review", function (box, close) {
@@ -2448,23 +2407,18 @@
             toast({ ok: false, message: "These notes are too long to send (16000 bytes at most). Remove a note, or use Copy." });
             return;
           }
-          if (isMaybe() && sendPath() === "draft") {
-            // An earlier send may have arrived although the page stayed open.
-            confirmAsk({ title: "Send again?", message: "These notes may have reached the agent already. Send them again only if \u201c\u270d\ufe0f Notes sent to the agent\u201d is not in the topic.", ok: "Send again" }, function () {
-              maybeAt = 0;
-              persist();
-              sendNow(text);
-            });
-            return;
-          }
           sendNow(text);
         });
-        // sendSigned sends through the server (signed init data). A result that
-        // is not known yet is asked again with the same act, so it never runs twice.
-        function sendSigned(text) {
+        // sendDirect sends through the server (signed init data or a key
+        // authenticated by the owner's Tailscale login). A retry keeps its act.
+        function sendDirect(text) {
           var live = pend && Date.now() - pend.at < pendTTL ? pend : null;
-          if (live && live.text !== text) {
-            confirmAsk({ title: "Send these notes too?", message: "The earlier send may still reach the agent. Send these notes too?", ok: "Send" }, function () {
+          if (pend && (!live || live.text !== text)) {
+            confirmAsk({
+              title: live ? "Send these notes too?" : "Check before sending again",
+              message: live ? "The earlier send may still reach the agent. Send these notes too?" : "The earlier send may still reach the agent. Check the topic first, then confirm if you still want to send again.",
+              ok: live ? "Send" : "Send again"
+            }, function () {
               pend = null;
               run(text);
             });
@@ -2478,7 +2432,7 @@
           pend = { act: mine, text: text, at: live ? live.at : Date.now() };
           // what this send holds: later notes stay when it succeeds
           var ids = sorted().map(function (n) { return n.id; });
-          var sentNotes = sorted(), sentMsg = msg;
+          var sentMsg = msg;
           persist();
           busy = true;
           sync();
@@ -2489,7 +2443,6 @@
             } else {
               pend = null;
               if (r.ok) {
-                keepSent(sentNotes, sentMsg, false);
                 notes = notes.filter(function (n) { return ids.indexOf(n.id) < 0; });
                 if (msg === sentMsg) { msg = ""; }
                 persist();
@@ -2522,50 +2475,13 @@
           attempt();
         }
         function sendNow(text) {
-          if (sendPath() === "signed") { sendSigned(text); return; }
-          busy = true;
-          sync();
-          api("api/annotate/draft?id=" + encodeURIComponent(id), { text: text })
-            .then(function (r) {
-              if (!r.draft) { throw new Error("The draft was not saved."); }
-              var held = { notes: notes, msg: msg };
-              keepSent(notes, msg, true);
-              notes = [];
-              msg = "";
-              maybeAt = 0;
-              persist();
-              refreshBadges();
-              function restore() {
-                notes = held.notes;
-                msg = held.msg;
-                dropSent();
-                persist();
-                refreshBadges();
-              }
-              try {
-                tg.sendData(JSON.stringify({ v: 1, a: "annotate", d: r.draft }));
-              } catch (e) {
-                restore();
-                throw new Error("Telegram did not take the notes. They are kept here.");
-              }
-              hap("success");
-              // Telegram closes the page when it takes the data. A page
-              // that is still open after a while was not closed: the notes
-              // come back, and the user checks the topic before sending
-              // again (the draft may have arrived).
-              setTimeout(function () {
-                maybeAt = Date.now();
-                restore();
-                busy = false;
-                sync();
-                toast({ ok: false, message: "Telegram did not close this page. Check the topic: if “✍️ Notes sent to the agent” is not there, send again." });
-              }, 6000);
-            })
-            .catch(function (e) {
-              busy = false;
-              toast({ ok: false, message: e.message || "The notes were not sent." });
-              sync();
-            });
+          if (sendPath() !== "direct") {
+            toast({ ok: false, message: noSendText() });
+            busy = false;
+            sync();
+            return;
+          }
+          sendDirect(text);
         }
         draw();
         sync();
@@ -2573,16 +2489,16 @@
     }
     review.addEventListener("click", reviewSheet);
 
-    // sendPath: how "Send to agent" can work here. "draft": the keyboard's
-    // page sends through Telegram. "signed": a page opened from a message
-    // asks the server. "": no way.
+    // The server advertises direct sending only when this page has a current
+    // signed identity or a key paired with the owner's Tailscale login.
     function sendPath() {
-      if (tg && tg.sendData && keyMode) { return "draft"; }
-      if (!keyMode && initData && pg && pg.thread) { return "signed"; }
+      if (pg && pg.can_send_notes && pg.thread) { return "direct"; }
       return "";
     }
     function noSendText() {
       if (pg && pg.kind === "answer" && !pg.thread) { return "This answer is from before Annotate; use Copy."; }
+      if (keyMode && pg && pg.thread) { return "Sending notes needs your verified Tailscale login. Turn on Tailscale and reopen Annotate, or use Copy."; }
+      if (!keyMode && initData && pg && pg.thread) { return "This page cannot send notes now. Close it and reopen it from Telegram, or use Copy."; }
       return "Send to agent works when Annotate is opened from its button under the message box. Use Copy instead.";
     }
     function utf8Length(s) {

@@ -93,8 +93,8 @@ func runQueued(c *controlPanel) {
 
 // A request that the busy core did not take is pending, and its event may
 // still run. Asking again with the same act runs the action once. A claim
-// that no run holds (the daemon stopped meanwhile) is not run again either,
-// and says that the outcome is unknown.
+// that no run holds (the daemon stopped meanwhile) is not run again either;
+// notes keep that unknown result pending to prevent a second queued message.
 func TestControlPanelRetryRunsOnce(t *testing.T) {
 	var runs atomic.Int32
 	c := testPanel(t, &runs, nil)
@@ -125,6 +125,18 @@ func TestControlPanelRetryRunsOnce(t *testing.T) {
 	r := c.Do(ctx, miniapp.ControlAction{Op: miniapp.OpUnlink, Thread: 1, Act: "fedcba9876543210"})
 	if r.OK || r.Pending || !strings.Contains(r.Message, "stopped while it ran") || runs.Load() != 1 {
 		t.Errorf("crashed claim: %+v after %d runs", r, runs.Load())
+	}
+
+	// An uncertain notes send must keep the same action id pending for retries.
+	if err := c.storeResult("0011223344556677", controlRunning); err != nil {
+		t.Fatal(err)
+	}
+	note := miniapp.ControlAction{Op: miniapp.OpNotes, Thread: 1, Conv: 2, Act: "0011223344556677", Text: "note"}
+	for i := 0; i < 2; i++ {
+		r = c.Do(ctx, note)
+		if r.OK || !r.Pending || !strings.Contains(r.Message, "stopped while it ran") || runs.Load() != 1 {
+			t.Errorf("uncertain notes send: %+v after %d runs", r, runs.Load())
+		}
 	}
 }
 

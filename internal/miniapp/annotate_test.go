@@ -223,9 +223,9 @@ func TestAnnotate(t *testing.T) {
 	}
 }
 
-// An answer or Annotate page with a topic sends its notes as the action
-// OpNotes, signed in the last hour, with the page's own topic; the key and
-// the control panel's own endpoint cannot.
+// A signed answer or Annotate page sends through the page-bound OpNotes
+// action. A keyboard key needs the separate owner-Tailscale check below; the
+// control panel's general endpoint cannot submit notes.
 func TestAnnotateSend(t *testing.T) {
 	pages := map[string]Page{
 		"w1": {Kind: KindAnswer, Title: "Report", Text: "THE END", Thread: 7, Conv: 5, At: time.Date(2026, 11, 16, 10, 20, 0, 0, time.Local)},
@@ -244,7 +244,7 @@ func TestAnnotateSend(t *testing.T) {
 	signed := map[string]string{"X-Telegram-Init-Data": sign(t, fakeToken, fields(42, time.Now())), "Content-Type": "application/json"}
 	body := `{"act":"0123456789abcdef0123456789abcdef","text":"> THE END\n\nmore"}`
 
-	if code, p := c.do("GET", "/api/page?id=w1", signed, ""); code != http.StatusOK || p["thread"] != float64(7) || p["at"] != "Nov 16 10:20" || p["bot"] != "rex_bot" {
+	if code, p := c.do("GET", "/api/page?id=w1", signed, ""); code != http.StatusOK || p["thread"] != float64(7) || p["at"] != "Nov 16 10:20" || p["bot"] != "rex_bot" || p["can_send_notes"] != true {
 		t.Fatalf("page: %d %v", code, p)
 	}
 	if code, res := c.do("POST", "/api/annotate/send?id=w1", signed, body); code != http.StatusOK || res["ok"] != true || len(fc.did) != 1 {
@@ -254,6 +254,9 @@ func TestAnnotateSend(t *testing.T) {
 		t.Errorf("action: %+v", a)
 	}
 	old := map[string]string{"X-Telegram-Init-Data": sign(t, fakeToken, fields(42, time.Now().Add(-2*time.Hour))), "Content-Type": "application/json"}
+	if code, p := c.do("GET", "/api/page?id=w1", old, ""); code != http.StatusOK || p["can_send_notes"] != false {
+		t.Errorf("stale signed page: %d %v", code, p)
+	}
 	for _, r := range []struct {
 		path string
 		hdr  map[string]string
@@ -276,6 +279,41 @@ func TestAnnotateSend(t *testing.T) {
 	}
 	if len(fc.did) != 1 {
 		t.Errorf("actions ran: %+v", fc.did)
+	}
+}
+
+func TestKeyboardKeyCanSendNotesFromOwnerTailscaleLogin(t *testing.T) {
+	pages := map[string]Page{
+		"an1": {Kind: KindAnnotate, Title: "✍️ api", Thread: 7, Conv: 5},
+	}
+	fc := &fakeControl{}
+	fl := &fakeLogins{allow: map[string]bool{"me@example.com": true}}
+	s := New(fakeToken, func() int64 { return 42 }, func(id string) (Page, bool) { p, ok := pages[id]; return p, ok }, nil).
+		WithControl(fc, t.TempDir()).
+		WithLaunch(&fakeLauncher{}, func(k string) bool { return k == testKey }).
+		WithAnnotate(&fakeAnnotations{}).
+		WithTailnetOnly(true).
+		WithLogins(fl)
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+	c := caller{t, srv.URL}
+	key := map[string]string{"X-Rex-Key": testKey, "Tailscale-User-Login": "me@example.com"}
+
+	if code, page := c.do("GET", "/api/page?id=an1", key, ""); code != http.StatusOK || page["can_send_notes"] != true {
+		t.Fatalf("key page: %d %v", code, page)
+	}
+	body := `{"act":"0123456789abcdef0123456789abcdef","text":"> answer\n\nfix this"}`
+	post := map[string]string{"X-Rex-Key": testKey, "Tailscale-User-Login": "me@example.com", "Content-Type": "application/json"}
+	if code, result := c.do("POST", "/api/annotate/send?id=an1", post, body); code != http.StatusOK || result["ok"] != true {
+		t.Fatalf("key send: %d %v", code, result)
+	}
+	if len(fc.did) != 1 || fc.did[0].Op != OpNotes || fc.did[0].Thread != 7 || fc.did[0].Conv != 5 || fc.did[0].Text != "> answer\n\nfix this" {
+		t.Fatalf("actions: %+v", fc.did)
+	}
+
+	stranger := map[string]string{"X-Rex-Key": testKey, "Tailscale-User-Login": "other@example.com", "Content-Type": "application/json"}
+	if code, _ := c.do("POST", "/api/annotate/send?id=an1", stranger, body); code != http.StatusForbidden || len(fc.did) != 1 {
+		t.Errorf("send from another login: %d, actions %+v", code, fc.did)
 	}
 }
 

@@ -24,6 +24,26 @@ func storeThreadID(t *testing.T, e *env) int64 {
 	return ths[0].ID
 }
 
+func miniKeyCall(t *testing.T, addr, method, path, key, body string) (int, map[string]any) {
+	t.Helper()
+	req, _ := http.NewRequest(method, "http://"+addr+path, bytes.NewBufferString(body))
+	req.Header.Set("X-Rex-Key", key)
+	req.Header.Set("Tailscale-User-Login", "owner@example.com")
+	if method == http.MethodPost {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	var out map[string]any
+	if err := json.NewDecoder(res.Body).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	return res.StatusCode, out
+}
+
 // With the Mini App on, every button opens its page with the key; /rekey
 // makes a new key and gives every chat new buttons.
 func TestReplyKeyboardWebApp(t *testing.T) {
@@ -136,7 +156,9 @@ func TestAnnotateSendsNotesOnce(t *testing.T) {
 	e.tg.PushWebAppData(chatID, thread, 555, data(d1))
 	e.never("a note for a stranger", 500*time.Millisecond, func() bool { return e.countText(thread, "Notes sent") > 0 })
 
-	u := e.tg.PushWebAppData(chatID, thread, ownerID, data(d1))
+	// Telegram may return a keyboard Mini App's sendData in the main chat,
+	// without a topic ID. The saved draft must still route notes to its topic.
+	u := e.tg.PushWebAppData(chatID, 0, ownerID, data(d1))
 	note := e.waitText(thread, "Notes sent to the agent")
 	if !note.Silent || !strings.Contains(note.Text, "<blockquote expandable>") || !strings.Contains(note.Text, "looks &lt;good&gt;") {
 		t.Errorf("note: %+v", note)
@@ -163,6 +185,48 @@ func TestAnnotateSendsNotesOnce(t *testing.T) {
 	}
 	if n := len(e.pastes()); n != 1 {
 		t.Errorf("pastes = %d, want 1: %v", n, e.pastes())
+	}
+}
+
+func TestKeyboardAnnotateSendsDirectlyAndKeepsNotesOnce(t *testing.T) {
+	addr := freeAddr(t)
+	e, _, thread := piTopicCfg(t, "pi-key-annotate", func(e *env) {
+		e.cfg.MiniApp.URL = "https://mac.example.ts.net:8443"
+		e.cfg.MiniApp.Listen = addr
+	})
+	storeThread := storeThreadID(t, e)
+	key, ok, err := e.peek().Get(context.Background(), "kb_key")
+	if err != nil || !ok {
+		t.Fatalf("keyboard key: %q %v", key, err)
+	}
+
+	var launch map[string]any
+	e.waitFor("the Mini App", func() bool {
+		code, body := miniKeyCall(t, addr, http.MethodGet, fmt.Sprintf("/api/launch?go=annotate&t=%d", storeThread), key, "")
+		if code != http.StatusOK || body["page"] == nil {
+			return false
+		}
+		launch = body
+		return true
+	})
+	pageID := launch["page"].(string)
+	code, page := miniKeyCall(t, addr, http.MethodGet, "/api/page?id="+pageID, key, "")
+	if code != http.StatusOK || page["can_send_notes"] != true || page["thread"] != float64(storeThread) {
+		t.Fatalf("keyboard Annotate page: %d %v", code, page)
+	}
+	body := `{"act":"0123456789abcdef0123456789abcdef","text":"Notes on your answer:\n\n> ready\n\nfix this"}`
+	send := func() {
+		code, result := miniKeyCall(t, addr, http.MethodPost, "/api/annotate/send?id="+pageID, key, body)
+		if code != http.StatusOK || result["ok"] != true {
+			t.Fatalf("direct send: %d %v", code, result)
+		}
+	}
+	send()
+	send() // same act: the note must not be queued twice
+	e.waitText(thread, "Notes sent to the agent")
+	e.waitFor("the note to reach the agent", func() bool { return len(e.pastes()) == 1 })
+	if got := e.pastes()[0]; !strings.Contains(got, "Notes on your answer:\n\n> ready\n\nfix this") {
+		t.Errorf("pasted %q", got)
 	}
 }
 

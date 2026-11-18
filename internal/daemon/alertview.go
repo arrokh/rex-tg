@@ -104,6 +104,29 @@ func (v promptView) multi() bool {
 	return false
 }
 
+// inferAlertKind classifies an untyped blocked screen only when its choices
+// are recognizable. An explicit Yes/No "Do you want to proceed?" prompt is
+// a permission request; other parsed dialogs are questions. Unknown screens
+// stay unclassified rather than gaining guessed answer buttons.
+func inferAlertKind(v promptView) string {
+	if v.isQuestion() {
+		return store.AlertQuestion
+	}
+	if !strings.EqualFold(strings.TrimSpace(v.question), "Do you want to proceed?") {
+		return ""
+	}
+	yes, no := false, false
+	for _, o := range v.options {
+		label := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(o.label)), ".")
+		yes = yes || label == "yes"
+		no = no || label == "no"
+	}
+	if yes && no {
+		return store.AlertPermission
+	}
+	return ""
+}
+
 var (
 	boxRe      = regexp.MustCompile(`^\[( |✔|✓|x|X)\]\s*`)
 	ruleRe     = regexp.MustCompile(`[─━═]{8,}`)

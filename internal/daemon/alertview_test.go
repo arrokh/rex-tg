@@ -496,6 +496,40 @@ func TestPromptViewPiConfirm(t *testing.T) {
 	}
 }
 
+func TestInferAlertKindNeedsRecognizableChoices(t *testing.T) {
+	cases := []struct {
+		name string
+		view promptView
+		want string
+	}{
+		{
+			name: "explicit shell confirmation",
+			view: promptView{question: "Do you want to proceed?", options: []viewOption{{label: "Yes"}, {label: "No"}}},
+			want: store.AlertPermission,
+		},
+		{
+			name: "pi extension dialog",
+			view: promptView{question: "Pick one", dialog: true, options: []viewOption{{label: "Yes"}, {label: "No"}}},
+			want: store.AlertQuestion,
+		},
+		{
+			name: "unknown yes/no question",
+			view: promptView{question: "Proceed or cancel?", options: []viewOption{{label: "Yes"}, {label: "No"}}},
+		},
+		{
+			name: "unclassified choices",
+			view: promptView{question: "Choose a mode", options: []viewOption{{label: "Fast"}, {label: "Safe"}}},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := inferAlertKind(tc.view); got != tc.want {
+				t.Errorf("kind = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 // The hash holds the dialog, not the cursor, the spinner above it, the
 // footer under it, or the countdown.
 func TestAlertHashPiDialog(t *testing.T) {

@@ -10,8 +10,8 @@ import (
 // Mini App was launched from a keyboard button", core.telegram.org/bots/
 // webapps), so such a button's address carries a key instead
 // (app?k=<key>&go=<view>[&t=<thread>]). The key authorizes reads and validated
-// control-panel actions; Annotate notes still need the owner's own message
-// through Telegram (sendData).
+// control-panel actions. Sending Annotate notes additionally requires the
+// current key and the owner's verified Tailscale login.
 
 // Views that a keyboard button opens.
 const (
@@ -63,8 +63,9 @@ type Annotations interface {
 	// newest), and whether there are older ones. Other sessions' answers
 	// never show.
 	Answers(ctx context.Context, thread, conv, before int64, n int) (items []AnswerItem, more bool, err error)
-	// SaveDraft keeps notes for a topic's session until the owner sends
-	// them through Telegram (sendData). A draft alone sends nothing.
+	// SaveDraft stores notes for legacy keyboard pages that send them through
+	// Telegram (sendData). A draft alone sends nothing; current pages use the
+	// page-bound, Tailscale-authenticated send action.
 	SaveDraft(ctx context.Context, thread, conv int64, text string) (id string, err error)
 	// BotName is the bot's username without "@", for t.me links.
 	BotName() string

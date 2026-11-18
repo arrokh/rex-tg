@@ -5,9 +5,9 @@
 // daemon keeps the pages and reads the screens; this package checks who
 // asks and renders them.
 //
-// Every request for a page must carry the Mini App's init data, which
-// Telegram signs with the bot's token. Only the owner's signed requests get
-// a page. The page shell itself holds no data.
+// Requests carry either Telegram-signed init data or the current keyboard
+// key. Keyboard-key Annotate sends additionally require the owner's verified
+// Tailscale login. The page shell itself holds no data.
 package miniapp
 
 import (
@@ -135,8 +135,8 @@ func (s *Server) WithChanges(on func() bool, redact func(string) string, turn fu
 }
 
 // WithLaunch turns on the keyboard buttons' pages (launch.go). keyOK checks
-// the key that a button's address carries; the key authorizes reads and
-// validated control-panel actions.
+// the key that a button's address carries; it authorizes reads and validated
+// control-panel actions. Annotate sends require a verified owner Tailscale login.
 func (s *Server) WithLaunch(l Launcher, keyOK func(string) bool) *Server {
 	s.launch, s.keyOK = l, keyOK
 	return s
@@ -336,9 +336,9 @@ func (s *Server) headers(w http.ResponseWriter, ctype string) {
 }
 
 // allowed checks that a request is the owner's: signed by Telegram, or
-// carrying the keyboard's key. The key reads pages and can submit validated
-// control-panel actions; it cannot send Annotate notes directly. It answers
-// a refused request itself.
+// carrying the keyboard's key. The key reads pages and submits validated
+// control-panel actions. Annotate sends require the stronger check in
+// keyCanSendNotes. It answers a refused request itself.
 func (s *Server) allowed(w http.ResponseWriter, r *http.Request) bool {
 	s.headers(w, "application/json")
 	if r.Header.Get("X-Telegram-Init-Data") == "" && r.Header.Get("X-Rex-Key") != "" {
@@ -372,6 +372,13 @@ func (s *Server) allowed(w http.ResponseWriter, r *http.Request) bool {
 func (s *Server) keyed(r *http.Request) bool {
 	k := r.Header.Get("X-Rex-Key")
 	return k != "" && r.Header.Get("X-Telegram-Init-Data") == "" && s.keyOK != nil && s.owner() != 0 && s.keyOK(k)
+}
+
+// keyCanSendNotes permits a keyboard page to send notes only when it came
+// through Tailscale and that login is trusted for the current key.
+func (s *Server) keyCanSendNotes(r *http.Request) bool {
+	return s.tailnet && s.logins != nil && s.keyed(r) && fromTailnet(r) &&
+		s.logins.KeyLoginOK(r.Header.Get("X-Rex-Key"), tailnetLogin(r))
 }
 
 // noteRefusal counts a refused request; the address may be reachable by
@@ -418,6 +425,16 @@ func (s *Server) page(w http.ResponseWriter, r *http.Request) {
 	out := map[string]any{"kind": p.Kind, "title": p.Title, "html": body, "at": at, "thread": p.Thread}
 	if s.annot != nil && (p.Kind == KindAnswer || p.Kind == KindAnnotate) {
 		out["bot"] = s.annot.BotName() // for t.me links (Annotate's "Put in message box")
+	}
+	if s.annot != nil && s.control != nil && (p.Kind == KindAnnotate || p.Kind == KindAnswer) && p.Thread > 0 && p.Conv > 0 {
+		canSend := false
+		if s.keyed(r) {
+			canSend = s.keyCanSendNotes(r)
+		} else {
+			_, err := CheckInitData(r.Header.Get("X-Telegram-Init-Data"), s.secret, s.now(), ActMaxAge)
+			canSend = err == nil
+		}
+		out["can_send_notes"] = canSend
 	}
 	_ = json.NewEncoder(w).Encode(out)
 }

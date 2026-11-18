@@ -307,10 +307,10 @@ Read handlers serve answers, redacted captures, files, changes, and panel state.
 
 Annotate has a separate send boundary:
 
-- Keyboard launches have no Telegram init-data signature. A keyboard key can save a draft; Telegram's owner `web_app_data` message authorizes its submission.
-- Signed launches can submit notes through a fresh signed request with an action ID.
+- Keyboard launches have no Telegram init-data signature. They submit through the server only when the current key is paired with the owner's verified Tailscale login.
+- Signed launches submit through a fresh signed request; both paths use a one-time action ID.
 - The page binds notes to a topic and conversation. A stale or cross-session page cannot direct notes into a replacement agent.
-- A keyboard key cannot directly send Annotate notes or unpause typing. The validated control panel can open/rename/unlink/start agents, so a key is still a credential.
+- A keyboard key can send only the notes from its bound Annotate page, not arbitrary pane input or an unvalidated action. The validated control panel can also open/rename/unlink/start agents.
 
 Directory enumeration keeps a bounded prefix and warns when incomplete. At most eight distinct filesystem reads can remain outstanding. A macOS permission wait can outlive an HTTP timeout; it keeps its slot until the underlying read completes. Duplicate reads join the same work.
 
@@ -397,7 +397,7 @@ For deeper behavior use [design.md](design.md); for exported APIs use [implement
 | Agent controls | `/model` and `/effort` show current values or queue a validated setting command. Availability and choices are adapter/config-dependent. |
 | Global pause | `/pause` blocks typing and Telegram-driven agent starts, not outgoing replies or agents already running. `/unpause` clears it. The local `rex-tg new` CLI is a separate explicit start. |
 | Input safety | Owner, chat, topic, session, pane, process, pause, and prompt checks; special Vim handling for pi and Claude Code. This is not an agent sandbox. |
-| Permission prompts | Supported permission/question layouts become buttons. Includes readable questions, supported multi-choice flows, Escape, and reminders. Unsupported dialogs need the Mac. |
+| Permission prompts | Supported permission/question layouts become buttons, including Pi's readable `Do you want to proceed?` Yes/No confirmation. Untyped screens without a recognized layout get no guessed actions and need the Mac. |
 | Scheduled requests | `/at` stores a future request; due messages use normal queue/safety checks. |
 
 #### Messages, progress, and media
@@ -430,9 +430,9 @@ Requires `[miniapp] url` and HTTPS via Tailscale Serve. Keep the listener on loo
 | File browser | Read-only folder tree; redacted text/Markdown and supported image previews. Path containment, ignored-file filtering, and credential-name filtering apply. |
 | Changes | Uncommitted, branch, and last-turn views; file tree, diffs, wrapping, next/previous files, and supported image previews. |
 | Whole answer | Large answer page with formatted text, tables, and code. Older pages without a session binding may be copy-only. |
-| Annotate | Select text or paragraphs, add notes, and send them to the page's bound agent session; copy or prefill chat as alternatives. Keyboard launches send through Telegram; signed launches can use signed direct submission. |
+| Annotate | Select text or paragraphs, add notes, and send them to the page's bound agent session; copy or prefill chat as alternatives. Keyboard launches need the verified owner Tailscale login; signed launches need fresh Telegram init data. |
 | Appearance | Per-device text scale and light/dark choice. |
-| Authorization | Telegram-signed owner data or a keyboard key with the configured tailnet login checks. Keyed panel actions are validated/deduplicated; the key cannot directly submit Annotate notes or unpause typing. |
+| Authorization | Telegram-signed owner data or a keyboard key with the configured tailnet login checks. Keyed actions are page-bound and deduplicated; the key cannot unpause typing. |
 
 #### Operations and recovery
 

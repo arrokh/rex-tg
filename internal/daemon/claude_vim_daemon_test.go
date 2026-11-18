@@ -15,10 +15,19 @@ func claudeScreen(footer string) string { return claudeBoxScreen + footer + "\n"
 // claudeTopic starts the daemon with a resolved Claude Code session and an
 // open topic.
 func claudeTopic(t *testing.T) (*env, int64) {
+	return claudeTopicWithProcess(t, "2.1.322", "claude")
+}
+
+// cuxTopic uses cux as the pane foreground process for Claude Code.
+func cuxTopic(t *testing.T) (*env, int64) {
+	return claudeTopicWithProcess(t, "cux", "cux")
+}
+
+func claudeTopicWithProcess(t *testing.T, name, argv0 string) (*env, int64) {
 	t.Helper()
 	e := newEnv(t)
 	e.seedOwner()
-	e.setProcess("2.1.322", "claude", 5151)
+	e.setProcess(name, argv0, 5151)
 	dir := filepath.Join(e.home, ".claude", "projects", "-work-proj")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
