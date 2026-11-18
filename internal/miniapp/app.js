@@ -844,6 +844,15 @@
     }
   }
 
+  function openAgentTopic(pane, lock, onFailure) {
+    hap("light");
+    post({ op: "open", pane: pane }, lock).then(function (r) {
+      if (r.ok && r.link) { openLink(r.link); return; }
+      toast(r);
+      if (onFailure) { onFailure(); }
+    });
+  }
+
   function button(text, cls, label) {
     var b = el("button", cls || "btn", text);
     b.type = "button";
@@ -1269,9 +1278,9 @@
       rowBtn.appendChild(mid);
       rowBtn.appendChild(el("span", "chev", "›"));
       top.appendChild(rowBtn);
-      if (a.topic) {
-        var sc = button("↗", "ibtn small", "Open the topic of " + nm);
-        sc.addEventListener("click", function () { hap("light"); openLink(a.topic.link); });
+      if (a.topic || a.ready) {
+        var sc = button(a.topic ? "↗" : "＋", "ibtn small", a.topic ? "Open or reconnect the topic of " + nm : "Connect " + nm + " to Telegram in a new topic");
+        sc.addEventListener("click", function () { openAgentTopic(a.pane, c, refresh); });
         top.appendChild(sc);
       }
       c.appendChild(top);
@@ -1294,15 +1303,12 @@
 
       var acts2 = el("div", "cact");
       if (a.topic) {
-        var t = button("↗ Topic", "btn primary");
-        t.addEventListener("click", function () { hap("light"); openLink(a.topic.link); });
+        var t = button("↗ Open / reconnect", "btn primary", "Open or reconnect the topic of " + nm);
+        t.addEventListener("click", function () { openAgentTopic(a.pane, c, refresh); });
         acts2.appendChild(t);
       } else if (a.ready) {
-        var o = button("Open topic", "btn primary");
-        o.addEventListener("click", function () {
-          hap("light");
-          post({ op: "open", pane: a.pane }, c).then(function (r) { toast(r); refresh(); });
-        });
+        var o = button("＋ Connect to Telegram", "btn primary", "Connect " + nm + " to Telegram in a new topic");
+        o.addEventListener("click", function () { openAgentTopic(a.pane, c, refresh); });
         acts2.appendChild(o);
       } else {
         acts2.appendChild(el("span", "waiting", "Waiting for the session…"));
@@ -1565,8 +1571,11 @@
       if (t.since) { tags.appendChild(tag("active " + t.since + " ago")); }
       if (tags.children.length) { det.appendChild(tags); }
       var ac = el("div", "cact");
-      var op = button("↗ Open topic", "btn primary", "Open the topic " + nm);
-      op.addEventListener("click", function () { hap("light"); openLink(t.link); });
+      var op = button(t.pane ? "↗ Open / reconnect" : "↗ Open topic", "btn primary", t.pane ? "Open or reconnect the topic " + nm : "Open the topic " + nm);
+      op.addEventListener("click", function () {
+        if (t.pane) { openAgentTopic(t.pane, c, refresh); }
+        else { hap("light"); openLink(t.link); }
+      });
       ac.appendChild(op);
       var rn = button("✏️ Rename", "btn", "Rename " + nm);
       if (!t.pane) { rn.disabled = true; rn.title = "Rename is off: the agent stopped."; }

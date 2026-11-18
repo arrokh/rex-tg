@@ -458,6 +458,22 @@ func (s *Store) SetThreadStatus(ctx context.Context, id int64, status string) er
 	return affected(res, fmt.Sprintf("store: thread %d", id))
 }
 
+// SetThreadStatusIf changes a topic only if it still has the expected status.
+// It is used for registry transitions that can race with local topic closure.
+func (s *Store) SetThreadStatusIf(ctx context.Context, id int64, expected, status string) (bool, error) {
+	res, err := s.db.ExecContext(ctx, `UPDATE thread SET status=?1,
+		closed_at = CASE WHEN ?1='closed' THEN COALESCE(closed_at, ?2) ELSE NULL END
+		WHERE id=?3 AND status=?4`, status, s.now().UnixMilli(), id, expected)
+	if err != nil {
+		return false, fmt.Errorf("store: set thread status: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("store: set thread status rows: %w", err)
+	}
+	return n != 0, nil
+}
+
 // SetThreadName changes a topic's name.
 func (s *Store) SetThreadName(ctx context.Context, id int64, name string) error {
 	res, err := s.db.ExecContext(ctx, `UPDATE thread SET name=? WHERE id=?`, name, id)

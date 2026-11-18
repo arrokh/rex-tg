@@ -185,7 +185,10 @@ brew upgrade rex-tg
 
 # Inspect local state without sending input
 rex-tg status
+rex-tg status --all   # include closed-topic details
 ```
+
+Status counts live, offline, and closed topics. Closed details stay hidden unless you pass `--all`.
 
 A launchd-managed daemon notices a binary replacement and restarts when safe, usually within about a minute. A manually started daemon must be restarted by hand. Source users can run `git pull --ff-only && mise exec -- make install` from their checkout. Do not install over a Homebrew symlink with `make install`; [choose one installation path](docs/reference.md#install-with-homebrew).
 

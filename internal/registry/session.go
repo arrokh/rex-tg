@@ -98,8 +98,12 @@ func (r *Registry) topicOffline(ctx context.Context, conv, paneID int64, reason 
 	if !ok || th.CurrentConversationID != conv || th.Status != store.ThreadLive {
 		return nil, nil
 	}
-	if err := r.st.SetThreadStatus(ctx, th.ID, store.ThreadOffline); err != nil {
+	changed, err := r.st.SetThreadStatusIf(ctx, th.ID, store.ThreadLive, store.ThreadOffline)
+	if err != nil {
 		return nil, fmt.Errorf("registry: topic offline: %w", err)
+	}
+	if !changed { // a close or another registry transition won the race
+		return nil, nil
 	}
 	return []Change{{Kind: TopicOffline, PaneID: paneID, ConversationID: conv, ThreadID: th.ID, Reason: reason}}, nil
 }
@@ -322,10 +326,13 @@ func (r *Registry) adopt(ctx context.Context, pane store.Pane, mem *paneMem, rt 
 			out = append(out, Change{Kind: Resume, PaneID: pane.ID, ConversationID: conv.ID, ThreadID: th.ID,
 				Divider: newDivider(true), Start: startFor(true, hasCursor)})
 			if th.Status == store.ThreadOffline {
-				if err := r.st.SetThreadStatus(ctx, th.ID, store.ThreadLive); err != nil {
+				changed, err := r.st.SetThreadStatusIf(ctx, th.ID, store.ThreadOffline, store.ThreadLive)
+				if err != nil {
 					return nil, fmt.Errorf("registry: topic live: %w", err)
 				}
-				out = append(out, Change{Kind: TopicLive, PaneID: pane.ID, ConversationID: conv.ID, ThreadID: th.ID})
+				if changed {
+					out = append(out, Change{Kind: TopicLive, PaneID: pane.ID, ConversationID: conv.ID, ThreadID: th.ID})
+				}
 			}
 		}
 	} else {
@@ -358,10 +365,13 @@ func (r *Registry) adopt(ctx context.Context, pane store.Pane, mem *paneMem, rt 
 			out = append(out, Change{Kind: TakeOver, PaneID: pane.ID, ConversationID: conv.ID, ThreadID: tx.ID,
 				Divider: newDivider(resumeHint), Start: startFor(resumeHint, hasCursor)})
 			if tx.Status == store.ThreadOffline {
-				if err := r.st.SetThreadStatus(ctx, tx.ID, store.ThreadLive); err != nil {
+				changed, err := r.st.SetThreadStatusIf(ctx, tx.ID, store.ThreadOffline, store.ThreadLive)
+				if err != nil {
 					return nil, fmt.Errorf("registry: topic live: %w", err)
 				}
-				out = append(out, Change{Kind: TopicLive, PaneID: pane.ID, ConversationID: conv.ID, ThreadID: tx.ID})
+				if changed {
+					out = append(out, Change{Kind: TopicLive, PaneID: pane.ID, ConversationID: conv.ID, ThreadID: tx.ID})
+				}
 			}
 		} else {
 			out = append(out, Change{Kind: SessionStarted, PaneID: pane.ID, ConversationID: conv.ID,

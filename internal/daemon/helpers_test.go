@@ -589,11 +589,13 @@ func (e *env) openTopic() int64 {
 	var thread int64
 	e.waitFor("the topic", func() bool {
 		ts := e.tg.Topics(chatID)
-		if len(ts) == 0 {
-			return false
+		for i := len(ts) - 1; i >= 0; i-- {
+			if !ts[i].Closed && !ts[i].Deleted {
+				thread = ts[i].ThreadID
+				return true
+			}
 		}
-		thread = ts[0].ThreadID
-		return true
+		return false
 	})
 	e.waitText(thread, "Linked")
 	// The Opened link now follows the durably queued topic intro, so wait for

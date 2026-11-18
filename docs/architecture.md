@@ -131,9 +131,9 @@ The source-chat Open link waits for successful linkage and a durable intro. Back
 
 - A topic's `current_conversation_id` identifies its current agent session.
 - A new conversation in the same pane may take over the existing topic. Old conversations remain history.
-- A resumed conversation may attach to its existing topic in a new pane.
-- A gone pane can make a topic offline. Unlink closes its local binding, not the agent process or Telegram history.
-- Telegram can delete a topic without notifying the bot. A failed topic send/rename or an Open action detects this and reconciles state.
+- A resumed conversation may attach to its existing topic in a new pane while that topic is still open.
+- An agent exit or gone pane waits for the turn and any in-flight paste, then tries to close its Telegram topic after queued answers. It closes the local binding even if Telegram's call fails. This does not stop a Rex pane or session; Telegram history stays.
+- `/unlink` and a Telegram-side topic deletion close only the local binding. Telegram can delete a topic without notifying the bot; a failed send/rename or a validated Open action detects this and reconciles state.
 - Startup question buttons retain the process that displayed the question, so another instance of the same runtime cannot inherit an old answer button.
 
 ## Telegram input to a pane
@@ -458,7 +458,7 @@ Run these in a **Mac terminal**, not in Telegram. `rex-tg help` also lists the m
 | `rex-tg uninstall [--only pi\|claude\|codex] [--force] [--keep-launchd]` | Remove integrations. `--only` leaves launchd; `--keep-launchd` preserves it on a full removal. `--force` permits Codex hook removals that shift other hooks' trust positions. State/token are kept. |
 | `rex-tg daemon [--config F] [--log-stderr]` | Run foreground daemon; normally launchd starts it. `--log-stderr` also copies logs to stderr. Do not run alongside the installed daemon with the same token. |
 | `rex-tg hook <pi\|claude\|codex>` | Internal agent-hook entry point: reads JSON stdin, writes spool metadata, and intentionally returns silently. Not a user messaging command. |
-| `rex-tg status [--config F]` | Read local database status, topics, queues, and alerts. |
+| `rex-tg status [--all] [--config F]` | Read local database status, topics, queues, and alerts. Closed-topic details need `--all`. |
 | `rex-tg doctor [--config F]` | Check token/pairing, Rex, hooks, launchd, state, and optional Mini App setup. It makes diagnostic service requests but does not type into panes. |
 | `rex-tg version` | Print build version. Aliases: `rex-tg --version`, `rex-tg -v`. Source builds without injected version may say `dev`. |
 | `rex-tg help` | Print usage. Aliases: `rex-tg --help`, `rex-tg -h`. |

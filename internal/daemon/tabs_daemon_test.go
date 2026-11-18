@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"testing"
+
+	"rex-tg/internal/store"
 )
 
 // tabSession scripts Rex so that the agent's pane is in the session for /new,
@@ -103,9 +105,9 @@ func TestTabFollowsTheTopicName(t *testing.T) {
 	})
 }
 
-// The tab of a stopped agent shows a 🔴, as the topic does. It goes away when
-// the agent runs again.
-func TestTabShowsThatTheAgentStopped(t *testing.T) {
+// Terminating an agent closes its Telegram topic, but leaves the user's Rex
+// tab name alone. A later resume connects to a new topic.
+func TestTabRemainsNamedWhenAgentStops(t *testing.T) {
 	e := newEnv(t)
 	e.seedOwner()
 	e.tabSession("pane one")
@@ -119,19 +121,36 @@ func TestTabShowsThatTheAgentStopped(t *testing.T) {
 
 	e.setProcess("zsh", "-zsh", 777)
 	e.waitText(thread, "pi stopped: it exited, and the pane is still open.")
-	e.waitFor("the 🔴 on the tab", func() bool {
-		r := e.tabRenames()
-		return len(r) > 0 && r[len(r)-1] == "🔴 pane one"
+	e.waitFor("the old topic to close", func() bool {
+		th, ok, _ := e.peek().ThreadByTopic(context.Background(), chatID, thread)
+		if !ok || th.Status != store.ThreadClosed {
+			return false
+		}
+		for _, tp := range e.tg.Topics(chatID) {
+			if tp.ThreadID == thread {
+				return tp.Closed
+			}
+		}
+		return false
 	})
+	for _, name := range e.tabRenames() {
+		if name == "🔴 pane one" {
+			t.Fatalf("terminated agent left stop marker on Rex tab: %q", e.tabRenames())
+		}
+	}
 
-	e.setTab("🔴 pane one")
 	e.setProcess("node", "pi", 4343)
 	e.hookPi(p, "resume")
-	e.waitText(thread, "pi is running again")
-	e.waitFor("the tab without the 🔴", func() bool {
-		r := e.tabRenames()
-		return len(r) > 1 && r[len(r)-1] == "pane one"
-	})
+	newThread := e.openTopic()
+	if newThread == thread {
+		t.Fatalf("resumed agent reused closed topic %d", thread)
+	}
+	e.waitText(newThread, "ready")
+	for _, name := range e.tabRenames() {
+		if name == "🔴 pane one" {
+			t.Errorf("reconnected agent left stop marker on Rex tab: %q", e.tabRenames())
+		}
+	}
 }
 
 // An agent in the session for /new renames it (Rex tells agents to name

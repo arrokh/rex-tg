@@ -666,6 +666,7 @@ func (d *daemon) typeInto(ctx context.Context, threadID int64, pane store.Pane, 
 }
 
 func (d *daemon) onTyped(e evTyped) {
+	defer d.maybeCloseStoppedTopic(e.thread)
 	dl := d.delivering[e.thread]
 	if dl != nil && dl.cancel != nil {
 		dl.cancel()

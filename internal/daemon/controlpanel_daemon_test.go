@@ -19,8 +19,6 @@ import (
 	"rex-tg/internal/store"
 )
 
-const offlineName = "🔴 old work"
-
 // miniControl asks the control panel's API as the owner. body is a JSON
 // action for POST, or nil for GET.
 func miniControl(t *testing.T, e *env, addr, path string, body *miniapp.ControlAction, out any) int {
@@ -46,6 +44,76 @@ func miniControl(t *testing.T, e *env, addr, path string, body *miniapp.ControlA
 	return res.StatusCode
 }
 
+func TestControlPanelReconnectsWhenTelegramTopicWasDeleted(t *testing.T) {
+	addr := freeAddr(t)
+	e := newEnvSerial(t)
+	e.cfg.MiniApp.URL = "https://mac.example.ts.net:8443"
+	e.cfg.MiniApp.Listen = addr
+	e.seedOwner()
+	p := e.newPi("pi-panel-reconnect")
+	p.User("start")
+	p.Final("ready")
+	e.fake.On([]string{"block", "ls"}, fmt.Sprintf(`{"blocks":[{"block_id":%q,"label":"pane one","window_id":"W1"}]}`, rexBlock), 0)
+	e.setTab("pane one")
+	e.start()
+	e.hookPi(p, "startup")
+	e.waitFor("the Mini App server", func() bool {
+		c, err := net.Dial("tcp", addr)
+		if err == nil {
+			_ = c.Close()
+		}
+		return err == nil
+	})
+	e.say(0, "/rt")
+	var u string
+	e.waitFor("the control button", func() bool { u = webAppURL(e, 0, "🎛 Open control panel"); return u != "" })
+	id := pageID(u)
+	base := "/api/control?id=" + id
+	var state miniapp.ControlState
+	if code := miniControl(t, e, addr, base, nil, &state); code != http.StatusOK || len(state.Agents) != 1 {
+		t.Fatalf("state: %d %+v", code, state)
+	}
+	open := func(act string) miniapp.ControlResult {
+		t.Helper()
+		var result miniapp.ControlResult
+		a := miniapp.ControlAction{Op: miniapp.OpOpen, Act: act, Pane: state.Agents[0].Pane}
+		if code := miniControl(t, e, addr, "/api/control/do?id="+id, &a, &result); code != http.StatusOK {
+			t.Fatalf("open: status %d", code)
+		}
+		return result
+	}
+	first := open("0000000000000001")
+	if !first.OK || first.Link == "" {
+		t.Fatalf("first open: %+v", first)
+	}
+	state = miniapp.ControlState{}
+	miniControl(t, e, addr, base, nil, &state)
+	if state.Agents[0].Topic == nil {
+		t.Fatal("first open did not link a topic")
+	}
+	oldThread := state.Agents[0].Topic.Thread
+	var telegramThread int64
+	for _, topic := range e.tg.Topics(chatID) {
+		if !topic.Deleted && !topic.Closed {
+			telegramThread = topic.ThreadID
+		}
+	}
+	if telegramThread == 0 {
+		t.Fatal("first Telegram topic is missing")
+	}
+	e.tg.DeleteTopic(chatID, telegramThread)
+
+	second := open("0000000000000002")
+	if !second.OK || second.Link == "" || second.Link == first.Link {
+		t.Fatalf("reconnect: first %+v, second %+v", first, second)
+	}
+	state = miniapp.ControlState{}
+	miniControl(t, e, addr, base, nil, &state)
+	if state.Agents[0].Topic == nil || state.Agents[0].Topic.Thread == oldThread || state.Agents[0].Topic.Link != second.Link {
+		t.Fatalf("topic after reconnect: %+v", state.Agents[0].Topic)
+	}
+}
+
 // /rt opens the control panel. From it the owner opens a topic, renames
 // it and its pane, unlinks it, and pauses typing. An action with the same act
 // id runs once.
@@ -68,8 +136,7 @@ func TestControlPanel(t *testing.T) {
 	// The pane has a tab in a session of the user's.
 	e.fake.On([]string{"block", "ls"}, fmt.Sprintf(`{"blocks":[{"block_id":%q,"label":"pane one","window_id":"W1"}]}`, rexBlock), 0)
 	e.setTab("pane one")
-	// Folders: one pinned, two that sessions ran in, and a stopped agent's
-	// topic (its session ran in the first of them).
+	// Folders: one pinned and two that earlier sessions ran in.
 	pinned, fa, fb := filepath.Join(e.home, "pinned"), filepath.Join(e.home, "work", "a"), filepath.Join(e.home, "work", "b")
 	for _, dir := range []string{pinned, fa, fb} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -80,18 +147,9 @@ func TestControlPanel(t *testing.T) {
 	e.withStore(func(st *store.Store) {
 		ctx := context.Background()
 		for i, dir := range []string{fa, fb} {
-			c, err := st.UpsertConversation(ctx, store.Conversation{Runtime: agents.Pi, NativeID: "earlier" + dir, Transcript: dir + "/earlier.jsonl", CWD: dir, FirstSeenAt: time.Now().Add(-time.Duration(i+2) * time.Hour)})
+			_, err := st.UpsertConversation(ctx, store.Conversation{Runtime: agents.Pi, NativeID: "earlier" + dir, Transcript: dir + "/earlier.jsonl", CWD: dir, FirstSeenAt: time.Now().Add(-time.Duration(i+2) * time.Hour)})
 			if err != nil {
 				t.Fatal(err)
-			}
-			if i == 0 {
-				th, err := st.LinkTopic(ctx, chatID, 77, c.ID, offlineName, time.Now())
-				if err != nil {
-					t.Fatal(err)
-				}
-				if err := st.SetThreadStatus(ctx, th.ID, store.ThreadOffline); err != nil {
-					t.Fatal(err)
-				}
 			}
 		}
 	})
@@ -152,27 +210,15 @@ func TestControlPanel(t *testing.T) {
 	}
 	thread := st.Agents[0].Topic.Thread
 
-	// Topics: the live one with its session, tab, and pane, and the stopped
-	// one without a pane.
+	// Topics lists the active topic with its session, tab, and pane.
 	st = miniapp.ControlState{}
 	miniControl(t, e, addr, base, nil, &st)
-	var live, off *miniapp.TopicRow
-	for i := range st.Topics {
-		switch tr := &st.Topics[i]; tr.Status {
-		case "live":
-			live = tr
-		case "offline":
-			off = tr
-		}
-	}
-	if live == nil || off == nil || len(st.Topics) != 2 {
+	if len(st.Topics) != 1 || st.Topics[0].Status != "live" {
 		t.Fatalf("topics: %+v", st.Topics)
 	}
+	live := st.Topics[0]
 	if live.Thread != thread || live.Pane != ag.Pane || live.Session != "main" || live.Tab != "pane one" || live.PaneLabel != "pane one" || live.Agent != "pi" {
-		t.Errorf("live topic %+v", *live)
-	}
-	if off.Pane != 0 || off.Session != "" || off.Name != "old work" || off.Agent != "pi" || off.Folder != "~/work/a" {
-		t.Errorf("offline topic %+v", *off)
+		t.Errorf("live topic %+v", live)
 	}
 
 	// Rename: the topic, the pane in Rex, and its tab, once, also when the
@@ -294,19 +340,17 @@ func TestControlPanel(t *testing.T) {
 		t.Errorf("folders after forgetting all: %+v", st.Folders)
 	}
 
-	// Clean up stopped topics: only the offline one is unlinked, once.
+	// No stopped topics remain after termination cleanup; CleanTopics leaves
+	// the active topic alone and returns the same result for a repeated act.
 	clean := miniapp.ControlAction{Op: miniapp.OpCleanTopics, Act: act()}
 	r = do(clean)
-	if again := do(clean); !r.OK || r.Message != "Unlinked 1 stopped topic." || again != r {
+	if again := do(clean); r.OK || r.Message != "No stopped topics." || again != r {
 		t.Fatalf("clean: %+v, again %+v", r, again)
 	}
 	st = miniapp.ControlState{}
 	miniControl(t, e, addr, base, nil, &st)
 	if len(st.Topics) != 1 || st.Topics[0].Status != "live" {
 		t.Errorf("topics after cleaning: %+v", st.Topics)
-	}
-	if r = do(miniapp.ControlAction{Op: miniapp.OpCleanTopics, Act: act()}); r.OK || r.Message != "No stopped topics." {
-		t.Errorf("clean again: %+v", r)
 	}
 
 	// A new agent starts in a folder inside home, once, also when the act

@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -55,10 +56,40 @@ func (d *daemon) tildePath(p string) string {
 	return p
 }
 
+const topicClosePendingPrefix = "topic_close_pending:"
+
+func topicClosePendingKey(threadID int64) string {
+	return fmt.Sprintf("%s%d", topicClosePendingPrefix, threadID)
+}
+
+func (d *daemon) topicTerminating(threadID int64) bool {
+	_, ok := d.terminatingTopics.Load(threadID)
+	return ok
+}
+
+func (d *daemon) markTopicClosePending(threadID int64) {
+	if err := d.st.Set(d.ctx, topicClosePendingKey(threadID), "1"); err != nil {
+		d.log.Warn("save pending topic close", "thread", threadID, "err", err)
+	}
+}
+
+func (d *daemon) clearTopicClosePending(threadID int64) {
+	if err := d.st.Delete(d.ctx, topicClosePendingKey(threadID)); err != nil {
+		d.log.Warn("clear pending topic close", "thread", threadID, "err", err)
+	}
+}
+
+func topicCloseSucceeded(err error) bool {
+	return err == nil || telegram.Classify(err) == telegram.ClassThreadNotFound || telegram.Classify(err) == telegram.ClassNotModified
+}
+
 // threadOf returns the open topic whose current session is conv.
 func (d *daemon) threadOf(conv int64) (store.Thread, bool) {
 	th, ok, err := d.st.ThreadByConversation(d.ctx, conv)
 	if err != nil || !ok || th.CurrentConversationID != conv || th.Status == store.ThreadClosed {
+		return store.Thread{}, false
+	}
+	if d.topicTerminating(th.ID) {
 		return store.Thread{}, false
 	}
 	return th, true
@@ -74,10 +105,19 @@ func (d *daemon) onChanges(chs []registry.Change) {
 		case registry.SessionStopped:
 			d.stopTailer(c.ConversationID, true)
 		case registry.TakeOver, registry.Resume:
-			d.attach(c)
+			if !d.topicTerminating(c.ThreadID) {
+				d.attach(c)
+			}
 		case registry.TopicOffline:
 			d.topicOffline(c)
 		case registry.TopicLive:
+			if d.topicTerminating(c.ThreadID) {
+				d.markTopicClosePending(c.ThreadID)
+				if _, err := d.st.SetThreadStatusIf(d.ctx, c.ThreadID, store.ThreadLive, store.ThreadOffline); err != nil {
+					d.log.Warn("keep terminating topic offline", "thread", c.ThreadID, "err", err)
+				}
+				continue
+			}
 			if th, err := d.st.Thread(d.ctx, c.ThreadID); err == nil && th.Status != store.ThreadClosed {
 				n := d.nextN(fmt.Sprintf("livn:%d", th.ID))
 				name := "The agent"
@@ -102,6 +142,9 @@ func (d *daemon) attach(c registry.Change) {
 	ctx := d.ctx
 	th, err := d.st.Thread(ctx, c.ThreadID)
 	if err != nil || th.Status == store.ThreadClosed {
+		return
+	}
+	if d.topicTerminating(th.ID) {
 		return
 	}
 	conv, err := d.st.Conversation(ctx, c.ConversationID)
@@ -403,14 +446,17 @@ func (d *daemon) syncTab(th store.Thread, conv store.Conversation) {
 	_ = d.st.Set(d.ctx, tabSetKey(th.ID), label)
 }
 
-// topicOffline shows in the topic that its agent stopped: a notice that says
-// why, the end of a turn that was running (no more "typing…"), and a 🔴 in
-// front of the topic's name until the agent runs again.
+// topicOffline records the end of an agent session, posts a final notice,
+// then closes the Telegram topic while keeping its history.
 func (d *daemon) topicOffline(c registry.Change) {
 	th, err := d.st.Thread(d.ctx, c.ThreadID)
 	if err != nil || th.Status == store.ThreadClosed {
 		return
 	}
+	if _, loaded := d.terminatingTopics.LoadOrStore(th.ID, &topicTermination{}); loaded {
+		return
+	}
+	d.markTopicClosePending(th.ID)
 	conv, cerr := d.st.Conversation(d.ctx, c.ConversationID)
 	name := "The agent"
 	if cerr == nil {
@@ -424,8 +470,98 @@ func (d *daemon) topicOffline(c registry.Change) {
 	d.stopTailer(c.ConversationID, true)
 	d.closeAlerts(th, store.AlertGone)
 	d.dirty[th.ID] = true
-	if cerr == nil {
-		d.rename(th, conv)
+	d.maybeCloseStoppedTopic(th.ID)
+}
+
+// closeRestoredOfflineTopics resumes persisted close attempts before the
+// registry worker starts. The marker also covers a resume racing with close or
+// a daemon stop before the core handles the registry event.
+func (d *daemon) closeRestoredOfflineTopics() {
+	threads, err := d.st.Threads(d.ctx, store.ThreadOffline)
+	if err != nil {
+		d.log.Warn("restore stopped topics", "err", err)
+		return
+	}
+	targets := make(map[int64]store.Thread, len(threads))
+	for _, th := range threads {
+		targets[th.ID] = th
+	}
+	keys, err := d.st.KeysWithPrefix(d.ctx, topicClosePendingPrefix)
+	if err != nil {
+		d.log.Warn("list pending topic closes", "err", err)
+	}
+	for _, key := range keys {
+		id, err := strconv.ParseInt(strings.TrimPrefix(key, topicClosePendingPrefix), 10, 64)
+		if err != nil {
+			d.log.Warn("invalid pending topic close key", "key", key, "err", err)
+			continue
+		}
+		th, err := d.st.Thread(d.ctx, id)
+		if err != nil {
+			d.log.Warn("load pending topic close", "thread", id, "err", err)
+			continue
+		}
+		targets[id] = th
+	}
+	for _, th := range targets {
+		if d.ctx.Err() != nil {
+			return
+		}
+		d.terminatingTopics.Store(th.ID, &topicTermination{})
+		d.markTopicClosePending(th.ID)
+		d.closeStoppedTopic(th)
+	}
+}
+
+// maybeCloseStoppedTopic waits for the stopped turn and any in-flight paste to
+// finish before closing Telegram. Their final progress and safety notices stay
+// ahead of the close call.
+func (d *daemon) maybeCloseStoppedTopic(threadID int64) {
+	if !d.topicTerminating(threadID) || d.delivering[threadID] != nil {
+		return
+	}
+	if tr := d.trackers[threadID]; tr != nil && tr.Snapshot().Phase == "ending" {
+		return
+	}
+	th, err := d.st.Thread(d.ctx, threadID)
+	if err != nil || th.Status == store.ThreadClosed {
+		return
+	}
+	d.closeStoppedTopic(th)
+}
+
+// closeStoppedTopic closes Telegram only after higher-priority outbox messages
+// (including the stop notice) have had a chance to send. The local thread is
+// closed when the call finishes, even if Telegram's outcome is unknown.
+func (d *daemon) closeStoppedTopic(th store.Thread) {
+	v, ok := d.terminatingTopics.Load(th.ID)
+	if !ok || !v.(*topicTermination).closeStarted.CompareAndSwap(false, true) {
+		return
+	}
+	d.spawn(func() {
+		err := d.closeTopicInTelegram(th)
+		remoteClosed := topicCloseSucceeded(err)
+		if !remoteClosed && d.ctx.Err() == nil {
+			d.log.Warn("close stopped topic; retrying on next start", "thread", th.ID, "err", err)
+		}
+		d.emit(evTopicClosed{threadID: th.ID, remoteClosed: remoteClosed})
+	})
+}
+
+func (d *daemon) closeTopicInTelegram(th store.Thread) error {
+	return d.snd.Call(sender.PriorityEdit, func(ctx context.Context, tg *telegram.Client) error {
+		return tg.CloseForumTopic(ctx, th.ChatID, th.MessageThreadID)
+	})
+}
+
+// finishStoppedTopic detaches the ended session after Telegram's close
+// attempt. A failed attempt stays marked so the next start can retry it.
+func (d *daemon) finishStoppedTopic(threadID int64, remoteClosed bool) {
+	d.closeThread(threadID)
+	if remoteClosed {
+		if th, err := d.st.Thread(d.ctx, threadID); err == nil && th.Status == store.ThreadClosed {
+			d.clearTopicClosePending(threadID)
+		}
 	}
 }
 
@@ -440,7 +576,7 @@ func offlineText(name, reason string) string {
 	case registry.ReasonReplaced:
 		why = ": another session took its pane"
 	}
-	return "🔴 " + format.Escape(name) + " stopped" + why + ".\nMessages here are not sent now. If you resume the session, this topic continues."
+	return "🔴 " + format.Escape(name) + " stopped" + why + ".\nThis topic is no longer linked to the agent; its history stays here. If you resume the session, use /agents to open it in a new topic."
 }
 
 // statusName is the topic name to show for a thread: a 🔴 in front while
@@ -512,6 +648,9 @@ func (d *daemon) openTopic(paneID, replyThread int64, answer func(text string, a
 		switch {
 		case v == nil:
 			answer("That pane is gone. Use /agents again.", true)
+			return
+		case v.Thread != nil && d.topicTerminating(v.Thread.ID):
+			answer("That topic is closing. Open the agent again from /agents in a moment.", true)
 			return
 		case v.Conversation == nil:
 			answer("Waiting for the session file… It resolves at the agent's next prompt or turn end.", true)
