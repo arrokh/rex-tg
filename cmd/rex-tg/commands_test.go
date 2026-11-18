@@ -294,6 +294,59 @@ func TestStatus(t *testing.T) {
 	}
 }
 
+func TestStatusHidesClosedTopicDetailsUnlessAll(t *testing.T) {
+	te := newTestEnv(t)
+	ctx := context.Background()
+	st, err := store.Open(filepath.Join(te.stateDir(), "rex-tg.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	conv, err := st.UpsertConversation(ctx, store.Conversation{Runtime: "pi", NativeID: "s1", Transcript: "/t.jsonl", FirstSeenAt: now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	th, err := st.LinkTopic(ctx, 1, 10, conv.ID, "old-task", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetThreadStatus(ctx, th.ID, store.ThreadClosed); err != nil {
+		t.Fatal(err)
+	}
+	outboxID, _, err := st.Enqueue(ctx, store.OutboxItem{
+		ThreadID: th.ID, Key: "uncertain", Kind: "final",
+		Parts: []store.PartContent{{Content: "uncertain", Format: store.FormatPlain}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.MarkPartUnknown(ctx, outboxID, 0); err != nil {
+		t.Fatal(err)
+	}
+	st.Close()
+
+	if code := te.run("status"); code != 0 {
+		t.Fatalf("status exit %d: %s", code, te.stderr)
+	}
+	out := te.stdout.String()
+	for _, want := range []string{"Topics: 0 live, 0 offline, 1 closed", "Closed topic details omitted", "use --all", "Unknown parts: 1"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("default status missing %q in:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "old-task") {
+		t.Errorf("default status printed a closed topic detail:\n%s", out)
+	}
+
+	te.stdout.Reset()
+	if code := te.run("status", "--all"); code != 0 {
+		t.Fatalf("status --all exit %d: %s", code, te.stderr)
+	}
+	if !strings.Contains(te.stdout.String(), "closed   pi") || !strings.Contains(te.stdout.String(), "old-task") || !strings.Contains(te.stdout.String(), "unknown-parts=1") {
+		t.Errorf("status --all omitted closed topic:\n%s", te.stdout)
+	}
+}
+
 func TestDoctor(t *testing.T) {
 	srv := tgtest.New(t)
 	fx := rextest.New(t)

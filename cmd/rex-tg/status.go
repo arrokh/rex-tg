@@ -11,6 +11,7 @@ import (
 func statusCmd(ctx context.Context, args []string, env Env) int {
 	fs := newFlags("status", env)
 	cfgPath := fs.String("config", "", "config file")
+	all := fs.Bool("all", false, "include closed topics")
 	if code, stop := parseFlags(fs, args); stop {
 		return code
 	}
@@ -47,10 +48,17 @@ func statusCmd(ctx context.Context, args []string, env Env) int {
 	}
 
 	out := env.Stdout
-	fmt.Fprintf(out, "Topics: %d\n", len(threads))
+	counts := map[string]int{}
+	for _, th := range threads {
+		counts[th.Status]++
+	}
+	fmt.Fprintf(out, "Topics: %d live, %d offline, %d closed\n", counts[store.ThreadLive], counts[store.ThreadOffline], counts[store.ThreadClosed])
 	alertsTotal := 0
 	queuedTotal := 0
 	for _, th := range threads {
+		if th.Status == store.ThreadClosed && !*all {
+			continue
+		}
 		runtime := "-"
 		if th.CurrentConversationID != 0 {
 			if c, err := st.Conversation(ctx, th.CurrentConversationID); err == nil {
@@ -71,6 +79,9 @@ func statusCmd(ctx context.Context, args []string, env Env) int {
 		alertsTotal += len(alerts)
 		fmt.Fprintf(out, "  %-8s %-7s %s  queued=%d unknown-parts=%d open-alerts=%d\n",
 			th.Status, runtime, th.Name, len(queued), unknownByThread[th.ID], len(alerts))
+	}
+	if counts[store.ThreadClosed] > 0 && !*all {
+		fmt.Fprintf(out, "Closed topic details omitted (%d; use --all to show).\n", counts[store.ThreadClosed])
 	}
 	fmt.Fprintf(out, "Queued inbound messages: %d\n", queuedTotal)
 	fmt.Fprintf(out, "Unknown parts: %d\n", unknownTotal)

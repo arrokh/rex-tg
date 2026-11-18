@@ -27,6 +27,10 @@ import (
 
 // Core events. Workers and producers send them with emit; only the core loop
 // handles them.
+type topicTermination struct {
+	closeStarted atomic.Bool
+}
+
 type (
 	evUpdates struct {
 		ups  []telegram.Update
@@ -38,8 +42,12 @@ type (
 		gen  int
 		b    tail.Batch
 	}
-	evChanges struct{ ch []registry.Change }
-	evSender  struct{ e sender.Event }
+	evChanges     struct{ ch []registry.Change }
+	evSender      struct{ e sender.Event }
+	evTopicClosed struct {
+		threadID     int64
+		remoteClosed bool
+	}
 	// evPrepared is the result of the readiness and safety checks for the
 	// oldest queued message of a topic.
 	evPrepared struct {
@@ -247,6 +255,7 @@ type daemon struct {
 	mediaSlots           chan struct{}           // bounds concurrent downloads and transcriptions
 	alertBusy            map[int64]bool
 	opening              map[int64]bool      // panes whose topic is being created
+	terminatingTopics    sync.Map            // Telegram topics whose agent has stopped, shared with workers
 	newFlows             map[string]*newFlow // /new requests, by the token that their buttons carry
 	newSeq               int64               // numbers the /new requests
 	lastThread           int64
@@ -372,6 +381,7 @@ func (d *daemon) run(parent context.Context) error {
 			d.emit(evFatal{fmt.Errorf("daemon: sender: %w", err)})
 		}
 	})
+	d.closeRestoredOfflineTopics()
 	d.spawn(func() { d.forwardSenderEvents(ctx) })
 	d.spawn(func() { d.registryWorker(ctx) })
 	d.spawn(func() { d.rexEventLoop(ctx) })
@@ -480,6 +490,8 @@ func (d *daemon) handle(ev any) {
 		}
 	case evOpenDone:
 		delete(d.opening, e.paneID)
+	case evTopicClosed:
+		d.finishStoppedTopic(e.threadID, e.remoteClosed)
 	case evNewSent:
 		if f, ok := d.newFlows[e.token]; ok && f.msg == 0 {
 			f.msg = e.msg
@@ -531,6 +543,7 @@ func (d *daemon) tick() {
 		d.perform(th, tr.Tick(now))
 		d.saveSnapshot(tid, tr)
 		d.streamDraft(th, tr, now)
+		d.maybeCloseStoppedTopic(tid)
 	}
 	for _, g := range d.joiner.Due(now) {
 		d.joined(g)
@@ -597,6 +610,7 @@ func (d *daemon) forwardSenderEvents(ctx context.Context) {
 
 // closeThread closes a topic in the store and stops everything that serves it.
 func (d *daemon) closeThread(threadID int64) {
+	d.terminatingTopics.Delete(threadID)
 	th, err := d.st.Thread(d.ctx, threadID)
 	if err != nil {
 		return

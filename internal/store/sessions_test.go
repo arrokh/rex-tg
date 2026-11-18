@@ -237,6 +237,33 @@ func TestTakeOver(t *testing.T) {
 	noErr(t, s.CheckInvariants(ctx))
 }
 
+func TestSetThreadStatusIfDoesNotReopenClosedTopic(t *testing.T) {
+	s := newStore(t)
+	th, _ := topic(t, s, 11)
+	changed, err := s.SetThreadStatusIf(ctx, th.ID, ThreadLive, ThreadOffline)
+	noErr(t, err)
+	if !changed {
+		t.Fatal("live topic did not go offline")
+	}
+	changed, err = s.SetThreadStatusIf(ctx, th.ID, ThreadOffline, ThreadLive)
+	noErr(t, err)
+	if !changed {
+		t.Fatal("offline topic did not resume")
+	}
+	noErr(t, s.SetThreadStatus(ctx, th.ID, ThreadClosed))
+	closed := must(s.Thread(ctx, th.ID))
+	for _, transition := range [][2]string{{ThreadOffline, ThreadLive}, {ThreadLive, ThreadOffline}} {
+		changed, err := s.SetThreadStatusIf(ctx, th.ID, transition[0], transition[1])
+		noErr(t, err)
+		if changed {
+			t.Fatalf("closed topic transitioned %q -> %q", transition[0], transition[1])
+		}
+	}
+	if got := must(s.Thread(ctx, th.ID)); got.Status != ThreadClosed || !got.ClosedAt.Equal(closed.ClosedAt) {
+		t.Fatalf("closed topic changed: %+v", got)
+	}
+}
+
 func TestCheckInvariantsDetectsBreakage(t *testing.T) {
 	s := newStore(t)
 	th, a := topic(t, s, 1)

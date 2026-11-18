@@ -15,6 +15,12 @@ func macHoldTopic(t *testing.T, id string) (*env, *piLog, int64) {
 	return piTopicCfg(t, id, func(e *env) { e.cfg.Display.MacNotice = true })
 }
 
+// macHoldTopicSerial keeps the restart/paste window free from concurrent race-test load.
+func macHoldTopicSerial(t *testing.T, id string) (*env, *piLog, int64) {
+	t.Helper()
+	return piTopicCfgSerial(t, id, func(e *env) { e.cfg.Display.MacNotice = true })
+}
+
 func TestMacTurnsShowOneNoticeUntilTelegramWrites(t *testing.T) {
 	e, p, thread := macHoldTopic(t, "pi-mac-hold")
 	before := len(e.botMessages(thread))
@@ -116,7 +122,7 @@ func waitHeldTurnSaved(e *env, notice int64) {
 // the hold then removes its "📄 Last answer" button, though the new daemon
 // never edited the notice.
 func TestMacNoticeLosesItsButtonAfterARestart(t *testing.T) {
-	e, p, thread := macHoldTopic(t, "pi-mac-restart")
+	e, p, thread := macHoldTopicSerial(t, "pi-mac-restart")
 	p.User("fix the login page")
 	n := e.waitText(thread, "In use on the Mac")
 	p.Final("fixed the login page")

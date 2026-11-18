@@ -196,7 +196,7 @@ func (c *controlPanel) State(ctx context.Context) (miniapp.ControlState, error) 
 			a.State = "waiting for session"
 		}
 		a.Name = format.Redact(topicName(v.Pane.Label, v.Runtime, cwd, title))
-		if th := v.Thread; th != nil && th.Status != store.ThreadClosed {
+		if th := v.Thread; th != nil && th.Status != store.ThreadClosed && !d.topicTerminating(th.ID) {
 			_, custom, _ := d.st.Get(ctx, tabUserKey(th.ID))
 			status := "live"
 			if th.Status == store.ThreadOffline {
@@ -237,6 +237,9 @@ func (c *controlPanel) topics(ctx context.Context, mac map[int64]bool, labels, t
 	}
 	var list []row
 	for _, th := range ths {
+		if d.topicTerminating(th.ID) {
+			continue
+		}
 		_, custom, _ := d.st.Get(ctx, tabUserKey(th.ID))
 		status := "live"
 		if th.Status == store.ThreadOffline {

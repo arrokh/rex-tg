@@ -193,11 +193,54 @@ func (e *stopEnv) waitBot(sub string) *tgtest.Message {
 	return m
 }
 
-func (e *stopEnv) waitName(red bool) {
+func (e *stopEnv) waitClosed(thread int64) {
 	e.t.Helper()
-	eventually(e.t, 20*time.Second, fmt.Sprintf("topic name with red mark = %v (now %q)", red, e.topicName()), func() bool {
-		return strings.HasPrefix(e.topicName(), "🔴 ") == red && e.topicName() != ""
+	eventually(e.t, 20*time.Second, fmt.Sprintf("Telegram topic %d to close", thread), func() bool {
+		for _, tp := range e.tg.Topics(chatID) {
+			if tp.ThreadID == thread {
+				return tp.Closed
+			}
+		}
+		return false
 	})
+}
+
+func (e *stopEnv) openAgentAgain(oldThread int64) int64 {
+	e.t.Helper()
+	before := len(e.tg.Messages(chatID))
+	e.tg.PushMessage(chatID, 0, ownerID, "/agents")
+	var openBtn string
+	var listID int64
+	eventually(e.t, 20*time.Second, "the resumed agent's Open button", func() bool {
+		for _, m := range e.tg.Messages(chatID)[before:] {
+			if !m.FromBot || m.Markup == nil {
+				continue
+			}
+			for _, row := range m.Markup.InlineKeyboard {
+				for _, b := range row {
+					if strings.HasPrefix(b.CallbackData, "o:") {
+						openBtn, listID = b.CallbackData, m.ID
+						return true
+					}
+				}
+			}
+		}
+		return false
+	})
+	e.tg.PushCallback(chatID, 0, ownerID, listID, openBtn)
+	eventually(e.t, 20*time.Second, "a replacement topic", func() bool {
+		for _, tp := range e.tg.Topics(chatID) {
+			if tp.ThreadID != oldThread && !tp.Closed && !tp.Deleted {
+				e.thread = tp.ThreadID
+				return true
+			}
+		}
+		return false
+	})
+	eventually(e.t, 20*time.Second, "the replacement topic's intro", func() bool {
+		return botMessageContaining(e.tg, chatID, e.thread, "Linked:") != nil
+	})
+	return e.thread
 }
 
 func (e *stopEnv) touch(path string) {
@@ -208,9 +251,13 @@ func (e *stopEnv) touch(path string) {
 }
 
 func (e *stopEnv) countBot(sub string) int {
+	return e.countBotIn(e.thread, sub)
+}
+
+func (e *stopEnv) countBotIn(thread int64, sub string) int {
 	n := 0
 	for _, m := range e.tg.Messages(chatID) {
-		if m.FromBot && !m.Deleted && m.ThreadID == e.thread && strings.Contains(m.Text, sub) {
+		if m.FromBot && !m.Deleted && m.ThreadID == thread && strings.Contains(m.Text, sub) {
 			n++
 		}
 	}
@@ -237,12 +284,12 @@ func TestStopAgentExitedMidTurn(t *testing.T) {
 		return false
 	})
 
+	oldThread := e.thread
 	e.touch(e.exitFile)
 	e.waitBot("stopped: it exited, and the pane is still open.")
 	if n := e.countBot("🔴 pi stopped: it exited, and the pane is still open."); n != 1 {
 		t.Errorf("%d exit notices, want 1", n)
 	}
-	e.waitName(true)
 	eventually(t, 20*time.Second, "the progress message to become a Stopped summary", func() bool {
 		for _, m := range e.tg.Messages(chatID) {
 			if m.ID == progress.ID {
@@ -251,6 +298,7 @@ func TestStopAgentExitedMidTurn(t *testing.T) {
 		}
 		return false
 	})
+	e.waitClosed(oldThread)
 }
 
 // The Rex pane is closed.
@@ -272,8 +320,9 @@ func TestStopPaneClosed(t *testing.T) {
 		t.Fatalf("rex block close: %v\n%s", err, out)
 	}
 
+	oldThread := e.thread
 	e.waitBot("🔴 pi stopped: its Rex pane was closed.")
-	e.waitName(true)
+	e.waitClosed(oldThread)
 	if n := e.countBot("stopped:"); n != 1 {
 		t.Errorf("%d stop notices, want 1", n)
 	}
@@ -284,18 +333,21 @@ func TestStopThenRunningAgain(t *testing.T) {
 	t.Parallel()
 	e := newStopEnv(t, 2*time.Second)
 
+	oldThread := e.thread
 	e.touch(e.exitFile)
 	e.waitBot("stopped: it exited, and the pane is still open.")
-	e.waitName(true)
+	e.waitClosed(oldThread)
 
 	e.touch(e.goFile)
-	e.waitBot("🟢 pi is running again.")
-	e.waitName(false)
-	time.Sleep(2 * time.Second)
-	if n := e.countBot("is running again"); n != 1 {
-		t.Errorf("%d running-again notices, want 1", n)
+	newThread := e.openAgentAgain(oldThread)
+	if newThread == oldThread {
+		t.Fatalf("resumed agent reused closed topic %d", oldThread)
 	}
-	if n := e.countBot("stopped:"); n != 1 {
+	e.waitBot("ECHO: earlier turn")
+	if n := e.countBotIn(oldThread, "stopped:"); n != 1 {
 		t.Errorf("%d stop notices, want 1", n)
+	}
+	if n := e.countBotIn(oldThread, "is running again"); n != 0 {
+		t.Errorf("%d running-again notices in the closed topic, want none", n)
 	}
 }

@@ -148,10 +148,10 @@ rex-tg adds a keyboard under the message box: 🎛 Panel, 🖥 Screen, 📂 File
 - An agent marked `(waiting for session)` has no known session file yet. rex-tg learns it at the agent's next prompt or turn end.
 - A topic is named after the name you gave its Rex tab (see below), else its Rex pane when you named the pane, else the agent's session name. The name follows changes of all three.
 - `/rename <name>` in a topic renames three things: the topic, the agent's Rex pane (`rex block rename`), and its Rex tab. A tab that also holds another agent's pane keeps its name. The tab of an agent that `/new` started follows the topic's name, with ` #2` when another tab of that session has the name. The reply says what was renamed, and what was not and why. `/rename` always sends the name to Telegram, even when rex-tg thinks the topic has it, and the reply says what Telegram answered (renamed, already had that name, refused, or no answer). So sending `/rename` again fixes a topic whose name did not change. In this private chat, Telegram keeps a new topic name but sends the Telegram apps no notice of it (a Telegram bug, [tdlib/telegram-bot-api#915](https://github.com/tdlib/telegram-bot-api/issues/915)). So an app that already shows the topic may keep the old name until it loads its topics again, and Telegram for Android keeps it until its local data is cleared. The reply says so; no bot call fixes it. The name sticks; `/rename auto` names the topic after the agent's session again (so a topic cannot be named "auto"): the pane gets Rex's default name `shell` back, and the tab takes the topic's new name. Both forms replace a pane or tab name that you set yourself in Rex. `//rename` sends `/rename` to the agent, such as Claude Code's own command. An agent cannot rename its topic: asked to, it may rename its Rex session instead, and rex-tg names the session for `/new` back to `rex-tg`.
-- A name starts with a letter or digit, because Telegram draws a topic's icon from its first character. Stopped topics (🔴) get the same cleanup. pi's `[folder][kind]` tags before a session name go: the folder tag is dropped, and other tags move to the end. Markdown marks (`**`, `` ` ``) and leading symbols go too.
+- A name starts with a letter or digit, because Telegram draws a topic's icon from its first character. Legacy stopped-topic names (🔴) get the same cleanup. pi's `[folder][kind]` tags before a session name go: the folder tag is dropped, and other tags move to the end. Markdown marks (`**`, `` ` ``) and leading symbols go too.
 - A new session in the same pane, such as after the agent's `/clear`, takes over the topic. The bot posts a divider, such as `── claude · new session (clear) ──`.
-- After a Rex restart, the topic follows the session when the agent resumes in its pane.
-- When an agent exits or its pane closes, the topic shows `🔴 agent stopped`, a running turn ends, and the topic's name gets a 🔴. A tab in the `/new` session gets the 🔴 too, until the agent runs again. Messages you send there are refused, with a reason.
+- After a Rex restart, the topic follows the session when the agent resumes in its pane, if the topic is still open.
+- When an agent exits or its pane closes, rex-tg posts `🔴 agent stopped`, finishes any running turn and in-flight paste, then tries to close the Telegram topic after queued answers and notices. The topic and its history stay in Telegram. rex-tg detaches the local link; it does not stop or close the Rex pane. If the session resumes, `/agents` lists it without a topic. Open it there to create a new topic with recent answers backfilled. A Telegram close error is logged; rex-tg still detaches the ended session. Failed or interrupted closes are retried on the next daemon start.
 - When you open a topic, the bot posts an intro card (session, pane, folder, mode) and the last 3 final answers (`backfill`).
 
 ### `/new`
@@ -278,7 +278,7 @@ rex-tg adds a keyboard under the message box: 🎛 Panel, 🖥 Screen, 📂 File
 - The panel has three tabs, `Agents`, `Topics`, and `New agent`. It remembers the last one on the phone.
 - `Agents` lists the agents in Rex panes, the ones that wait for you first, like `/agents`. Each agent is one short row: its state, its name, and how long it has been in that state. Tap a row to see its details and actions; `Expand all` opens every row. The chips at the top count the agents by state (`1 waiting · 2 working · 2 idle`); tap them to show only those. The search box finds an agent by name, folder, agent, session title, or Rex session. You can group the list by state, folder, or Rex session. The list is read again every 5 seconds while the panel is open; open rows stay open.
 - The details of an agent: the agent and its folder, the session's title, where it runs in Rex (`Rex: session › tab › pane`), `💻 on the Mac`, and `topic offline`. Its actions:
-  - `↗ Topic` goes to its topic, and the panel closes: Telegram would otherwise open the topic behind it. An agent without a topic has `Open topic` instead, which makes one, like a tap in `/agents`. A row with a topic also has a `↗` shortcut.
+  - `↗ Open / reconnect` asks rex-tg to validate the topic before opening it. If Telegram no longer has it, rex-tg creates a replacement. An agent without a topic has `＋ Connect to Telegram`; it makes a new topic for that existing session. Both actions close the panel after opening the topic. A row also has a shortcut with the same validation.
   - `🖥 Screen`, `📂 Files`, and `📝 Changes` open the topic's live screen, its files, and its changes in the Mini App, as `/screen`, `/files`, and `/changes` do. `‹ Panel` or Telegram's back button goes back to the panel. They need a topic; Files and Changes also need `[miniapp] files` and `[miniapp] changes`.
   - `✏️ Rename` renames the topic, the Rex pane, and its tab, like `/rename`. `Auto name` names them after the session again. An agent without a topic gets its pane and tab renamed.
   - `🔌 Unlink` stops mirroring the session, like `/unlink`. The topic stays as history. The panel asks first.
@@ -505,7 +505,7 @@ When voice is off, the bot replies `Voice notes need whisper.cpp; see the README
 
 ## Logs
 
-- `rex-tg status` reads only the database.
+- `rex-tg status` reads only the database. It counts live, offline, and closed topics, but hides closed-topic details by default. Use `rex-tg status --all` to show them.
 - The daemon log `~/.local/state/rex-tg/logs/rex-tg.log` has one JSON object per line. It rotates at 10 MB and keeps 3 old copies.
 - launchd writes `launchd.out.log` and `launchd.err.log` to the same folder.
 - Watch the log: `tail -f ~/.local/state/rex-tg/logs/rex-tg.log`.
@@ -534,10 +534,10 @@ To delete the token: `security delete-generic-password -s rex-tg -a bot-token`. 
 | --- | --- |
 | Threaded Mode is off | In @BotFather, choose your bot, then turn on Bot Settings > Threaded Mode. Check with `rex-tg doctor`. |
 | Codex does not trust the hooks | Start Codex once, and trust the new rex-tg entries. |
-| Rex is not running | All topics show as offline. rex-tg retries every 10 seconds. It never starts Rex. Start Rex Beta. If `doctor` cannot find the Rex CLI, set `[rex] cli`. |
+| Rex is not running | rex-tg cannot read or type into panes. It retries every 10 seconds and never starts Rex. Start Rex Beta. If `doctor` cannot find the Rex CLI, set `[rex] cli`. |
 | No owner is paired | Run `rex-tg pair`, then send `/start <code>` to the bot. |
 | "waiting for session" | rex-tg learns the session file at the agent's next prompt or turn end. |
-| "message thread not found" | You deleted the topic in Telegram, so rex-tg closed it. Open the agent again with `/agents`. |
+| "message thread not found" | You deleted the topic in Telegram, so rex-tg detached it without stopping the agent. Open the agent again with `/agents` to make a replacement topic. |
 | "This topic is not linked" | The topic is closed, or rex-tg did not make it. Open the agent again with `/agents`. |
 | "Checking whether it arrived" | Telegram did not confirm a reply. rex-tg checks the chat's message numbers. A reply that never arrived is sent again by itself. |
 | "may not have arrived" | The reply may be in the chat already, so rex-tg does not send it again by itself. Tap `🔁 Send again`, or send `/resend`, if it is missing. |

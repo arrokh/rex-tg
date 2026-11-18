@@ -181,7 +181,7 @@ Commands:
   daemon [--config F] [--log-stderr]
                           run the daemon (launchd runs this)
   hook <pi|claude|codex>  called by agent hooks; prints nothing
-  status                  show topics, queued messages, and open alerts
+  status [--all]          count topics; --all shows closed-topic details
   doctor                  check the setup
   version                 print the version
   help                    show this text

@@ -553,9 +553,10 @@ func TestScreenSendsPhoto(t *testing.T) {
 // live while the connection to Telegram dropped): rex-tg checks the message
 // numbers, finds that it did not arrive, and sends it again by itself. It
 // arrives once, with no notice, and the short check note is deleted. Your
-// message in between counts as known: the daemon records every update.
+// message in between counts as known: the daemon records every update. Run
+// serially so the transient unknown state is observed before its check delay.
 func TestUnknownReplyIsCheckedAndSentOnce(t *testing.T) {
-	e := newEnv(t)
+	e := newEnvSerial(t)
 	e.seedOwner()
 	p := e.newPi("pi-resend")
 	p.User("start")
@@ -1287,41 +1288,43 @@ func TestReplyKeyboard(t *testing.T) {
 	}
 }
 
-func TestAgentLeavesAndReturns(t *testing.T) {
-	e, p, thread := piTopic(t, "pi-leave")
-	topicName := func() string {
+func TestAgentLeavesAndReturnsInNewTopic(t *testing.T) {
+	e, p, oldThread := piTopic(t, "pi-leave")
+	e.setProcess("zsh", "-zsh", 777)
+	e.waitText(oldThread, "pi stopped: it exited, and the pane is still open.")
+	e.waitFor("the stopped topic to close in Telegram and rex-tg", func() bool {
+		th, ok, _ := e.peek().ThreadByTopic(context.Background(), chatID, oldThread)
+		if !ok || th.Status != store.ThreadClosed {
+			return false
+		}
 		for _, tp := range e.tg.Topics(chatID) {
-			if tp.ThreadID == thread {
-				return tp.Name
+			if tp.ThreadID == oldThread {
+				return tp.Closed
 			}
 		}
-		return ""
-	}
-	e.setProcess("zsh", "-zsh", 777)
-	e.waitText(thread, "pi stopped: it exited, and the pane is still open.")
-	e.waitFor("the 🔴 in the topic name", func() bool { return topicName() == "🔴 pane one" })
-	id := e.say(thread, "anyone there?")
-	e.waitFor("a refusal", func() bool { m, _ := e.message(id); return m.Reaction == "👎" })
+		return false
+	})
 	if len(e.pastes()) != 0 {
 		t.Errorf("typed into a shell: %v", e.pastes())
 	}
-	// pi starts again with a new process and the same session (resume).
+
+	// The same agent session can resume, but its ended topic remains closed.
+	// Connect it from /agents to make a new topic.
 	e.setProcess("node", "pi", 4343)
 	e.hookPi(p, "resume")
-	e.waitText(thread, "pi is running again")
-	e.waitFor("the topic name without the 🔴", func() bool { return topicName() == "pane one" })
-	e.waitText(thread, "pi · resumed")
-	if got := len(e.tg.Topics(chatID)); got != 1 {
-		t.Errorf("%d topics", got)
+	newThread := e.openTopic()
+	if newThread == oldThread {
+		t.Fatalf("resumed session reused closed topic %d", oldThread)
 	}
+	e.waitText(newThread, "ready") // backfill from the existing session
 	e.waitFor("the pane to be idle", func() bool {
 		pane, _, _ := e.peek().PaneByBlock(context.Background(), "local", rexBlock)
 		return pane.State == "idle" && pane.PID == 4343
 	})
 	p.User("welcome back")
 	p.Final("resumed answer")
-	e.waitText(thread, "resumed answer")
-	if n := e.countText(thread, "stopped:"); n != 1 {
+	e.waitText(newThread, "resumed answer")
+	if n := e.countText(oldThread, "stopped:"); n != 1 {
 		t.Errorf("the stop was posted %d times", n)
 	}
 }
@@ -1339,6 +1342,9 @@ func TestDeletedTopicClosesThread(t *testing.T) {
 	// nothing is typed either.
 	e.say(thread, "hello")
 	e.never("typing into a pane for a closed topic", 800*time.Millisecond, func() bool { return len(e.pastes()) > 0 })
+	if got := len(e.tg.Calls("closeForumTopic")); got != 0 {
+		t.Errorf("Telegram-deleted topic got %d close calls", got)
+	}
 }
 
 func TestConflictStopsTheDaemon(t *testing.T) {
@@ -1894,18 +1900,152 @@ func TestForceTypesAtAPromptAndMacAnswerClosesAlert(t *testing.T) {
 	}
 }
 
-func TestPaneClosedTakesTopicOffline(t *testing.T) {
+func TestPaneClosedClosesTopicAndKeepsHistory(t *testing.T) {
 	e, _, thread := piTopic(t, "pi-closed")
 	e.fake.On([]string{"block", "ls"}, `{"blocks":[]}`, 0)
 	e.waitText(thread, "pi stopped: its Rex pane was closed.")
-	id := e.say(thread, "are you there")
-	e.waitFor("a refusal", func() bool { m, _ := e.message(id); return m.Reaction == "👎" })
-	e.waitText(thread, "Not sent")
+	e.waitFor("the Telegram topic and rex-tg link to close", func() bool {
+		th, ok, _ := e.peek().ThreadByTopic(context.Background(), chatID, thread)
+		if !ok || th.Status != store.ThreadClosed {
+			return false
+		}
+		for _, tp := range e.tg.Topics(chatID) {
+			if tp.ThreadID == thread {
+				return tp.Closed
+			}
+		}
+		return false
+	})
+	if !e.hasText(thread, "ready") {
+		t.Fatal("closing the topic removed its Telegram history")
+	}
 	if len(e.pastes()) != 0 {
 		t.Errorf("typed into a closed pane: %v", e.pastes())
 	}
-	e.say(0, "/topics")
-	e.waitText(0, "offline")
+}
+
+func TestStartupClosesOfflineTopicAfterRestart(t *testing.T) {
+	e := newEnvSerial(t)
+	e.seedOwner()
+	p := e.newPi("pi-restart-close")
+	p.User("start")
+	p.Final("ready")
+	e.start()
+	e.hookPi(p, "startup")
+	thread := e.openTopic()
+	e.waitText(thread, "ready")
+	e.stop()
+
+	e.setProcess("node", "pi", 4343)
+	e.hookPi(p, "resume") // resume while the old close is pending
+	var unknownID int64
+	e.withStore(func(st *store.Store) {
+		th, ok, err := st.ThreadByTopic(context.Background(), chatID, thread)
+		if err != nil || !ok {
+			t.Fatalf("topic before restart: %+v, ok %v, err %v", th, ok, err)
+		}
+		if err := st.SetThreadStatus(context.Background(), th.ID, store.ThreadOffline); err != nil {
+			t.Fatal(err)
+		}
+		unknownID, _, err = st.Enqueue(context.Background(), store.OutboxItem{
+			ThreadID: th.ID, Key: "uncertain-before-close", Kind: "final",
+			Parts: []store.PartContent{{Content: "delivery uncertain", Format: store.FormatPlain}},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := st.MarkPartUnknown(context.Background(), unknownID, 0); err != nil {
+			t.Fatal(err)
+		}
+	})
+	e.start()
+	e.waitFor("the interrupted Telegram close and local detach", func() bool {
+		th, ok, _ := e.peek().ThreadByTopic(context.Background(), chatID, thread)
+		if !ok || th.Status != store.ThreadClosed {
+			return false
+		}
+		for _, tp := range e.tg.Topics(chatID) {
+			if tp.ThreadID == thread {
+				return tp.Closed
+			}
+		}
+		return false
+	})
+	if !e.hasText(thread, "ready") {
+		t.Error("restart cleanup removed Telegram history")
+	}
+	closedThread, ok, err := e.peek().ThreadByTopic(context.Background(), chatID, thread)
+	if err != nil || !ok {
+		t.Fatalf("closed thread after restart: %+v, ok %v, err %v", closedThread, ok, err)
+	}
+	if _, exists, err := e.peek().Get(context.Background(), fmt.Sprintf("topic_close_pending:%d", closedThread.ID)); err != nil || exists {
+		t.Errorf("successful restart cleanup left a pending marker: exists %v, err %v", exists, err)
+	}
+	unknown, err := e.peek().UnknownParts(context.Background())
+	if err != nil || len(unknown) != 1 || unknown[0].OutboxID != unknownID {
+		t.Errorf("restart cleanup lost its uncertain-delivery record: %+v, err %v", unknown, err)
+	}
+	newThread := e.openTopic()
+	if newThread == thread {
+		t.Fatalf("resumed agent reused closed topic %d", thread)
+	}
+	e.waitText(newThread, "ready")
+}
+
+func TestCloseTopicFailureStillDetachesLocally(t *testing.T) {
+	e := newEnvSerial(t)
+	e.seedOwner()
+	p := e.newPi("pi-close-fails")
+	p.User("start")
+	p.Final("ready")
+	e.start()
+	e.hookPi(p, "startup")
+	thread := e.openTopic()
+	e.waitText(thread, "ready")
+	e.tg.FailNext("closeForumTopic", 1, 502, "bad gateway", 0)
+	e.fake.On([]string{"block", "ls"}, `{"blocks":[]}`, 0)
+	e.waitText(thread, "pi stopped: its Rex pane was closed.")
+	e.waitFor("the local topic link to close", func() bool {
+		th, ok, _ := e.peek().ThreadByTopic(context.Background(), chatID, thread)
+		return ok && th.Status == store.ThreadClosed
+	})
+	if got := len(e.tg.Calls("closeForumTopic")); got != 1 {
+		t.Errorf("closeForumTopic calls = %d, want one attempt", got)
+	}
+	for _, tp := range e.tg.Topics(chatID) {
+		if tp.ThreadID == thread && tp.Closed {
+			t.Error("fake Telegram topic closed despite the failed API call")
+		}
+	}
+	closedThread, ok, err := e.peek().ThreadByTopic(context.Background(), chatID, thread)
+	if err != nil || !ok {
+		t.Fatalf("closed thread: %+v, ok %v, err %v", closedThread, ok, err)
+	}
+	if _, exists, err := e.peek().Get(context.Background(), fmt.Sprintf("topic_close_pending:%d", closedThread.ID)); err != nil || !exists {
+		t.Fatalf("failed close should remain pending: exists %v, err %v", exists, err)
+	}
+	e.stop()
+	e.withStore(func(st *store.Store) {
+		// Simulate a registry resume that persisted live before its core event.
+		if err := st.SetThreadStatus(context.Background(), closedThread.ID, store.ThreadLive); err != nil {
+			t.Fatal(err)
+		}
+	})
+	e.start()
+	e.waitFor("restart retry to close Telegram and clear its marker", func() bool {
+		for _, tp := range e.tg.Topics(chatID) {
+			if tp.ThreadID != thread || !tp.Closed {
+				continue
+			}
+			if _, exists, err := e.peek().Get(context.Background(), fmt.Sprintf("topic_close_pending:%d", closedThread.ID)); err == nil && !exists {
+				return true
+			}
+		}
+		return false
+	})
+	if got := len(e.tg.Calls("closeForumTopic")); got != 2 {
+		t.Errorf("closeForumTopic calls = %d after retry, want two", got)
+	}
 }
 
 func TestPairingExpiryUsesTheInjectedClock(t *testing.T) {
@@ -2162,7 +2302,16 @@ func TestUnlinkRefusesWaitingMessages(t *testing.T) {
 // piTopicCfg is piTopic with a change to the config before the daemon starts.
 func piTopicCfg(t *testing.T, id string, tweak func(*env)) (*env, *piLog, int64) {
 	t.Helper()
-	e := newEnv(t)
+	return piTopicCfgInEnv(t, newEnv(t), id, tweak)
+}
+
+func piTopicCfgSerial(t *testing.T, id string, tweak func(*env)) (*env, *piLog, int64) {
+	t.Helper()
+	return piTopicCfgInEnv(t, newEnvSerial(t), id, tweak)
+}
+
+func piTopicCfgInEnv(t *testing.T, e *env, id string, tweak func(*env)) (*env, *piLog, int64) {
+	t.Helper()
 	tweak(e)
 	e.seedOwner()
 	p := e.newPi(id)
