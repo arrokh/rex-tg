@@ -6,8 +6,8 @@ class RexTg < Formula
   # tag with git (the user's own GitHub login) instead of downloading an
   # archive.
   url "https://github.com/arrokh/rex-tg.git",
-      tag:      "v0.6.0",
-      revision: "635f20d917119d9d3c848bd84f5ffb43e158f0f1"
+      tag:      "v0.6.1",
+      revision: "88c3bfc548b0126e916fadcd61e647bc593b73ef"
   license "MIT"
   head "https://github.com/arrokh/rex-tg.git", branch: "main"
 
