@@ -144,7 +144,7 @@ func TestInstallUninstall(t *testing.T) {
 		t.Fatalf("exit %d\n%s\n%s", code, te.stdout, te.stderr)
 	}
 	out := te.stdout.String()
-	for _, w := range []string{"claude", "codex", "pi", "launchd", "trust the new hook entries"} {
+	for _, w := range []string{"claude", "codex", "pi", "Claude skill", "Codex/Pi skill", "launchd", "trust the new hook entries"} {
 		if !strings.Contains(out, w) {
 			t.Errorf("missing %q in\n%s", w, out)
 		}
@@ -161,6 +161,16 @@ func TestInstallUninstall(t *testing.T) {
 			t.Errorf("%s does not mention %s", f, te.exe)
 		}
 	}
+	for _, f := range []string{".claude/skills/rex-tg/SKILL.md", ".agents/skills/rex-tg/SKILL.md"} {
+		b, err := os.ReadFile(filepath.Join(te.home, f))
+		if err != nil {
+			t.Errorf("%s: %v", f, err)
+			continue
+		}
+		if !strings.Contains(string(b), "name: rex-tg") || !strings.Contains(string(b), "rex-tg:managed-skill") {
+			t.Errorf("%s is not the managed rex-tg skill", f)
+		}
+	}
 	joined := strings.Join(te.runner.all(), "\n")
 	if !strings.Contains(joined, "launchctl bootstrap gui/501") {
 		t.Errorf("launchctl calls:\n%s", joined)
@@ -170,7 +180,10 @@ func TestInstallUninstall(t *testing.T) {
 	if code := te.run("uninstall"); code != 0 {
 		t.Fatalf("uninstall exit %d\n%s\n%s", code, te.stdout, te.stderr)
 	}
-	for _, f := range []string{".pi/agent/extensions/rex-tg.ts", "Library/LaunchAgents/local.rex-tg.plist"} {
+	for _, f := range []string{
+		".pi/agent/extensions/rex-tg.ts", ".claude/skills/rex-tg/SKILL.md", ".agents/skills/rex-tg/SKILL.md",
+		"Library/LaunchAgents/local.rex-tg.plist",
+	} {
 		if _, err := os.Stat(filepath.Join(te.home, f)); !errors.Is(err, os.ErrNotExist) {
 			t.Errorf("%s still exists", f)
 		}
@@ -192,6 +205,12 @@ func TestInstallOnlyAndNoLoad(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(te.home, ".pi/agent/extensions/rex-tg.ts")); err != nil {
 		t.Error(err)
 	}
+	if _, err := os.Stat(filepath.Join(te.home, ".agents/skills/rex-tg/SKILL.md")); err != nil {
+		t.Error("shared Codex/Pi skill not installed:", err)
+	}
+	if _, err := os.Stat(filepath.Join(te.home, ".claude/skills/rex-tg/SKILL.md")); err == nil {
+		t.Error("Claude skill installed with --only pi")
+	}
 	if _, err := os.Stat(filepath.Join(te.home, "Library/LaunchAgents/local.rex-tg.plist")); err != nil {
 		t.Error("launchd agent not installed with --only")
 	}
@@ -200,16 +219,42 @@ func TestInstallOnlyAndNoLoad(t *testing.T) {
 			t.Errorf("--no-load ran %q", c)
 		}
 	}
-	if strings.Contains(te.stdout.String(), "Codex") {
-		t.Error("codex reminder with --only pi")
+	if strings.Contains(te.stdout.String(), "trust the new hook entries") {
+		t.Error("codex trust reminder with --only pi")
 	}
 	if code := te.run("install", "--only", "vim"); code != 2 {
 		t.Errorf("bad --only exit %d", code)
 	}
-	// --only on uninstall keeps launchd.
+	// --only on uninstall keeps launchd and removes the shared skill when no
+	// other Codex/Pi integration remains.
 	te.run("uninstall", "--only", "pi")
+	if _, err := os.Stat(filepath.Join(te.home, ".agents/skills/rex-tg/SKILL.md")); !errors.Is(err, os.ErrNotExist) {
+		t.Error("shared skill remains after its last consumer was uninstalled")
+	}
 	if _, err := os.Stat(filepath.Join(te.home, "Library/LaunchAgents/local.rex-tg.plist")); err != nil {
 		t.Error("uninstall --only removed launchd agent")
+	}
+}
+
+func TestUninstallOnlyKeepsSharedSkillForOtherRuntime(t *testing.T) {
+	te := newTestEnv(t)
+	for _, runtime := range []string{"pi", "codex"} {
+		if code := te.run("install", "--only", runtime, "--no-load"); code != 0 {
+			t.Fatalf("install --only %s: %s", runtime, te.stderr)
+		}
+	}
+	if code := te.run("uninstall", "--only", "pi"); code != 0 {
+		t.Fatalf("uninstall --only pi: %s", te.stdout)
+	}
+	shared := filepath.Join(te.home, ".agents/skills/rex-tg/SKILL.md")
+	if _, err := os.Stat(shared); err != nil {
+		t.Fatalf("shared skill removed while Codex remains: %v", err)
+	}
+	if code := te.run("uninstall", "--only", "codex"); code != 0 {
+		t.Fatalf("uninstall --only codex: %s", te.stdout)
+	}
+	if _, err := os.Stat(shared); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("shared skill remains after both integrations are removed: %v", err)
 	}
 }
 
@@ -241,8 +286,14 @@ func TestUninstallWouldShiftTrust(t *testing.T) {
 	if !strings.Contains(te.stdout.String(), "NOT removed") || !strings.Contains(te.stdout.String(), "--force") {
 		t.Errorf("output:\n%s", te.stdout)
 	}
+	if _, err := os.Stat(filepath.Join(te.home, ".agents/skills/rex-tg/SKILL.md")); err != nil {
+		t.Errorf("shared skill removed while Codex hooks remain: %v", err)
+	}
 	if code := te.run("uninstall", "--only", "codex", "--force"); code != 0 {
 		t.Fatalf("force exit %d\n%s", code, te.stdout)
+	}
+	if _, err := os.Stat(filepath.Join(te.home, ".agents/skills/rex-tg/SKILL.md")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("shared skill remains after Codex integration was removed: %v", err)
 	}
 }
 
@@ -415,7 +466,7 @@ func TestDoctor(t *testing.T) {
 		t.Fatalf("exit %d\n%s", code, te.stdout)
 	}
 	out := te.stdout.String()
-	for _, w := range []string{"✓ command menu has the", "✓ Rex CLI works", "✓ bot token", "Threaded Mode is on", "✓ owner is paired", "✓ Claude hooks installed", "✓ Codex hooks installed", "✓ pi extension is current", "✓ launchd agent local.rex-tg is loaded", "✓ database opens", "mode 0700", "! no daemon is running"} {
+	for _, w := range []string{"✓ command menu has the", "✓ Rex CLI works", "✓ bot token", "Threaded Mode is on", "✓ owner is paired", "✓ Claude hooks installed", "✓ Codex hooks installed", "✓ pi extension is current", "✓ Claude skill is current", "✓ Codex/Pi skill is current", "✓ launchd agent local.rex-tg is loaded", "✓ database opens", "mode 0700", "! no daemon is running"} {
 		if !strings.Contains(out, w) {
 			t.Errorf("missing %q in\n%s", w, out)
 		}

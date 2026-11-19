@@ -1,5 +1,4 @@
-// Package extensions embeds the source of the pi extension that reports
-// session and agent events to rex-tg.
+// Package extensions embeds rex-tg's agent-facing resources.
 package extensions
 
 import _ "embed"
@@ -10,3 +9,9 @@ import _ "embed"
 //
 //go:embed pi/rex-tg.ts
 var PiExtension []byte
+
+// RexTgSkill is the portable Agent Skills instructions installed for Claude
+// Code, Codex, and Pi.
+//
+//go:embed skills/rex-tg/SKILL.md
+var RexTgSkill []byte

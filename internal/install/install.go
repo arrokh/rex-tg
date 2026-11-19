@@ -1,5 +1,5 @@
-// Package install adds and removes rex-tg's integration points: hook entries in
-// Claude Code and Codex config files, the pi extension, and the launchd agent.
+// Package install adds and removes rex-tg's integration points: hooks in
+// Claude Code and Codex configs, agent skills, the pi extension, and launchd.
 //
 // Edits to shared files touch only rex-tg's own entries, keep the rest of the
 // file byte for byte, and are written atomically after a backup.
@@ -32,6 +32,8 @@ type Paths struct {
 	ClaudeSettings string
 	CodexHooks     string
 	PiExtension    string
+	ClaudeSkill    string
+	SharedSkill    string // shared by Codex and Pi through ~/.agents/skills
 	LaunchAgent    string
 	Label          string
 	LogDir         string
@@ -69,6 +71,8 @@ func DefaultPaths(home, binary string) Paths {
 		ClaudeSettings: filepath.Join(home, ".claude", "settings.json"),
 		CodexHooks:     filepath.Join(home, ".codex", "hooks.json"),
 		PiExtension:    filepath.Join(home, ".pi", "agent", "extensions", "rex-tg.ts"),
+		ClaudeSkill:    filepath.Join(home, ".claude", "skills", "rex-tg", "SKILL.md"),
+		SharedSkill:    filepath.Join(home, ".agents", "skills", "rex-tg", "SKILL.md"),
 		LaunchAgent:    filepath.Join(home, "Library", "LaunchAgents", "local.rex-tg.plist"),
 		Label:          "local.rex-tg",
 		LogDir:         filepath.Join(home, ".local", "state", "rex-tg", "logs"),

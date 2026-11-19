@@ -29,8 +29,8 @@ This guide is the contract between the packages of rex-tg. [design.md](design.md
 | `internal/store` | SQLite schema, migrations, and all queries | sqlite, `agents` |
 | `internal/tail` | Offset-based JSONL follower | fsnotify |
 | `internal/turn` | Turn tracker and progress message renderer (pure) | `agents` |
-| `internal/install` | Hook, extension, and launchd installers | gjson, sjson, `extensions` |
-| `extensions` | Embedded pi extension source (`extensions/pi/rex-tg.ts`) | — |
+| `internal/install` | Hook, skill, extension, and launchd installers | gjson, sjson, `extensions` |
+| `extensions` | Embedded pi extension and portable `rex-tg` skill sources | — |
 | `internal/config` | TOML config with defaults | toml |
 | `internal/registry` | Panes, sessions, state merge, take-over and resume rules (pure) | `agents` |
 | `internal/inbound` | Safety checks, waiting queue policy, echo matching | `agents` |
@@ -325,11 +325,13 @@ Behavior is design sections 4.4 and 8.1–8.5: the progress message appears afte
 ## internal/install and extensions
 
 ```go
-type Paths struct{ Home, Binary, ClaudeSettings, CodexHooks, PiExtension, LaunchAgent, Label, LogDir string }
+type Paths struct{ Home, Binary, ClaudeSettings, CodexHooks, PiExtension, ClaudeSkill, SharedSkill, LaunchAgent, Label, LogDir string }
 func DefaultPaths(home, binary string) Paths
 func InstallClaude(p Paths) (Change, error); func UninstallClaude(p Paths) (Change, error)
 func InstallCodex(p Paths) (Change, error);  func UninstallCodex(p Paths, force bool) (Change, error)
 func InstallPi(p Paths) (Change, error);     func UninstallPi(p Paths) (Change, error)
+func InstallClaudeSkill(p Paths) (Change, error); func UninstallClaudeSkill(p Paths) (Change, error)
+func InstallSharedSkill(p Paths) (Change, error); func UninstallSharedSkill(p Paths) (Change, error)
 func InstallLaunchd(p Paths, load bool) (Change, error); func UninstallLaunchd(p Paths, unload bool) (Change, error)
 func Inspect(p Paths) (Report, error)
 var ErrWouldShiftTrust error
@@ -340,6 +342,7 @@ type Change struct{ Path string; Changed bool; Backup, Note string }
 - Claude events: `SessionStart`, `UserPromptSubmit`, `Stop`, `PermissionRequest`, `Notification`, `SessionEnd`. Codex events: `SessionStart`, `UserPromptSubmit`, `Stop`, `PermissionRequest`, appended at the end of each list.
 - Edits use gjson/sjson; atomic write through a temporary file in the same folder and rename; re-read before writing and retry when the file changed; backups `<file>.rex-tg-bak-<time>`, keeping the 5 newest. A backup is published with an atomic hard link, so concurrent installers cannot overwrite a backup with the same name. File mode is preserved.
 - The pi extension source is `extensions/pi/rex-tg.ts`, embedded by package `extensions` (`extensions.PiExtension`), with the placeholder `__REX_TG_BIN__` replaced by the binary path.
+- The portable skill source is `extensions/skills/rex-tg/SKILL.md`, embedded as `extensions.RexTgSkill`. Install writes it to Claude Code's personal skills folder and to the shared Codex/Pi skills folder. It refuses to replace an unmarked file, backs up managed updates and removals, and uninstalls the shared copy only after both consumer integrations are gone.
 
 ## Hook spool format
 

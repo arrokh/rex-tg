@@ -23,11 +23,11 @@ Homebrew gets the tagged source with `git clone`. If repository access is restri
 
 `rex-tg install` writes the stable path `<prefix>/opt/rex-tg/bin/rex-tg`, not the versioned Cellar path. That path stays valid after an upgrade.
 
-Upgrade with `brew upgrade rex-tg` (add `--fetch-HEAD` for a HEAD install). The daemon restarts itself within about a minute, and the topics stay linked. Run `rex-tg install` again only when the release notes say the hooks changed. `rex-tg doctor` checks it.
+Upgrade with `brew upgrade rex-tg` (add `--fetch-HEAD` for a HEAD install). The daemon restarts itself within about a minute, and the topics stay linked. Run `rex-tg install` again when the release notes say agent integrations or skills changed. `rex-tg doctor` checks them.
 
 If you installed with `make install` before, move to the brew binary in two steps:
 
-1. Run `"$(brew --prefix)/bin/rex-tg" install`. The hooks, the pi extension, and launchd then name the brew binary, and the daemon restarts with it.
+1. Run `"$(brew --prefix)/bin/rex-tg" install`. The hooks, pi extension, and launchd then name the brew binary; the skills are installed alongside them.
 2. Replace the old copy with a link: `ln -sf "$(brew --prefix)/opt/rex-tg/bin/rex-tg" ~/.local/bin/rex-tg`. Do not just delete it: agents that run already read their hook settings when they started, and keep calling the old path until they restart.
 
 `rex-tg doctor` warns while a second copy is left.
@@ -47,20 +47,22 @@ To remove: run `rex-tg uninstall` first, then `brew uninstall rex-tg`.
 
 If the shell cannot find `rex-tg`, add `~/.local/bin` to your `PATH`. The hooks and the launchd job use the full path, so they do not need `PATH`.
 
-### Hooks and daemon (`rex-tg install`)
+### Agent integrations, skills, and daemon (`rex-tg install`)
 
 The command changes these files:
 
 - **Claude Code:** adds six hook entries to `~/.claude/settings.json`: `SessionStart`, `UserPromptSubmit`, `Stop`, `PermissionRequest`, `Notification`, and `SessionEnd`.
 - **Codex:** adds four hook entries to the end of each event list in `~/.codex/hooks.json`: `SessionStart`, `UserPromptSubmit`, `Stop`, and `PermissionRequest`.
 - **pi:** writes the extension `~/.pi/agent/extensions/rex-tg.ts`. It sends `session_start`, `session_shutdown`, `agent_start`, and `agent_end` to rex-tg.
+- **Claude Code:** installs the personal skill `~/.claude/skills/rex-tg/SKILL.md`.
+- **Codex and Pi:** install one shared skill at `~/.agents/skills/rex-tg/SKILL.md`.
 - **launchd:** writes `~/Library/LaunchAgents/local.rex-tg.plist` and starts the daemon. launchd starts it at login and restarts it if it stops.
 
-Before it changes `settings.json` or `hooks.json`, rex-tg saves a backup next to the file. It keeps the 5 newest backups. Running the command again changes nothing.
+Before it changes `settings.json` or `hooks.json`, rex-tg saves a backup next to the file. It keeps the 5 newest backups. Skill files are marked as rex-tg-owned; replacing one or removing it saves a backup too. If a skill file already exists at an install path and is not marked as rex-tg's, install leaves it alone and reports a conflict. Move that file before running install again.
 
-`--only pi`, `--only claude`, or `--only codex` changes one agent only. The launchd job is still installed.
+`--only claude` installs Claude Code's hooks and skill. `--only codex` or `--only pi` installs that agent's integration and the shared Codex/Pi skill. The shared skill stays installed while either Codex hooks or the Pi extension remains. The launchd job is still installed.
 
-After the install, start Codex once and trust the new hook entries. Two things are not tested yet (spike S3): the Codex trust prompt, and whether pi loads the extension with no other step.
+After the install, restart agent sessions so they discover the skill and integration. Start Codex once and trust the new hook entries.
 
 ### Pairing (`/start <code>`)
 
@@ -78,7 +80,7 @@ Doctor checks:
 - the Rex CLI, and `rex whoami`
 - the bot token, `getMe`, and Threaded Mode
 - the database, and whether an owner is paired
-- the Claude Code and Codex hooks, and the pi extension
+- the Claude Code and Codex hooks, the pi extension, and both skills
 - the launchd job, and the folder modes
 - whether a daemon is running
 - the Mini App, when `[miniapp] url` is set: safe settings (`listen` on `127.0.0.1` with `tailnet_only`), that `tailscale serve` sends the address to rex-tg with Funnel off, and that the page answers. It only reads Tailscale's setup.
@@ -513,9 +515,9 @@ When voice is off, the bot replies `Voice notes need whisper.cpp; see the README
 
 ## Uninstall
 
-`rex-tg uninstall` removes the Claude Code and Codex hook entries, the pi extension, and the launchd job. It keeps the database, the file backups, and the token.
+`rex-tg uninstall` removes the Claude Code and Codex hook entries, the pi extension, the agent skills, and the launchd job. It keeps the database, the file backups, and the token. The Claude skill is removed when its hooks are gone. The shared Codex/Pi skill stays while either integration remains.
 
-- `--only pi`, `--only claude`, or `--only codex` removes one agent's parts. The launchd job stays.
+- `--only pi`, `--only claude`, or `--only codex` removes that agent's parts. The shared skill stays if another Codex/Pi integration remains. The launchd job stays.
 - `--keep-launchd` keeps the launchd job.
 - `--force` removes Codex entries even when that moves the trust of other Codex hooks.
 

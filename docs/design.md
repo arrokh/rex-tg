@@ -861,7 +861,7 @@ Echo:
 - The daemon reads that path's file first thing when it starts, before it opens its store, so an upgrade that lands while it starts still counts as a change. It watches the path every 20 seconds, but only when launchd runs it: launchd puts the job's label in `XPC_SERVICE_NAME`. A daemon started by hand keeps running the old binary, because nothing would start it again. When the binary changed, and stayed the same for one more check (the copy is complete), the daemon waits until no message is being typed and no request to Telegram is under way. Then it stops cleanly with exit status 75.
 - launchd (`KeepAlive`, `SuccessfulExit` false) starts it again from the same path, now the new binary.
 - The links of topics and sessions, the transcript cursors, the turn snapshots, the queue, the outbox, the Mac hold, and the live board are in the database. The token is in the Keychain, and the proxy is in the config. So the new daemon goes on where the old one stopped, as after any restart. Telegram keeps the updates of the pause; the stored poll offset reads them.
-- `rex-tg install` runs again only when a release changes the hooks. `rex-tg doctor` reports hooks that point at another binary.
+- `rex-tg install` runs again when a release changes agent integrations or skills. `rex-tg doctor` reports hooks and installed files that are missing or out of date.
 
 ## 10. SQLite schema
 
@@ -1055,6 +1055,8 @@ Housekeeping:
 | pi extension | `~/.pi/agent/extensions/rex-tg.ts`, a few lines of TypeScript that call `rex-tg hook pi`. Its first line marks it as rex-tg's: install backs up a file of yours at that path first, and uninstall never removes a file without the mark. |
 | Claude Code hooks | entries in `~/.claude/settings.json` |
 | Codex hooks | entries at the end of each event's list in `~/.codex/hooks.json` |
+| Claude Code skill | `~/.claude/skills/rex-tg/SKILL.md` |
+| Codex/Pi skill | `~/.agents/skills/rex-tg/SKILL.md`, shared by both agents |
 
 Config example:
 
@@ -1117,7 +1119,7 @@ CLI commands:
 | `rex-tg hook <runtime>` | Called by agent hooks. Writes one spool file and prints nothing. |
 | `rex-tg login` | Store the bot token in the Keychain, then pair your Telegram account (section 11). |
 | `rex-tg pair` | Make a new pairing code (section 11). |
-| `rex-tg install` / `uninstall` | Add or remove the launchd agent, the hooks, and the pi extension. `--only pi`, `--only claude`, or `--only codex` limits the change to one agent's hooks, plus the launchd agent on install. Back up each file before a change. Running either one twice changes nothing. |
+| `rex-tg install` / `uninstall` | Add or remove the launchd agent, hooks, pi extension, and agent skills. `--only pi`, `--only claude`, or `--only codex` limits integration changes to that agent; Pi and Codex share a skill file. Back up changed files. Running either one twice changes nothing. |
 | `rex-tg status [--all]` | Count live, offline, and closed topics; show queues and alerts. Closed-topic details need `--all`. Opens the database read-only. |
 | `rex-tg doctor` | Check the Rex CLI path, the Rex server, the token, `getMe` (`has_topics_enabled`), the pairing, and the hooks. |
 
@@ -1147,7 +1149,7 @@ internal/
   daemon/                   the whole daemon: core loop, Telegram router, alerts, /new, /at, Mini App
   format/                   Markdown to Telegram HTML, splitting, UTF-16 length, secret removal
   inbound/                  text routing, safety checks, waiting queue policy, echo matching
-  install/                  hook entries, the pi extension, the launchd agent
+  install/                  hook entries, agent skills, the pi extension, the launchd agent
   keychain/                 the bot token in the macOS Keychain (through the security command)
   miniapp/                  the Mini App server, the signature check, page rendering
   registry/                 panes, sessions, state, take-over and resume rules
@@ -1159,6 +1161,7 @@ internal/
   termimg/                  the /screen picture (PNG)
   turn/                     turn tracker and progress message
 extensions/pi/rex-tg.ts     pi extension template
+extensions/skills/rex-tg/   portable Agent Skills instructions
 testdata/                   synthetic transcripts and golden files only, in some packages
 ```
 
