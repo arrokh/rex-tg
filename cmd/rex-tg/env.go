@@ -175,9 +175,9 @@ Commands:
   new [--config F] <pi|cux|claude|codex> [agent args...]
                           start in this folder; pass later arguments unchanged
   install [--only pi|claude|codex] [--no-load]
-                          add the hooks, the pi extension, and the launchd agent
+                          add agent hooks, skills, the pi extension, and launchd
   uninstall [--only pi|claude|codex] [--force] [--keep-launchd]
-                          remove what install added
+                          remove installed integrations and launchd
   daemon [--config F] [--log-stderr]
                           run the daemon (launchd runs this)
   hook <pi|claude|codex>  called by agent hooks; prints nothing

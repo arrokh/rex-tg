@@ -43,7 +43,7 @@ func printChange(env Env, name string, c install.Change, err error, verb string)
 
 func installCmd(ctx context.Context, args []string, env Env) int {
 	fs := newFlags("install", env)
-	only := fs.String("only", "", "limit hook changes to pi, claude, or codex")
+	only := fs.String("only", "", "limit agent integrations to pi, claude, or codex")
 	noLoad := fs.Bool("no-load", false, "write the launchd agent but do not load it")
 	if code, stop := parseFlags(fs, args); stop {
 		return code
@@ -60,6 +60,8 @@ func installCmd(ctx context.Context, args []string, env Env) int {
 	if *only == "" || *only == "claude" {
 		c, err := install.InstallClaude(p)
 		ok = printChange(env, "claude", c, err, "added hooks to") && ok
+		c, err = install.InstallClaudeSkill(p)
+		ok = printChange(env, "Claude skill", c, err, "wrote") && ok
 	}
 	if *only == "" || *only == "codex" {
 		c, err := install.InstallCodex(p)
@@ -68,6 +70,10 @@ func installCmd(ctx context.Context, args []string, env Env) int {
 	if *only == "" || *only == "pi" {
 		c, err := install.InstallPi(p)
 		ok = printChange(env, "pi", c, err, "wrote") && ok
+	}
+	if *only == "" || *only == "pi" || *only == "codex" {
+		c, err := install.InstallSharedSkill(p)
+		ok = printChange(env, "Codex/Pi skill", c, err, "wrote") && ok
 	}
 	c, err := install.InstallLaunchd(p, !*noLoad)
 	ok = printChange(env, "launchd", c, err, "wrote") && ok
@@ -80,9 +86,25 @@ func installCmd(ctx context.Context, args []string, env Env) int {
 	return 0
 }
 
+func hooksRemain(h install.HookReport) bool {
+	if h.Err != "" {
+		return true // unknown state: preserve the skill
+	}
+	for _, state := range h.Events {
+		if state != install.StateMissing {
+			return true
+		}
+	}
+	return false
+}
+
+func sharedSkillInUse(rep install.Report) bool {
+	return hooksRemain(rep.Codex) || rep.Pi.Err != "" || rep.Pi.State != install.StateMissing
+}
+
 func uninstallCmd(ctx context.Context, args []string, env Env) int {
 	fs := newFlags("uninstall", env)
-	only := fs.String("only", "", "limit changes to pi, claude, or codex")
+	only := fs.String("only", "", "limit agent integrations to pi, claude, or codex")
 	force := fs.Bool("force", false, "remove Codex hooks even when other entries lose trust")
 	keep := fs.Bool("keep-launchd", false, "keep the launchd agent")
 	if code, stop := parseFlags(fs, args); stop {
@@ -115,6 +137,28 @@ func uninstallCmd(ctx context.Context, args []string, env Env) int {
 	if *only == "" || *only == "pi" {
 		c, err := install.UninstallPi(p)
 		ok = printChange(env, "pi", c, err, "removed") && ok
+	}
+	if *only == "" || *only == "claude" || *only == "pi" || *only == "codex" {
+		rep, err := install.Inspect(p)
+		if err != nil {
+			fmt.Fprintf(env.Stdout, "✗ skills   inspect install: %v\n", err)
+			ok = false
+		} else {
+			if (*only == "" || *only == "claude") && !hooksRemain(rep.Claude) {
+				c, err := install.UninstallClaudeSkill(p)
+				ok = printChange(env, "Claude skill", c, err, "removed") && ok
+			} else if *only == "" || *only == "claude" {
+				c := install.Change{Path: p.ClaudeSkill, Note: "kept while Claude hooks remain"}
+				ok = printChange(env, "Claude skill", c, nil, "kept") && ok
+			}
+			if (*only == "" || *only == "pi" || *only == "codex") && !sharedSkillInUse(rep) {
+				c, err := install.UninstallSharedSkill(p)
+				ok = printChange(env, "Codex/Pi skill", c, err, "removed") && ok
+			} else if *only == "" || *only == "pi" || *only == "codex" {
+				c := install.Change{Path: p.SharedSkill, Note: "kept while a Codex or Pi integration remains"}
+				ok = printChange(env, "Codex/Pi skill", c, nil, "kept") && ok
+			}
+		}
 	}
 	if *only == "" && !*keep {
 		c, err := install.UninstallLaunchd(p, true)

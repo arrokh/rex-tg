@@ -152,7 +152,7 @@ Tasks:
 8. Outbox and sender: claims, parts split like chat messages (no `(1/3)` numbers; design 8.2), Markdown to Telegram HTML, UTF-16 length counting, secret removal, the chat's token bucket, and the error table in design section 9.1.
 9. Housekeeping: spool cleanup, row cleanup, and retention.
 10. Poller and router: `/agents`, the link button, `createForumTopic`, the intro card, the last 3 final answers, dividers, and the answers in design section 8.8.
-11. pi hook: `rex-tg hook pi`, the pi extension, and `rex-tg install --only pi`, which writes the extension and the launchd agent. Without the extension, rex-tg cannot see `/new` inside a running pi process.
+11. pi hook: `rex-tg hook pi`, the pi extension, the shared Codex/Pi skill, and `rex-tg install --only pi`, which writes the extension, skill, and launchd agent. Without the extension, rex-tg cannot see `/new` inside a running pi process.
 12. Take-over for pi's `/new` (design section 7), so that the new session keeps the topic.
 
 This phase uses display modes `final` and `block` only.
@@ -258,14 +258,14 @@ Install, in this order:
 1. `make install` copies the binary to `~/.local/bin/rex-tg`.
 2. `rex-tg login` stores the token and pairs your Telegram account.
 3. `rex-tg install` does the rest:
-   - adds the hook entries to `~/.claude/settings.json`;
-   - appends the hook entries to the end of each event's list in `~/.codex/hooks.json`;
+   - adds hook entries to `~/.claude/settings.json` and `~/.codex/hooks.json`;
    - writes `~/.pi/agent/extensions/rex-tg.ts`;
+   - installs the portable skill to `~/.claude/skills/rex-tg/` and the shared Codex/Pi path `~/.agents/skills/rex-tg/`;
    - writes and loads the launchd agent.
 4. Start Codex once and trust the new hook entries.
 5. `rex-tg doctor` checks everything.
 
-The pi extension and the launchd agent arrive in Phase 1 (`rex-tg install --only pi`). The Claude Code and Codex hook entries arrive in Phase 4. Each phase updates the binary with `make install` and a restart of the launchd agent.
+The pi extension, shared Codex/Pi skill, and launchd agent arrive in Phase 1 (`rex-tg install --only pi`). The Claude Code and Codex hook entries arrive in Phase 4, with Claude's skill. Each phase updates the binary with `make install` and a restart of the launchd agent.
 
 Rules for editing shared files (`settings.json`, `hooks.json`):
 
@@ -278,7 +278,7 @@ Rules for editing shared files (`settings.json`, `hooks.json`):
 Stop or roll back:
 
 - **Pause quickly:** `launchctl bootout gui/$(id -u)/local.rex-tg`. Hooks keep writing spool files, which are deleted after 24 hours.
-- **Remove:** `rex-tg uninstall` removes exactly the entries it added, the pi extension, and the launchd agent. It keeps the database and the backups.
+- **Remove:** `rex-tg uninstall` removes exactly the entries it added, the pi extension, its marked skills, and the launchd agent. It keeps the database and the backups. The shared Codex/Pi skill stays while either integration remains.
 - **Bad migration:** the daemon stops and keeps `rex-tg.db.bak-<version>`. Copy it back and install the previous binary.
 
 ## Tests

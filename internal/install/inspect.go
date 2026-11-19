@@ -7,6 +7,8 @@ import (
 	"os"
 
 	"github.com/tidwall/gjson"
+
+	"rex-tg/extensions"
 )
 
 // State says whether an installed item is present and up to date.
@@ -49,10 +51,12 @@ type FileReport struct {
 
 // Report is the result of Inspect.
 type Report struct {
-	Claude  HookReport
-	Codex   HookReport
-	Pi      FileReport
-	Launchd FileReport
+	Claude      HookReport
+	Codex       HookReport
+	Pi          FileReport
+	ClaudeSkill FileReport
+	SharedSkill FileReport
+	Launchd     FileReport
 }
 
 // Inspect reports which entries and files are installed and whether they are
@@ -62,10 +66,12 @@ func Inspect(p Paths) (Report, error) {
 		return Report{}, err
 	}
 	return Report{
-		Claude:  p.inspectHooks(p.ClaudeSettings, "claude", claudeEvents),
-		Codex:   p.inspectHooks(p.CodexHooks, "codex", codexEvents),
-		Pi:      inspectFile(p.PiExtension, p.piSource()),
-		Launchd: inspectFile(p.LaunchAgent, p.plist()),
+		Claude:      p.inspectHooks(p.ClaudeSettings, "claude", claudeEvents),
+		Codex:       p.inspectHooks(p.CodexHooks, "codex", codexEvents),
+		Pi:          inspectFile(p.PiExtension, p.piSource()),
+		ClaudeSkill: inspectFile(p.ClaudeSkill, extensions.RexTgSkill),
+		SharedSkill: inspectFile(p.SharedSkill, extensions.RexTgSkill),
+		Launchd:     inspectFile(p.LaunchAgent, p.plist()),
 	}, nil
 }
 

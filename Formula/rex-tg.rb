@@ -23,7 +23,7 @@ class RexTg < Formula
     <<~EOS
       Next steps:
         rex-tg login      # store the bot token in the Keychain, print a pairing code
-        rex-tg install    # add the hooks and the launchd job
+        rex-tg install    # add agent integrations, skills, and the launchd job
         # then send /start <code> to your bot, and run: rex-tg doctor
 
       If you installed rex-tg before with `make install`, run
@@ -32,8 +32,9 @@ class RexTg < Formula
       The link keeps agents that run already working; they read their hooks
       when they started. Then everything uses this one binary.
       After `brew upgrade rex-tg`, the daemon restarts itself within about
-      a minute, and the topics stay linked. Run `rex-tg install` again only
-      when the release notes say the hooks changed. `rex-tg doctor` checks it.
+      a minute, and the topics stay linked. Run `rex-tg install` again when
+      release notes say agent integrations or skills changed.
+      `rex-tg doctor` checks them.
 
       The Mini App (optional, [miniapp] url) opens only inside your tailnet:
         tailscale serve --bg --https=8443 http://127.0.0.1:8770

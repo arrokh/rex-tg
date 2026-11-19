@@ -118,6 +118,8 @@ func doctorCmd(ctx context.Context, args []string, env Env) int {
 		hookLine(d, "Claude hooks", rep.Claude)
 		hookLine(d, "Codex hooks", rep.Codex)
 		fileLine(d, "pi extension", rep.Pi)
+		fileLine(d, "Claude skill", rep.ClaudeSkill)
+		fileLine(d, "Codex/Pi skill", rep.SharedSkill)
 		fileLine(d, "launchd plist", rep.Launchd)
 		target := "gui/" + env.UID + "/" + p.Label
 		if _, err := env.Runner(ctx, "launchctl", "print", target); err != nil {
@@ -179,7 +181,7 @@ func fileLine(d *doctorOut, name string, f install.FileReport) {
 	case f.State == install.StateCurrent:
 		d.ok("%s is current (%s)", name, f.Path)
 	default:
-		d.warn("%s is %s: missing, or it names another rex-tg binary (%s); run `rex-tg install` with this binary", name, f.State, f.Path)
+		d.warn("%s is %s (%s); run `rex-tg install` with this binary", name, f.State, f.Path)
 	}
 }
 

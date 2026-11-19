@@ -96,10 +96,13 @@ func backups(t *testing.T, path string) []string {
 func TestDefaultPaths(t *testing.T) {
 	p := DefaultPaths("/h", "/b/rex-tg")
 	want := Paths{Home: "/h", Binary: "/b/rex-tg", ClaudeSettings: "/h/.claude/settings.json", CodexHooks: "/h/.codex/hooks.json",
-		PiExtension: "/h/.pi/agent/extensions/rex-tg.ts", LaunchAgent: "/h/Library/LaunchAgents/local.rex-tg.plist",
-		Label: "local.rex-tg", LogDir: "/h/.local/state/rex-tg/logs"}
+		PiExtension: "/h/.pi/agent/extensions/rex-tg.ts",
+		ClaudeSkill: "/h/.claude/skills/rex-tg/SKILL.md", SharedSkill: "/h/.agents/skills/rex-tg/SKILL.md",
+		LaunchAgent: "/h/Library/LaunchAgents/local.rex-tg.plist",
+		Label:       "local.rex-tg", LogDir: "/h/.local/state/rex-tg/logs"}
 	if p.Home != want.Home || p.Binary != want.Binary || p.ClaudeSettings != want.ClaudeSettings || p.CodexHooks != want.CodexHooks ||
-		p.PiExtension != want.PiExtension || p.LaunchAgent != want.LaunchAgent || p.Label != want.Label || p.LogDir != want.LogDir {
+		p.PiExtension != want.PiExtension || p.ClaudeSkill != want.ClaudeSkill || p.SharedSkill != want.SharedSkill ||
+		p.LaunchAgent != want.LaunchAgent || p.Label != want.Label || p.LogDir != want.LogDir {
 		t.Fatalf("got %+v", p)
 	}
 }
@@ -512,6 +515,124 @@ func TestPiExtensionSource(t *testing.T) {
 	}
 }
 
+func TestInstallSkills(t *testing.T) {
+	p := newPaths(t)
+	for name, tc := range map[string]struct {
+		path    string
+		install func(Paths) (Change, error)
+		remove  func(Paths) (Change, error)
+	}{
+		"claude": {p.ClaudeSkill, InstallClaudeSkill, UninstallClaudeSkill},
+		"shared": {p.SharedSkill, InstallSharedSkill, UninstallSharedSkill},
+	} {
+		t.Run(name, func(t *testing.T) {
+			ch, err := tc.install(p)
+			if err != nil || !ch.Changed || ch.Backup != "" {
+				t.Fatalf("install: %+v %v", ch, err)
+			}
+			if got := read(t, tc.path); got != string(extensions.RexTgSkill) {
+				t.Fatalf("skill content differs:\n%s", got)
+			}
+			if fi, err := os.Stat(tc.path); err != nil || fi.Mode().Perm() != 0o644 {
+				t.Fatalf("skill mode: %v %v", fi, err)
+			}
+			if ch, err := tc.install(p); err != nil || ch.Changed || ch.Note != "already installed" {
+				t.Fatalf("second install: %+v %v", ch, err)
+			}
+			rep, err := Inspect(p)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := rep.SharedSkill.State
+			if name == "claude" {
+				got = rep.ClaudeSkill.State
+			}
+			if got != StateCurrent {
+				t.Errorf("inspect state: %s", got)
+			}
+			ch, err = tc.remove(p)
+			if err != nil || !ch.Changed || ch.Backup == "" || read(t, ch.Backup) != string(extensions.RexTgSkill) {
+				t.Fatalf("uninstall: %+v %v", ch, err)
+			}
+			if _, err := os.Stat(tc.path); !errors.Is(err, os.ErrNotExist) {
+				t.Errorf("skill still exists: %v", err)
+			}
+			if ch, err := tc.remove(p); err != nil || ch.Changed {
+				t.Errorf("second uninstall: %+v %v", ch, err)
+			}
+		})
+	}
+}
+
+func TestSkillsLeaveUnownedFilesAlone(t *testing.T) {
+	p := newPaths(t)
+	original := `---
+name: rex-tg
+description: My own skill
+---
+`
+	write(t, p.ClaudeSkill, original, 0o600)
+	if _, err := InstallClaudeSkill(p); !errors.Is(err, ErrNotOurs) {
+		t.Fatalf("install error = %v, want ErrNotOurs", err)
+	}
+	if got := read(t, p.ClaudeSkill); got != original {
+		t.Fatalf("install changed user's skill: %q", got)
+	}
+	if _, err := UninstallClaudeSkill(p); !errors.Is(err, ErrNotOurs) {
+		t.Fatalf("uninstall error = %v, want ErrNotOurs", err)
+	}
+	if got := read(t, p.ClaudeSkill); got != original {
+		t.Fatalf("uninstall changed user's skill: %q", got)
+	}
+	if len(backups(t, p.ClaudeSkill)) != 0 {
+		t.Fatal("created a backup of an unowned file")
+	}
+}
+
+func TestSkillUpgradeBacksUpManagedFile(t *testing.T) {
+	p := newPaths(t)
+	old := `---
+name: rex-tg
+description: Old managed skill
+---
+` + skillMarker + "\n"
+	write(t, p.SharedSkill, old, 0o600)
+	ch, err := InstallSharedSkill(p)
+	if err != nil || !ch.Changed || ch.Backup == "" {
+		t.Fatalf("install = %+v, %v", ch, err)
+	}
+	if got := read(t, ch.Backup); got != old {
+		t.Fatalf("backup = %q, want prior skill", got)
+	}
+	if got := read(t, p.SharedSkill); got != string(extensions.RexTgSkill) {
+		t.Fatalf("updated skill = %q", got)
+	}
+	if fi, err := os.Stat(p.SharedSkill); err != nil || fi.Mode().Perm() != 0o600 {
+		t.Fatalf("update changed file mode: %v %v", fi, err)
+	}
+}
+
+func TestSkillSymlinkIsLeftAlone(t *testing.T) {
+	p := newPaths(t)
+	target := filepath.Join(t.TempDir(), "SKILL.md")
+	write(t, target, "my linked skill", 0o644)
+	if err := os.MkdirAll(filepath.Dir(p.ClaudeSkill), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, p.ClaudeSkill); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := InstallClaudeSkill(p); err == nil {
+		t.Fatal("install replaced a skill symlink")
+	}
+	if _, err := UninstallClaudeSkill(p); err == nil {
+		t.Fatal("uninstall removed a skill symlink")
+	}
+	if got := read(t, target); got != "my linked skill" {
+		t.Fatalf("symlink target changed: %q", got)
+	}
+}
+
 func TestLaunchd(t *testing.T) {
 	p := newPaths(t)
 	fr := &fakeRunner{}
@@ -608,6 +729,9 @@ func TestInstallRequiresAbsoluteBinary(t *testing.T) {
 		t.Error("want error")
 	}
 	if _, err := InstallPi(p); err == nil {
+		t.Error("want error")
+	}
+	if _, err := InstallClaudeSkill(p); err == nil {
 		t.Error("want error")
 	}
 }

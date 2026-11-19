@@ -96,7 +96,7 @@ rex-tg install
 
 `login` prompts for the token and stores it in the macOS Keychain. It prints a pairing code that expires after 10 minutes.
 
-`install` adds agent hooks, the pi extension, and the launchd job. It backs up shared hook settings before editing them. **Restart existing agent sessions after installation so they load the integrations. Start Codex once and trust the new hook entries.** [See exactly what changes](docs/reference.md#hooks-and-daemon-rex-tg-install).
+`install` adds agent hooks, the pi extension, rex-tg skills, and the launchd job. The skills teach agents how to use the Rex–Telegram bridge. Claude Code gets a personal skill; Codex and Pi share one. **Restart existing agent sessions after installation so they load the integrations and skills. Start Codex once and trust the new hook entries.** [See exactly what changes](docs/reference.md#agent-integrations-skills-and-daemon-rex-tg-install).
 
 ### 4. Pair and check
 
@@ -190,7 +190,7 @@ rex-tg status --all   # include closed-topic details
 
 Status counts live, offline, and closed topics. Closed details stay hidden unless you pass `--all`.
 
-A launchd-managed daemon notices a binary replacement and restarts when safe, usually within about a minute. A manually started daemon must be restarted by hand. Source users can run `git pull --ff-only && mise exec -- make install` from their checkout. Do not install over a Homebrew symlink with `make install`; [choose one installation path](docs/reference.md#install-with-homebrew).
+A launchd-managed daemon notices a binary replacement and restarts when safe, usually within about a minute. A manually started daemon must be restarted by hand. If release notes say the agent integrations or skills changed, run `rex-tg install` and restart your agent sessions. Source users can run `git pull --ff-only && mise exec -- make install` from their checkout. Do not install over a Homebrew symlink with `make install`; [choose one installation path](docs/reference.md#install-with-homebrew).
 
 - **Restart after a config change:** `launchctl kickstart -k gui/$(id -u)/local.rex-tg`. This interrupts the daemon; uncertain in-flight typing is not retried.
 - **Stop:** `launchctl bootout gui/$(id -u)/local.rex-tg`. Run `rex-tg install` to load it again.
