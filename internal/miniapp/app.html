@@ -12,7 +12,7 @@
     --scale: 1;
     --bg: var(--tg-theme-bg-color, #ffffff);
     --fg: var(--tg-theme-text-color, #1b1b1f);
-    --hint: var(--tg-theme-hint-color, #707579);
+    --hint: var(--tg-theme-hint-color, #686d72);
     --link: var(--tg-theme-link-color, #2481cc);
     --code: var(--tg-theme-secondary-bg-color, #f2f2f5);
     --add: rgba(46, 160, 67, 0.18);
@@ -31,8 +31,8 @@
   /* The ☀/🌙 button sets a theme of its own over Telegram's. */
   :root[data-theme="light"] {
     color-scheme: light;
-    --bg: #ffffff; --fg: #1b1b1f; --hint: #707579; --link: #2481cc; --code: #f2f2f5;
-    --btn: #2481cc; --btn-fg: #fff; --danger: #e5534b; --sect-head: #707579;
+    --bg: #ffffff; --fg: #1b1b1f; --hint: #686d72; --link: #2481cc; --code: #f2f2f5;
+    --btn: #2481cc; --btn-fg: #fff; --danger: #e5534b; --sect-head: #686d72;
   }
   :root[data-theme="dark"] {
     color-scheme: dark;
@@ -116,9 +116,10 @@
   /* the live screen: it fills the height of the phone, below the bars */
   body.fill { height: var(--tg-viewport-stable-height, 100dvh); display: flex; flex-direction: column; padding-bottom: 10px; overflow: hidden; }
   body.fill #page { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-  .bar { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 0 0 8px; font: 13px/1.2 -apple-system, system-ui, sans-serif; }
+  .bar { flex: none; display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 0 0 8px; font: 13px/1.2 -apple-system, system-ui, sans-serif; }
   .status { color: var(--hint); font-variant-numeric: tabular-nums; }
-  .status.live { color: #2ea043; }
+  .status.live { color: var(--fg); }
+  .status.live::first-letter { color: #2ea043; }
   .chips { display: flex; gap: 6px; }
   .chip {
     font: 600 13px/1 -apple-system, system-ui, sans-serif; color: var(--fg); height: 30px; padding: 0 12px;
@@ -128,15 +129,15 @@
   .chip.on { background: var(--link); color: #fff; box-shadow: none; }
   .chip:active { opacity: 0.55; }
   .term-wrap {
-    position: relative; flex: 1; min-height: 0; overflow: auto; -webkit-overflow-scrolling: touch;
+    position: relative; flex: 0 1 auto; min-height: 0; overflow: auto; -webkit-overflow-scrolling: touch;
     background: #1e1e1e; border-radius: 10px; padding: 8px;
   }
-  /* Short output sits at the bottom, like a terminal; long output scrolls. */
+  /* Short output uses only its own height; long output scrolls in the available space. */
   .term-wrap { display: flex; flex-direction: column; }
-  .term-wrap > .xterm, .term-wrap > pre.screen { margin-top: auto; flex: none; }
+  .term-wrap > .xterm, .term-wrap > pre.screen { flex: none; }
   .term-wrap .xterm { padding: 0; }
   .term-wrap .xterm-viewport { overflow: hidden !important; background: transparent !important; }
-  pre.screen { margin: 0; padding: 0; background: none; color: #d4d4d4; font-size: 0.6875rem; line-height: 1.2; white-space: pre; }
+  pre.screen { margin: 0; padding: 0; background: none; color: #d4d4d4; font-size: 0.8125rem; line-height: 1.2; white-space: pre; }
   .jump {
     position: absolute; right: 26px; bottom: 26px; z-index: 2; width: 40px; height: 40px; border-radius: 20px;
     border: none; background: var(--link); color: #fff; font: 600 20px/1 -apple-system, system-ui, sans-serif;

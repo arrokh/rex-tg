@@ -218,6 +218,8 @@
     var chips = el("div", "chips");
     var pause = el("button", "chip", "Pause");
     var fit = el("button", "chip", "Fit width");
+    pause.setAttribute("aria-pressed", "false");
+    fit.setAttribute("aria-pressed", "false");
     chips.appendChild(pause);
     chips.appendChild(fit);
     bar.appendChild(status);
@@ -243,7 +245,7 @@
     } catch (e) { /* the usual ratio */ }
 
     function fontSize(cols) {
-      var base = 11 * scale;
+      var base = 13 * scale;
       if (!fitOn) { return base; }
       var px = (wrap.clientWidth - 18) / (cols * ratio);
       return Math.max(4, Math.min(base * 1.6, Math.floor(px * 10) / 10));
@@ -286,11 +288,17 @@
     function setFit(on) {
       fitOn = on;
       fit.classList.toggle("on", fitOn);
+      fit.setAttribute("aria-pressed", String(fitOn));
       save("rex-tg.fit", fitOn ? "1" : null);
       draw();
     }
     fit.addEventListener("click", function () { setFit(!fitOn); });
     setFit(fitOn);
+    // A+ should still zoom when Fit width is active. Otherwise the width cap
+    // keeps the measured font unchanged and makes the control seem broken.
+    document.getElementById("bigger").addEventListener("click", function () {
+      if (fitOn) { setFit(false); }
+    });
     scaleHooks.push(draw);
     window.addEventListener("resize", function () { if (fitOn) { draw(); } });
 
@@ -303,6 +311,7 @@
       paused = !paused;
       pause.classList.toggle("on", paused);
       pause.textContent = paused ? "Resume" : "Pause";
+      pause.setAttribute("aria-pressed", String(paused));
       if (paused) {
         clearTimeout(timer);
         status.textContent = "⏸ Paused" + (last && last.at ? " · " + last.at : "");
@@ -345,7 +354,7 @@
         pre = null;
         term = new window.Terminal({
           disableStdin: true, cursorBlink: false, cursorStyle: "bar", cursorInactiveStyle: "none",
-          scrollback: 0, fontFamily: mono, fontSize: 11 * scale, lineHeight: 1.1, cols: 80, rows: 24,
+          scrollback: 0, fontFamily: mono, fontSize: 13 * scale, lineHeight: 1.2, cols: 80, rows: 24,
           theme: { background: "#1e1e1e", foreground: "#d4d4d4", cursor: "#1e1e1e", cursorAccent: "#1e1e1e" }
         });
         term.open(wrap);
