@@ -114,7 +114,7 @@ func TestApproveAnswerRequiresAClearOneTimeChoice(t *testing.T) {
 		ok   bool
 	}{
 		{"question with unrelated choices", alert(store.AlertQuestion, "1 Blue", "2 No preference"), 0, false},
-		{"yes no question", alert(store.AlertQuestion, "1 Yes", "2 No"), 0, true},
+		{"yes no question is not an approval", alert(store.AlertQuestion, "1 Yes", "2 No"), 0, false},
 		{"clear allow", alert(store.AlertPermission, "1 Allow"), 0, true},
 		{"destructive choice without an affirmative label", alert(store.AlertPermission, "1 Delete all files", "2 Cancel"), 0, false},
 		{"permission with only No", alert(store.AlertPermission, "1 No"), 0, false},
@@ -127,6 +127,8 @@ func TestApproveAnswerRequiresAClearOneTimeChoice(t *testing.T) {
 		{"run is not a clear yes", alert(store.AlertPermission, "1 Run", "2 Cancel"), 0, false},
 		{"default allow needs a tap", alert(store.AlertPermission, "1 Allow and set as default"), 0, false},
 		{"trusted-folder allow needs a tap", alert(store.AlertPermission, "1 Yes, trust this folder"), 0, false},
+		{"workspace allow needs a tap", alert(store.AlertPermission, "1 Allow in this workspace"), 0, false},
+		{"project allow needs a tap", alert(store.AlertPermission, "1 Yes, allow for this project"), 0, false},
 	}
 	for _, tc := range tests {
 		i, ok := approveAnswer(tc.al)
