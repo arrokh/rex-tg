@@ -41,7 +41,8 @@ func (d *Duration) UnmarshalText(b []byte) error {
 // MarshalText writes the duration as text such as "2s".
 func (d Duration) MarshalText() ([]byte, error) { return []byte(d.Duration.String()), nil }
 
-// Answer is a fallback permission answer: a button label and the keys it types.
+// Answer is an explicitly configured fallback permission choice for a screen
+// whose controls the prompt reader does not recognize.
 type Answer struct {
 	Label string   `toml:"label"`
 	Keys  []string `toml:"keys"`
@@ -58,8 +59,11 @@ type RuntimeInput struct {
 	PasteEnterDelay Duration `toml:"paste_enter_delay"`
 	InterruptKeys   []string `toml:"interrupt_keys"`
 	WhileWorking    string   `toml:"while_working"` // steer, queue, unknown
-	// Answers are the fallback permission answers when the screen shows no
-	// numbered options.
+	// AllowUnknownPermissionAnswers is an explicit opt-in to use Answers when
+	// an explicitly typed permission screen cannot be parsed.
+	AllowUnknownPermissionAnswers bool `toml:"allow_unknown_permission_answers"`
+	// Answers are fallback permission choices for an unknown screen. Empty by
+	// default, and ignored unless AllowUnknownPermissionAnswers is true.
 	Answers []Answer `toml:"answers"`
 	// Choices replaces the buttons that a setting command offers, by control
 	// name: [agents.claude.choices] model = ["opus", "sonnet"]. A control
@@ -241,20 +245,11 @@ func Default(home string) Config {
 	c.Agents.Pi = base()
 	c.Agents.Pi.Answers = []Answer{}
 	c.Agents.Pi.Launch = []string{"pi"}
-	c.Agents.Claude = base(
-		Answer{"1 Yes", []string{"1"}},
-		Answer{"2 Always", []string{"2"}},
-		Answer{"4 No", []string{"4"}},
-		Answer{"Esc", []string{"escape"}},
-	)
+	c.Agents.Claude = base()
 	c.Agents.Claude.Launch = []string{"claude"}
-	// No "always" answer: in Codex 0.167 "p" on a network prompt allows a
-	// host for good, and "a" is "always" on an edit prompt. A screen without
-	// numbered answers gets only the answers that cannot make a lasting rule.
-	c.Agents.Codex = base(
-		Answer{"Yes", []string{"y"}},
-		Answer{"No", []string{"escape"}},
-	)
+	// Fallback answers stay empty. A Codex prompt with an unknown layout
+	// must not gain guessed keys such as y, p, or a.
+	c.Agents.Codex = base()
 	c.Agents.Codex.Launch = []string{"codex"}
 
 	c.Display.Mode = "progress"

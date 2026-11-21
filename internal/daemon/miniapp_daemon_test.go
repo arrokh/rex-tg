@@ -245,6 +245,57 @@ func TestLongAnswerOpensInTheMiniApp(t *testing.T) {
 	}
 }
 
+func TestSplitAnswerUsesWholePageWhenRichMessagesAreOff(t *testing.T) {
+	e, p, thread := piTopicCfg(t, "pi-split-answer-app", func(e *env) {
+		e.cfg.MiniApp.URL = "https://mac.example.ts.net:8443"
+		e.cfg.Display.RichMessages = false
+		e.cfg.Display.MessageLength = 4000
+	})
+	para := "A long paragraph. " + strings.Repeat("😀", 600)
+	long := "# Report\n\n" + strings.Repeat(para+"\n\n", 4) + "TAIL_MARKER"
+	p.User("write a report that would split")
+	p.Final(long)
+	answer := e.waitText(thread, "A long paragraph")
+	e.waitFor("the whole-answer button", func() bool {
+		return webAppURL(e, thread, "Whole answer") != ""
+	})
+	if e.hasText(thread, "TAIL_MARKER") {
+		t.Error("the split answer tail was posted in a second Telegram message")
+	}
+	count := 0
+	for _, m := range e.botMessages(thread) {
+		if strings.Contains(m.Text, "A long paragraph") {
+			count++
+		}
+	}
+	if count != 1 || len(buttonTexts(answer)) == 0 {
+		t.Errorf("answer messages = %d; markup = %+v, want one preview and a Whole answer button", count, answer.Markup)
+	}
+}
+
+func TestSingleParagraphStaysInOneMessageWhenRichMessagesAreOff(t *testing.T) {
+	e, p, thread := piTopicCfg(t, "pi-single-paragraph-app", func(e *env) {
+		e.cfg.MiniApp.URL = "https://mac.example.ts.net:8443"
+		e.cfg.Display.RichMessages = false
+	})
+	answerText := "A single paragraph. " + strings.Repeat("x", 1600)
+	p.User("write one long paragraph")
+	p.Final(answerText)
+	answer := e.waitText(thread, "A single paragraph.")
+	if url := webAppURL(e, thread, "Whole answer"); url != "" {
+		t.Fatalf("a paragraph that fits one message opened a Whole answer page: %q", url)
+	}
+	count := 0
+	for _, m := range e.botMessages(thread) {
+		if strings.Contains(m.Text, "A single paragraph.") {
+			count++
+		}
+	}
+	if count != 1 || len(buttonTexts(answer)) != 0 {
+		t.Errorf("answer messages = %d; markup = %+v, want one message without a page button", count, answer.Markup)
+	}
+}
+
 // freeAddr is a local address with a free port, for a test that talks to
 // the Mini App's server.
 func freeAddr(t *testing.T) string {

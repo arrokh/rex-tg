@@ -411,7 +411,7 @@
   .scrim { position: fixed; inset: 0; z-index: 20; background: rgba(0, 0, 0, 0.45); display: flex; align-items: flex-end; justify-content: center; }
   .sheet {
     width: 100%; max-width: 520px; max-height: 90vh; overflow-y: auto; background: var(--bg); color: var(--fg); border-radius: 16px 16px 0 0;
-    padding: 8px 16px calc(16px + env(safe-area-inset-bottom)); box-shadow: 0 -4px 24px rgba(0, 0, 0, 0.3); animation: sheetup 0.18s ease-out;
+    padding: 8px 16px calc(28px + max(env(safe-area-inset-bottom, 0px), var(--sai-bottom, 0px))); box-shadow: 0 -4px 24px rgba(0, 0, 0, 0.3); animation: sheetup 0.18s ease-out;
   }
   @keyframes sheetup { from { transform: translateY(40px); opacity: 0.4; } }
   .grip { width: 38px; height: 4px; border-radius: 2px; background: color-mix(in srgb, var(--hint) 45%, transparent); margin: 2px auto 10px; }
@@ -420,7 +420,8 @@
   .srow { display: flex; gap: 8px; flex-wrap: wrap; }
   .srow .btn { flex: 1; }
   /* toasts */
-  .toasts { position: fixed; left: 12px; right: 12px; bottom: calc(76px + env(safe-area-inset-bottom)); z-index: 40; display: flex; flex-direction: column; gap: 8px; pointer-events: none; align-items: center; }
+  .toasts { position: fixed; left: 12px; right: 12px; bottom: calc(76px + max(env(safe-area-inset-bottom, 0px), var(--sai-bottom, 0px))); z-index: 40; display: flex; flex-direction: column; gap: 8px; pointer-events: none; align-items: center; }
+  body.annot .toasts { bottom: calc(94px + max(env(safe-area-inset-bottom, 0px), var(--sai-bottom, 0px))); }
   .toast {
     pointer-events: auto; width: 100%; max-width: 480px; display: flex; align-items: center; gap: 8px; padding: 10px 10px 10px 14px; border-radius: 12px;
     font-size: 0.875rem; line-height: 1.35; background: var(--bg); color: var(--fg); box-shadow: 0 4px 18px rgba(0, 0, 0, 0.3); animation: sheetup 0.16s ease-out;
@@ -443,7 +444,7 @@
   .pdot { flex: none; width: 10px; height: 10px; border-radius: 5px; box-shadow: inset 0 0 0 2px var(--hint); }
   .pdot.live { background: var(--ok); box-shadow: none; }
   /* Annotate */
-  body.annot { padding-bottom: calc(92px + env(safe-area-inset-bottom, 0px)); }
+  body.annot { padding-bottom: calc(92px + max(env(safe-area-inset-bottom, 0px), var(--sai-bottom, 0px))); }
   .alist { display: flex; flex-direction: column; gap: 12px; }
   .ans-card { border-radius: 12px; background: var(--code); padding: 6px 12px 10px; min-width: 0; box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--hint) 14%, transparent); }
   .ans-head { display: flex; align-items: center; padding: 6px 0 2px; font-size: 0.75rem; font-weight: 600; color: var(--hint); font-variant-numeric: tabular-nums; }
@@ -469,13 +470,13 @@
   .asent { height: 1px; }
   .abar {
     position: fixed; left: 0; right: 0; bottom: 0; z-index: 10; display: flex; align-items: center; justify-content: space-between; gap: 12px;
-    padding: 10px 16px calc(10px + env(safe-area-inset-bottom, 0px)); background: var(--bg);
+    padding: 10px 16px calc(28px + max(env(safe-area-inset-bottom, 0px), var(--sai-bottom, 0px))); background: var(--bg);
     border-top: 1px solid color-mix(in srgb, var(--hint) 22%, transparent);
   }
   .abar .btn { min-height: 46px; min-width: 120px; font-size: 16px; }
   .acount { font-weight: 600; font-variant-numeric: tabular-nums; }
   .selpill {
-    position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(78px + env(safe-area-inset-bottom, 0px)); z-index: 11; min-height: 44px; padding: 0 18px;
+    position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(96px + max(env(safe-area-inset-bottom, 0px), var(--sai-bottom, 0px))); z-index: 11; min-height: 44px; padding: 0 18px;
     border: none; border-radius: 22px; background: var(--btn); color: var(--btn-fg); font: 600 15px/1 -apple-system, system-ui, sans-serif;
     box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35); white-space: nowrap; -webkit-tap-highlight-color: transparent;
   }
@@ -487,6 +488,8 @@
   }
   .aquote.open { display: block; -webkit-line-clamp: unset; max-height: 40vh; overflow-y: auto; }
   .alabel { display: block; margin: 8px 2px 4px; font-size: 0.8125rem; font-weight: 600; color: var(--sect-head); }
+  .npresets { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 8px; }
+  .npresets .btn { flex: 1 1 auto; min-height: 40px; white-space: nowrap; }
   .atxt {
     display: block; width: 100%; min-height: 96px; padding: 10px 12px; border: none; border-radius: 10px; background: var(--code); color: var(--fg); resize: vertical;
     font: 16px/1.4 -apple-system, system-ui, sans-serif; box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--hint) 28%, transparent);

@@ -179,7 +179,18 @@ func (d *daemon) longAnswerIf(isAnswer bool, th store.Thread, key, markdown stri
 // longAnswer makes a long answer short in the chat (core): its start, and a
 // page with all of it. ok is false when the answer stays as it is.
 func (d *daemon) longAnswer(th store.Thread, key, md string) ([]store.PartContent, bool) {
-	if !d.miniAppReady() || len([]rune(md)) <= max(d.cfg.MiniApp.AnswerPreview, 2*answerPreviewChars) {
+	if !d.miniAppReady() {
+		return nil, false
+	}
+	threshold := max(d.cfg.MiniApp.AnswerPreview, 2*answerPreviewChars)
+	needsPage := len([]rune(md)) > threshold
+	if !needsPage && !d.cfg.Display.RichMessages {
+		// Match the chat formatter so only answers that would become multiple
+		// text messages use a page; a long paragraph that fits one message stays.
+		short, _ := format.SplitWideCode(md)
+		needsPage = d.wouldSplitIntoMessages(short)
+	}
+	if !needsPage {
 		return nil, false
 	}
 	title := format.Truncate(firstLine(format.Plain(md)), 80)

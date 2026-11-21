@@ -66,22 +66,9 @@ func TestDefaults(t *testing.T) {
 		len(cl.InterruptKeys) != 1 || cl.InterruptKeys[0] != "escape" {
 		t.Errorf("claude = %+v", cl)
 	}
-	want := []Answer{{"1 Yes", []string{"1"}}, {"2 Always", []string{"2"}}, {"4 No", []string{"4"}}, {"Esc", []string{"escape"}}}
-	if len(cl.Answers) != len(want) {
-		t.Fatalf("claude answers = %+v", cl.Answers)
-	}
-	for i, a := range want {
-		if cl.Answers[i].Label != a.Label || cl.Answers[i].Keys[0] != a.Keys[0] {
-			t.Errorf("answer %d = %+v", i, cl.Answers[i])
-		}
-	}
-	if len(c.Input(agents.Pi).Answers) != 0 {
-		t.Error("pi has no answers")
-	}
-	cx := c.Input(agents.Codex).Answers
-	// No "always" answer: a guessed lasting rule must not be one tap away.
-	if len(cx) != 2 || cx[0].Keys[0] != "y" || cx[1].Keys[0] != "escape" {
-		t.Errorf("codex answers = %+v", cx)
+	if len(cl.Answers) != 0 || len(c.Input(agents.Codex).Answers) != 0 || len(c.Input(agents.Pi).Answers) != 0 ||
+		cl.AllowUnknownPermissionAnswers || c.Input(agents.Codex).AllowUnknownPermissionAnswers || c.Input(agents.Pi).AllowUnknownPermissionAnswers {
+		t.Errorf("fallback answers must be opt-in: claude=%+v codex=%+v pi=%+v", cl, c.Input(agents.Codex), c.Input(agents.Pi))
 	}
 	if got := c.Input("nope"); got.WhileWorking != "" {
 		t.Errorf("unknown runtime = %+v", got)
@@ -123,6 +110,7 @@ claude_exec_glob = ["~/vers/*"]
 launch = ["claude", "--model", "opus"]
 paste_enter_delay = "500ms"
 while_working = "queue"
+allow_unknown_permission_answers = true
 answers = [{label="1 Yes", keys=["1"]}]
 
 [display]
@@ -166,7 +154,7 @@ dir = "~/st"
 		t.Error("untouched default lost")
 	}
 	cl := c.Input(agents.Claude)
-	if cl.PasteEnterDelay.Duration != 500*time.Millisecond || cl.WhileWorking != "queue" || len(cl.Answers) != 1 {
+	if cl.PasteEnterDelay.Duration != 500*time.Millisecond || cl.WhileWorking != "queue" || !cl.AllowUnknownPermissionAnswers || len(cl.Answers) != 1 {
 		t.Errorf("claude = %+v", cl)
 	}
 	if cl.InterruptKeys[0] != "escape" {
@@ -175,8 +163,8 @@ dir = "~/st"
 	if strings.Join(cl.Launch, " ") != "claude --model opus" || c.Input(agents.Pi).Launch[0] != "pi" {
 		t.Errorf("launch: claude %q, pi %q", cl.Launch, c.Input(agents.Pi).Launch)
 	}
-	if c.Input(agents.Codex).Answers[0].Keys[0] != "y" {
-		t.Error("codex default lost")
+	if len(c.Input(agents.Codex).Answers) != 0 {
+		t.Errorf("codex fallback should be empty unless configured: %+v", c.Input(agents.Codex).Answers)
 	}
 	if strings.Join(c.Display.SendFiles, ",") != "pdf,csv" || !c.Display.Stream || c.Display.StreamInterval.Duration != 2*time.Second || c.Display.MessageLength != 2000 {
 		t.Errorf("send files %q, stream %v", c.Display.SendFiles, c.Display.Stream)

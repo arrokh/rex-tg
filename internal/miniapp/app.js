@@ -7,12 +7,23 @@
 (function () {
   var tg = window.Telegram && window.Telegram.WebApp;
   if (tg) { tg.ready(); tg.expand(); }
+  function updateSafeArea() {
+    if (!tg) { return; }
+    try {
+      var si = tg.safeAreaInset || {}, ci = tg.contentSafeAreaInset || {};
+      ["top", "bottom", "left", "right"].forEach(function (k) {
+        root.style.setProperty("--sai-" + k, ((si[k] || 0) + (ci[k] || 0)) + "px");
+      });
+    } catch (e) { /* an older Telegram: use CSS safe-area insets */ }
+  }
   var page = document.getElementById("page");
   var title = document.getElementById("title");
 
   // --- the top bar: text size and theme, kept on this phone ---
 
   var root = document.documentElement;
+  updateSafeArea();
+  if (tg && tg.onEvent) { ["safeAreaChanged", "contentSafeAreaChanged"].forEach(function (ev) { tg.onEvent(ev, updateSafeArea); }); }
   function load(k) {
     try { return localStorage.getItem(k); } catch (e) { return null; }
   }
@@ -169,8 +180,26 @@
   }
 
   function setTitle(t) {
+    title.removeAttribute("aria-hidden");
     title.textContent = t || "rex-tg";
     document.title = t || "rex-tg";
+  }
+
+  function clearRepeatedPageTitle(pageTitle, contentText, whole) {
+    function clean(s) { return String(s || "").replace(/\s+/g, " ").trim(); }
+    var label = clean(pageTitle), content = clean(contentText);
+    if (!label || !content) { return; }
+    var suffix = label.slice(-1) === "…" ? 1 : label.slice(-3) === "..." ? 3 : 0;
+    var prefix = suffix ? label.slice(0, -suffix).trim() : label;
+    if (!prefix) { return; }
+    var next = content.charAt(prefix.length);
+    var boundary = !next || /\s/.test(next) || ".,!?;:()[]{}".indexOf(next) >= 0;
+    var repeats = content === label || (content.indexOf(prefix) === 0 &&
+      (whole || prefix.length >= 16) && (suffix > 0 || boundary));
+    if (repeats) {
+      title.textContent = "";
+      title.setAttribute("aria-hidden", "true");
+    }
   }
 
   // --- the live screen ---
@@ -972,17 +1001,8 @@
     // showed through it dimmed, like a stray dark shape.
     try { if (tg && tg.MainButton) { tg.MainButton.hide(); } } catch (e) { /* none */ }
 
-    // Telegram's safe areas (the notch, the home indicator), when it reports them.
-    function insets() {
-      try {
-        var si = tg.safeAreaInset || {}, ci = tg.contentSafeAreaInset || {};
-        ["top", "bottom", "left", "right"].forEach(function (k) {
-          root.style.setProperty("--sai-" + k, ((si[k] || 0) + (ci[k] || 0)) + "px");
-        });
-      } catch (e) { /* an older Telegram: the page's own padding */ }
-    }
-    insets();
-    if (tg && tg.onEvent) { ["safeAreaChanged", "contentSafeAreaChanged"].forEach(function (ev) { tg.onEvent(ev, insets); }); }
+    // The safe-area values are shared by fixed footers on every page.
+    updateSafeArea();
 
     var state = null, asked = 0, timer = null;
     var tab = load("rex-tg.panel.tab");
@@ -2092,7 +2112,7 @@
     box.setAttribute("aria-modal", "true");
     box.setAttribute("aria-label", label);
     box.appendChild(el("div", "grip"));
-    box.appendChild(el("h3", "stitle", label));
+    box.appendChild(el("h2", "stitle", label));
     scrim.appendChild(box);
     var vv = window.visualViewport;
     function fit() {
@@ -2227,7 +2247,7 @@
 
     var blocks = {};   // by note id: the elements of the loaded answers
     var items = {};    // by answer id: { at }
-    var oldest = 0, more = true, loading = false, failed = "", firstLoad = true;
+    var oldest = 0, more = true, loading = false, failed = "", firstLoad = true, titleChecked = false;
 
     function syncBar() {
       var n = notes.length;
@@ -2273,6 +2293,21 @@
     // o: { id, item, at, ord, quote }; again runs after the sheet closes.
     function noteSheet(o, again) {
       var existing = find(o.id);
+      var scrollRoot = document.scrollingElement || document.documentElement;
+      var pagePosition = { x: window.pageXOffset || scrollRoot.scrollLeft || 0, y: window.pageYOffset || scrollRoot.scrollTop || 0 };
+      function restorePagePosition() {
+        function restore() {
+          if (document.querySelector(".scrim")) { return; }
+          var current = window.pageYOffset || scrollRoot.scrollTop || 0;
+          if (Math.abs(current - pagePosition.y) > 1) {
+            window.scrollTo(pagePosition.x, pagePosition.y);
+            scrollRoot.scrollTop = pagePosition.y;
+          }
+        }
+        (window.requestAnimationFrame || function (f) { return setTimeout(f, 0); })(restore);
+        // iOS can move the webview again after the note keyboard closes.
+        setTimeout(restore, 300);
+      }
       hap("light");
       sheetUI(existing ? "Edit note" : "Add a note", function (box, close) {
         var q = el("button", "aquote", o.quote);
@@ -2292,6 +2327,29 @@
         ta.value = existing ? existing.note : "";
         ta.setAttribute("autocapitalize", "sentences");
         box.appendChild(lab);
+        var quick = el("div", "npresets");
+        quick.setAttribute("role", "group");
+        quick.setAttribute("aria-label", "Fill comment");
+        function fillComment(text) { ta.value = text; ok(); }
+        var yes = button("Yes", "btn");
+        yes.addEventListener("click", function () { fillComment("Yes"); });
+        var no = button("No", "btn");
+        no.addEventListener("click", function () { fillComment("No"); });
+        quick.appendChild(yes);
+        quick.appendChild(no);
+        var reusable = existing;
+        if (!reusable) {
+          notes.forEach(function (n) {
+            if (n.id !== o.id && (!reusable || (n.ts || 0) > (reusable.ts || 0))) { reusable = n; }
+          });
+        }
+        if (reusable) {
+          var useExisting = button("Existing comment", "btn");
+          useExisting.setAttribute("aria-label", existing ? "Restore the existing comment" : "Reuse the latest existing comment");
+          useExisting.addEventListener("click", function () { fillComment(reusable.note); });
+          quick.appendChild(useExisting);
+        }
+        box.appendChild(quick);
         box.appendChild(ta);
         var row = el("div", "srow");
         var sv = button("Save", "btn primary big");
@@ -2313,7 +2371,10 @@
         del.addEventListener("click", function () { dropNote(o.id); hap("light"); close(); });
         cancel.addEventListener("click", function () { close(); });
         setTimeout(function () { try { ta.focus(); } catch (e) { /* none */ } }, 30);
-      }, again);
+      }, function () {
+        if (!again) { restorePagePosition(); }
+        if (again) { again(); }
+      });
     }
 
     // --- the review sheet ---
@@ -2703,6 +2764,11 @@
             list.appendChild(card(it));
             oldest = it.id;
           });
+          if (!titleChecked && r.items && r.items.length) {
+            var firstAnswer = list.querySelector(".ans-card .ans");
+            clearRepeatedPageTitle(r.title || (pg && pg.title), firstAnswer && firstAnswer.textContent, false);
+            titleChecked = true;
+          }
           more = !!r.more && !!(r.items && r.items.length);
           refreshBadges();
         })
@@ -2758,6 +2824,7 @@
       var one = { id: 1, at: (pg && pg.at) || "" };
       items[one.id] = one;
       page.className = "ans";
+      clearRepeatedPageTitle(pg && pg.title, page.textContent, true);
       markBlocks(page, one);
       wire(page, one);
       refreshBadges();

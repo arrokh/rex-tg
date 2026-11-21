@@ -130,9 +130,10 @@ rex-tg adds a keyboard under the message box: 🎛 Panel, 🖥 Screen, 📂 File
 
 ### Annotate
 
-✍️ Annotate opens the answers of the agent's current session in the topic, newest first. Scroll down for older ones. Answers from other topics, and from the topic's earlier sessions, never show. The page's title names the topic and the session.
+✍️ Annotate opens the answers of the agent's current session in the topic, newest first. Scroll down for older ones. Answers from other topics, and from the topic's earlier sessions, never show. The page's title names the topic and the session, unless it repeats the opening words of the first answer. Saving a note keeps your reading position.
 
 - Tap a paragraph, a list item, a heading, a table row, or a line of code to add a note to it. Or select part of the text and tap `✍️ Note on selection`. Notes are marked with numbers; tap one to change or delete it.
+- The note editor has quick-fill buttons for `Yes`, `No`, and an existing comment. The existing-comment button restores the saved comment on this note, or reuses the latest saved comment when adding a new one. These buttons only fill the editor; tap `Save`, then use `Review` to send.
 - `Review` lists the notes. You can add a message to the agent. Then choose how to send:
   - `Send to agent`: rex-tg sends the notes to the agent as one queued message. It waits until the agent is idle and follows `/pause`; the topic gets a copy (`✍️ Notes sent to the agent`). Keyboard launches require your verified Tailscale login; signed launches require fresh Telegram data. The action stays on the page's topic and session. If the agent started a new session meanwhile, or the page belongs to another topic, the notes are refused. After a successful send, the notes disappear from this page. An uncertain send keeps the notes and action ID; retries use the same ID. After ten minutes, the page asks you to check the topic before starting another send.
   - `Copy`: copies the notes. Paste them in the topic yourself.
@@ -231,8 +232,8 @@ rex-tg adds a keyboard under the message box: 🎛 Panel, 🖥 Screen, 📂 File
 ### Permission prompts
 
 - Tap a button to send its key to the pane. The buttons go away when the prompt ends. A button of an old prompt is refused.
-- If Rex reports a blocked state without a prompt kind, rex-tg shows buttons only when the screen parses as a question or an exact `Do you want to proceed?` prompt with both Yes and No choices. This works across runtimes, including CUX/Claude. Unknown screens get no guessed actions; answer them on the Mac.
-- `/approve` and `/deny` answer the open prompt too. `/deny` presses Esc, which both Claude Code and Codex read as "no, wait for me"; it never presses an answer that allows, makes a lasting rule, or starts something else.
+- If Rex reports a blocked state without a prompt kind, rex-tg shows answer buttons only when the screen parses as a question or an exact `Do you want to proceed?` prompt with both Yes and No choices. This works across runtimes, including CUX/Claude. Unknown screens, including typed permission screens, still get a redacted alert with no buttons by default; rex-tg does not guess what to press. An explicit `[[agents.pi.answers]]`, `[[agents.claude.answers]]`, or `[[agents.codex.answers]]` list can supply fallback choices only for a typed permission screen when `allow_unknown_permission_answers = true`. Answer an unrecognized prompt on the Mac.
+- `/approve` and `/deny` answer the open prompt too. `/approve` presses only a clearly labeled, one-time Yes/Allow choice; if there is no clear choice, tap the button you want. It never chooses a lasting permission by default. `/deny` presses Esc, which both Claude Code and Codex read as "no, wait for me"; it never presses an answer that allows, makes a lasting rule, or starts something else.
 - Reminders: when a prompt waits for 10 minutes, the topic gets `⏰ Still waiting for your answer`, as a reply to the prompt. More reminders come 10 minutes after the one before, at most 3, and each one replaces the one before. They go away when the prompt ends; a reminder that Telegram did not confirm, or that could not be deleted, stays, and its `✓ Dismiss` button removes it. Set `[alerts] remind_after` and `reminders` to change this, and `remind_after = "0s"` to turn them off.
 - Questions that allow free text get a `✍ Other…` button. Your next message becomes the answer. This is not tested yet (spike S2).
 - Time limits: a Claude Code safety check blocks the request by itself after a while (`automatically block this request in 2:00`). The alert then says `⏳ Answer within 2:00 (by 07:00:57)`, one reminder comes 30 seconds before, and if the time runs out the topic says `⌛ Blocked`.
@@ -336,7 +337,8 @@ launch = ["pi"]                         # What /new runs, one word per item, as 
 paste_enter_delay = "300ms"             # Wait between the paste and the Enter key.
 interrupt_keys = ["escape"]             # Keys that stop the current turn (/interrupt).
 while_working = "steer"                 # What Enter does while the agent works: steer, queue, or unknown.
-answers = []                            # Fallback permission answers. pi has none.
+allow_unknown_permission_answers = false # Keep unknown permission screens no-action by default.
+answers = []                            # Empty by default; pi has no fallback choices.
 
 [agents.pi.choices]                     # Optional. Buttons of /model and /effort, by command name. Replaces the agent's own list.
 model = ["anthropic/claude-sonnet-5-5", "openai/gpt-6-sol"]   # Same for [agents.claude.choices] and [agents.codex.choices].
@@ -346,36 +348,20 @@ launch = ["claude"]
 paste_enter_delay = "300ms"
 interrupt_keys = ["escape"]
 while_working = "steer"
+allow_unknown_permission_answers = false  # Keep unknown permission screens no-action; opt in only for known keys.
 
-[[agents.claude.answers]]               # Fallback permission answers, used when the screen shows no numbered options.
-label = "1 Yes"
-keys = ["1"]
-
-[[agents.claude.answers]]
-label = "2 Always"
-keys = ["2"]
-
-[[agents.claude.answers]]
-label = "4 No"
-keys = ["4"]
-
-[[agents.claude.answers]]
-label = "Esc"
-keys = ["escape"]
+# Fallback choices are empty by default. Add [[agents.claude.answers]] only
+# for a permission prompt whose keys and effects you know, and set the opt-in above.
 
 [agents.codex]
 launch = ["codex"]
 paste_enter_delay = "300ms"
 interrupt_keys = ["escape"]
 while_working = "steer"
+allow_unknown_permission_answers = false  # Keep unknown permission screens no-action; opt in only for known keys.
 
-[[agents.codex.answers]]
-label = "Yes"
-keys = ["y"]
-
-[[agents.codex.answers]]
-label = "No"
-keys = ["escape"]
+# Fallback choices are empty by default. Add [[agents.codex.answers]] only
+# for a permission prompt whose keys and effects you know, and set the opt-in above.
 
 [display]
 mode = "progress"                       # progress, block, or final.
@@ -411,7 +397,7 @@ max_upload_mb = 20                      # Largest photo or file to download from
 [miniapp]
 url = ""                                # The Mini App's public https:// address (see Mini App). Empty turns it off.
 listen = "127.0.0.1:8770"               # Its local address.
-answer_preview = 3000                   # Longer answers show their start and open whole in the Mini App. At least 2000.
+answer_preview = 3000                   # Long-answer preview threshold; split-prone answers use a page too. At least 2000.
 files = true                            # /files opens a read-only browser of the agent's folder in the Mini App.
 changes = true                          # /changes shows what changed in the agent's git repository in the Mini App.
 
@@ -424,11 +410,13 @@ language = ""                           # Language code for whisper.cpp, such as
 dir = "~/.local/state/rex-tg"           # Database, spool, logs, and uploads.
 ```
 
+Unknown prompt layouts have no answer buttons by default, even if an older config still contains fallback answers. A typed permission screen can use `[[agents.pi.answers]]`, `[[agents.claude.answers]]`, or `[[agents.codex.answers]]` only when `allow_unknown_permission_answers = true`; set it only when you know what those keys do. Fallback choices do not apply to questions or untyped prompts.
+
 ### Mini App
 
 The Mini App shows what does not fit a chat message. Its pages open from buttons, and only for you:
 
-- `📄 Whole answer`: an answer longer than `[miniapp] answer_preview` (3000 characters by default) shows its start in the chat. The whole answer, with its tables and code, is in the Mini App, where you can add notes to it and send them to the agent ([Annotate](#annotate)). Such an answer is not sent as one rich message.
+- `📄 Whole answer`: an answer longer than `[miniapp] answer_preview` (3000 characters by default) shows its start in the chat. The whole answer, with its tables and code, is in the Mini App, where you can add notes to it and send them to the agent ([Annotate](#annotate)). Such an answer is not sent as one rich message. If rich messages are off, an answer that would split into multiple chat messages also opens as a Whole answer page, even when it is shorter than this setting.
 - `📝 2 files · +40 −12`: what the turn changed in the agent's git repository, file by file. rex-tg takes a snapshot of the working files (tracked and new, not ignored) when a turn starts and when it ends with its answer. The snapshots use a copy of git's index, so your own index stays as it is. They write objects into the repository, which git cleans up later. Other agents that work in the same repository at the same time show up in it too. Secrets are removed from the diff. A folder that is not a git repository gets no button. Set `[display] show_changes = false` to turn it off. A repository with more than 300 new files that are not ignored, or more than 20 MB of them, gets no button: the snapshot would be slow.
 - `🖥 Live screen`, under a `/screen` picture: the pane's screen with its colors, drawn as a terminal (xterm.js), read again every 2 seconds while the page is open, and not while it is hidden. It fills the phone's height and keeps the bottom line in view; scroll up to read back, and `↓` goes to the bottom again. `Pause` stops the refresh while you read. `Fit width` makes the font smaller, so a wide screen fits the phone. Secrets are removed, as on every screen; a line that held one shows without colors. The page only shows the screen; it types nothing. A topic has one live screen page, so all its buttons open the same page.
 - `📂 Browse files`, from `/files`: the agent's folder as a tree, read-only. Tap a folder to open or close it in place, and a file to read it; `‹ Files` or Telegram's back button goes back to the tree as you left it. `Collapse all` closes every folder, and `↻` loads the tree again. Markdown files are rendered, other text is shown as it is, with secrets removed, and pictures (PNG, JPEG, GIF, WebP up to 4 MB) are shown. Of a long text file, the first 512 KB are shown; a binary file shows only its size. The browser never leaves the folder: a path with `..` stays inside it, and a link that points out of it does not open. It hides `.git`, files that git ignores (such as `.env` and `node_modules`), and files with names of keys and credentials (`.env*`, `*.pem`, `*.key`, `id_rsa*`, `credentials.json`, and the like, in any case; `.env.example` is shown). In a folder that is not a git repository, it also hides every name that starts with a dot. A link to a hidden file does not open either. A folder shows at most 2000 entries. Listings inspect at most 4096 raw names; larger folders show a bounded subset with a warning that entries may be omitted.
@@ -439,7 +427,7 @@ The Mini App shows what does not fit a chat message. Its pages open from buttons
 
 A table on a page scrolls sideways in its own box, and the page stays still. A column is as wide as its text, up to about 18 em; longer text wraps at words.
 
-Every page has a bar at the top. `A−` and `A+` make the text smaller or bigger, and the percentage between them sets it back to 100%. ☀/🌙 switches between light and dark; tapping back to Telegram's own scheme follows Telegram again. The page keeps your choices on the phone.
+Every page has a bar at the top. `A−` and `A+` make the text smaller or bigger, and the percentage between them sets it back to 100%. ☀/🌙 switches between light and dark; tapping back to Telegram's own scheme follows Telegram again. The page keeps your choices on the phone. Fixed footers and sheets respect Telegram's safe area, including the home-indicator area. Annotate's Review bar and bottom sheets leave extra room when Telegram reports no inset.
 
 The Mini App needs an HTTPS address that reaches this Mac. rex-tg answers only inside your tailnet, so the phone must run Tailscale too. It is off until `url` is set. With Tailscale:
 
@@ -452,7 +440,7 @@ url = "https://<your-mac>.<tailnet>.ts.net:8443"   # https:// only. Empty turns 
 listen = "127.0.0.1:8770"                           # the local target of tailscale serve; keep it on 127.0.0.1
 tailnet_only = true                                 # answer only requests from your tailnet
 # tailnet_users = ["you@example.com"]             # who may use the buttons' key; empty: rex-tg learns your login
-answer_preview = 3000                               # longer answers open in the Mini App
+answer_preview = 3000                               # longer answers open in the Mini App; split-prone answers use a page too
 files = true                                        # /files: browse the agent's folder
 changes = true                                      # /changes: what changed in the agent's repository
 ```
@@ -483,7 +471,7 @@ A code block with a line longer than 80 characters does not fit a phone. It stay
 
 A table that is wider than a phone (more than 40 characters) becomes a list: one block per row, with the first cell in bold and `Column: value` for the others. A narrower table stays a monospace grid.
 
-Final answers go out in Telegram's rich message format (`[display] rich_messages`, on by default), so Telegram renders tables, code, and headings itself. An answer of up to 32768 characters goes as one rich message. If Telegram rejects one with a 400 error, rex-tg sends the answer again in its own format (Telegram HTML, with the tables as above): as one message when it fits one formatted part and at most 4000 UTF-16 units, else as a `.md` file. A rate limit (429) does not change the format: the answer waits, and it goes out as a rich message. Set `rich_messages = false` to always use rex-tg's own format. There, an answer longer than 16000 characters comes as a `.md` file. With the Mini App set up, an answer longer than `answer_preview` shows its start instead (see [Mini App](#mini-app)).
+Final answers go out in Telegram's rich message format (`[display] rich_messages`, on by default), so Telegram renders tables, code, and headings itself. An answer of up to 32768 characters goes as one rich message. If Telegram rejects one with a 400 error, rex-tg sends the answer again in its own format (Telegram HTML, with the tables as above): as one message when it fits one formatted part and at most 4000 UTF-16 units, else as a `.md` file. A rate limit (429) does not change the format: the answer waits, and it goes out as a rich message. Set `rich_messages = false` to always use rex-tg's own format. There, an answer longer than 16000 characters comes as a `.md` file. With the Mini App set up, an answer longer than `answer_preview` shows its start instead; an answer that would split into multiple messages also uses a Whole answer page instead of chat chunks (see [Mini App](#mini-app)).
 
 ## Voice notes
 

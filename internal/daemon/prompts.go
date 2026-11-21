@@ -144,9 +144,9 @@ func (d *daemon) endedOutcome(al store.Alert) string {
 	return "✔ Answered on the Mac"
 }
 
-// evAlertFollow asks for a look at the screen after an answer: a question
-// of several shows the next one, or its review page, with the pane still
-// blocked and no state change to post it.
+// evAlertFollow asks for a look at the screen after an answer. A changed
+// follow-up prompt is posted even when its controls are unknown; that alert
+// has no answer buttons.
 type evAlertFollow struct {
 	thread int64
 	hash   string // the prompt that was answered
@@ -163,10 +163,10 @@ func (d *daemon) onAlertFollow(e evAlertFollow) {
 	d.follows[e.thread] = alertFollow{hash: e.hash, due: d.now().Add(d.timing.AlertFollow), tries: 2}
 }
 
-// tickFollows posts the alert of a prompt that came after an answered one
-// (core): when the pane is still blocked, no alert is open, and the screen
-// shows another prompt with answers. It looks twice: after AlertFollow and
-// after three times that, since an agent may take a moment to redraw.
+// tickFollows checks the screen after an answer (core): when the pane is
+// still blocked and no alert is open, a changed screen gets an alert. It
+// looks twice: after AlertFollow and after three times that, since an agent
+// may take a moment to redraw.
 func (d *daemon) tickFollows(now time.Time) {
 	for tid, f := range d.follows {
 		if now.Before(f.due) {
@@ -192,10 +192,9 @@ func (d *daemon) tickFollows(now time.Time) {
 		if als, err := d.st.OpenAlerts(d.ctx, tid); err != nil || len(als) > 0 {
 			continue
 		}
+		// Keep an empty kind empty. A follow-up screen that the parser does
+		// not recognize must not become a permission prompt by assumption.
 		kind, hash := p.StateKind, f.hash
-		if kind != store.AlertQuestion {
-			kind = store.AlertPermission
-		}
 		d.alertBusy[tid] = true
 		d.spawn(func() {
 			defer d.emit(evAlertDone{tid})
@@ -234,16 +233,14 @@ func denyAnswer(al store.Alert) (int, bool) {
 	return 0, false
 }
 
-// notPlainNo tells whether a No answer does more than refuse: makes a
-// lasting rule, starts something else, or opens a text field.
+// notPlainNo reports a No label with any extra meaning or action. In a menu
+// without Esc, only a plain No is safe for /deny.
 func notPlainNo(label string) bool {
-	l := strings.ToLower(label)
-	for _, w := range []string{"block", "future", "always", "never", "don't ask", "do not ask", "ultraplan", "cloud", "keep planning", "start implementing"} {
-		if strings.Contains(l, w) {
-			return true
-		}
+	f := strings.Fields(strings.ToLower(label))
+	if len(f) > 1 && strings.Trim(f[0], "0123456789.)") == "" {
+		f = f[1:]
 	}
-	return false
+	return len(f) != 1 || strings.Trim(f[0], ",.:;!") != "no"
 }
 
 // alertNote takes a text reply to an open alert as a note for the agent

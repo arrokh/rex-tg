@@ -617,3 +617,10 @@ func alertHash(lines []string) string {
 	}
 	return screenHash(out)
 }
+
+// followUpScreenChanged allows an unrecognized but changed blocked screen to
+// reach alertContent, which will show it without buttons. Only the screen of
+// the answer just sent is suppressed.
+func followUpScreenChanged(lines []string, previous string) bool {
+	return previous == "" || alertHash(lines) != previous
+}

@@ -77,6 +77,23 @@ func TestCuxShellApprovalWithUntypedBlockedStateGetsTelegramAlert(t *testing.T) 
 	}
 }
 
+func TestUnknownUntypedBlockedPromptGetsSafeNoActionAlert(t *testing.T) {
+	e, _, thread := piTopic(t, "pi-unrecognized-prompt")
+	e.setScreen("A future prompt that rex-tg does not know\nPress a key to continue")
+	e.setStatus("blocked", "")
+
+	alert := e.waitText(thread, "Agent needs input")
+	if len(buttonTexts(alert)) != 0 || !strings.Contains(alert.Text, "No keys will be sent") {
+		t.Fatalf("unknown prompt was not a no-action alert: %+v", alert)
+	}
+	e.waitAlertSaved(thread)
+	e.tg.PushReply(chatID, thread, ownerID, alert.ID, "", "yes, continue")
+	e.waitText(thread, "This question takes only its answers")
+	if len(e.keys()) != 0 || len(e.pastes()) != 0 {
+		t.Fatalf("an unknown prompt sent input: keys %v, pastes %v", e.keys(), e.pastes())
+	}
+}
+
 // limitScreen is a Claude Code safety check that blocks itself after a
 // time limit, as on screen.
 func limitScreen(limit string) string {
