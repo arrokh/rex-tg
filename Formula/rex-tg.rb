@@ -2,9 +2,7 @@ class RexTg < Formula
   desc "Bridge coding agents in Rex terminal panes to Telegram"
   homepage "https://github.com/arrokh/rex-tg"
   # A new release: push a tag, run `make formula-release TAG=<tag>`, and
-  # put its url lines here. The repo is private, so the formula clones the
-  # tag with git (the user's own GitHub login) instead of downloading an
-  # archive.
+  # put its URL, tag, and revision here. Homebrew clones the pinned Git tag.
   url "https://github.com/arrokh/rex-tg.git",
       tag:      "v0.6.6",
       revision: "e6274dd3e163b4696093134a3e05276cb195ffc4"
