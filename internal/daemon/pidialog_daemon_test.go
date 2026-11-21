@@ -25,6 +25,20 @@ func piDialog(spinner, cursor string) string {
 		"~/work/demo (main)\n"
 }
 
+// /approve is for permission prompts, not Pi's general Yes/No question dialog.
+func TestApproveDoesNotAnswerPiQuestionDialog(t *testing.T) {
+	e, _, thread := piTopic(t, "pi-dialog-approve")
+	e.setScreen(piDialog("a", "Yes"))
+	e.setStatus("blocked", "permission")
+	alert := e.waitText(thread, "Clear the plan?")
+	e.say(thread, "/approve")
+	e.waitText(thread, "no clear one-time Yes or Allow answer")
+	e.never("/approve answering a question", 300*time.Millisecond, func() bool { return len(e.keys()) > 0 })
+	if buttonData(alert, "1 Yes") == "" || !e.hasText(thread, "Clear the plan?") {
+		t.Fatalf("question alert was not left open: %+v", alert)
+	}
+}
+
 // An extension dialog of pi shows in Telegram as a question with a button per
 // answer. The alert stays open while the dialog is on screen, even when the
 // rest of the screen changes. A tap moves the cursor and presses Enter. The

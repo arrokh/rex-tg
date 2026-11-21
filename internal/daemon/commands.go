@@ -724,6 +724,9 @@ var _ = agents.Pi
 // picks the first option on a question or a permission whose choices are not
 // clear; lasting choices such as "don't ask again" stay manual taps.
 func approveAnswer(al store.Alert) (int, bool) {
+	if al.Kind != store.AlertPermission {
+		return 0, false
+	}
 	for i, o := range al.Options {
 		if len(o.Keys) == 1 && o.Keys[0] == "escape" {
 			continue
@@ -748,7 +751,7 @@ func approveAnswer(al store.Alert) (int, bool) {
 
 func lastingChoice(label string) bool {
 	l := strings.ToLower(label)
-	for _, w := range []string{"always", "never", "don't ask", "do not ask", "future", "session", "remember", "permanent", "forever", "everything", "every time", "each time", "default", "trust", "allowlist", "allow list", "whitelist", "until revoked", "from now on"} {
+	for _, w := range []string{"always", "never", "don't ask", "do not ask", "future", "session", "remember", "permanent", "forever", "everything", "every time", "each time", "default", "trust", "allowlist", "allow list", "whitelist", "until revoked", "from now on", "workspace", "project", "repository", "repo", "folder", "directory", "host", "machine", "computer", "system"} {
 		if strings.Contains(l, w) {
 			return true
 		}
