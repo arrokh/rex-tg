@@ -1,10 +1,10 @@
 # rex-tg reference
 
-This file has the details that the [README](../README.md) leaves out. For the full feature, CLI, Telegram, and button catalog plus component and recovery diagrams, see the [architecture and catalog guide](architecture.md).
+New here? Follow the [quick start](quickstart.md) to install and send a test prompt. This guide covers setup options, daily use, and service operations. For every CLI command, Telegram command, and button, see the [command catalog](architecture.md#feature-and-command-catalog). [Back to README](../README.md).
 
 ## On this page
 
-[Setup](#setup-details) · [Using rex-tg](#using-rex-tg) · [All settings](#configuration) · [Mini App](#mini-app) · [Voice](#voice-notes) · [Logs](#logs) · [Uninstall](#uninstall) · [Troubleshooting](#troubleshooting) · [Privacy](#privacy)
+[Setup](#setup-details) · [Using rex-tg](#using-rex-tg) · [All settings](#configuration) · [Mini App](#mini-app) · [Voice](#voice-notes) · [Run, stop, and update](#run-stop-and-update) · [Logs](#logs) · [Uninstall](#uninstall) · [Troubleshooting](#troubleshooting) · [Privacy](#privacy)
 
 ## Setup details
 
@@ -12,18 +12,20 @@ This file has the details that the [README](../README.md) leaves out. For the fu
 
 ```sh
 brew tap arrokh/rex-tg https://github.com/arrokh/rex-tg
-brew trust --formula arrokh/rex-tg/rex-tg   # if your Homebrew version requires tap trust
-brew install rex-tg           # the newest release
-brew install --HEAD rex-tg    # or: build `main`
+# If Homebrew requires trust for the tap's formula:
+# brew trust --formula arrokh/rex-tg/rex-tg
+brew install arrokh/rex-tg/rex-tg           # released version pinned by the formula
+# Or build the latest main instead:
+# brew install --HEAD arrokh/rex-tg/rex-tg
 ```
 
 Homebrew builds from source, so it needs Go (it installs it as a build tool).
 
-Homebrew gets the tagged source with `git clone`. If repository access is restricted, your GitHub account must have access through your Git login; `gh auth setup-git` can configure Git to use an existing GitHub login. Public repository access does not require a project credential. The MIT license does not change repository visibility.
+Homebrew clones the pinned Git tag from the public repository. No GitHub token is needed to install from this tap.
 
 `rex-tg install` writes the stable path `<prefix>/opt/rex-tg/bin/rex-tg`, not the versioned Cellar path. That path stays valid after an upgrade.
 
-Upgrade with `brew upgrade rex-tg` (add `--fetch-HEAD` for a HEAD install). The daemon restarts itself within about a minute, and the topics stay linked. Run `rex-tg install` again when the release notes say agent integrations or skills changed. `rex-tg doctor` checks them.
+For upgrades, see [Run, stop, and update](#run-stop-and-update). Add `--fetch-HEAD` to `brew upgrade` if you installed HEAD.
 
 If you installed with `make install` before, move to the brew binary in two steps:
 
@@ -34,7 +36,18 @@ If you installed with `make install` before, move to the brew binary in two step
 
 To remove: run `rex-tg uninstall` first, then `brew uninstall rex-tg`.
 
-**Release steps (maintainers).** Test the release source and open a PR first. Tag the intended source commit, push the tag, and publish release notes with known limitations. Title the GitHub release with the tag only (for example, `v0.6.6`); GitHub adds its “Latest” badge separately. Run `make formula-release TAG=<tag>`; put its exact URL, tag, and revision into `Formula/rex-tg.rb`. Include that formula update in a reviewed PR to `main`. Once it is merged, users get the release with `brew update && brew upgrade rex-tg`. Never move a published tag. Retain the root license and third-party notices when distributing source or binaries. See the [public-launch checklist](../CONTRIBUTING.md#maintainer-checklist-before-a-public-launch).
+### Build from source
+
+Install [mise](https://mise.jdx.dev/) and make, then run:
+
+```sh
+git clone https://github.com/arrokh/rex-tg.git
+cd rex-tg
+mise install
+mise exec -- make install
+```
+
+This builds `main` and places the binary in `~/.local/bin`. Add that directory to `PATH` if needed. This step does not install integrations or start the daemon. Continue with [Create your bot](quickstart.md#3-create-your-bot) in the quick start. Do not run `make install` over a symlink that points to a Homebrew binary.
 
 ### Token and pairing code (`rex-tg login`)
 
@@ -56,7 +69,7 @@ The command changes these files:
 - **pi:** writes the extension `~/.pi/agent/extensions/rex-tg.ts`. It sends `session_start`, `session_shutdown`, `agent_start`, and `agent_end` to rex-tg.
 - **Claude Code:** installs the personal skill `~/.claude/skills/rex-tg/SKILL.md`.
 - **Codex and Pi:** install one shared skill at `~/.agents/skills/rex-tg/SKILL.md`.
-- **launchd:** writes `~/Library/LaunchAgents/local.rex-tg.plist` and starts the daemon. launchd starts it at login and restarts it if it stops.
+- **launchd:** writes `~/Library/LaunchAgents/local.rex-tg.plist` and starts the daemon. launchd starts it at login and restarts it on failure.
 
 Before it changes `settings.json` or `hooks.json`, rex-tg saves a backup next to the file. It keeps the 5 newest backups. Skill files are marked as rex-tg-owned; replacing one or removing it saves a backup too. If a skill file already exists at an install path and is not marked as rex-tg's, install leaves it alone and reports a conflict. Move that file before running install again.
 
@@ -93,14 +106,16 @@ In a project folder, run `rex-tg new pi`, `rex-tg new claude`, `rex-tg new codex
 
 ### Commands in a topic
 
-Text that starts with `/` goes to the agent, except the commands below and the main-chat commands (`/agents`, `/new`, and so on). `//name` sends `/name` to the agent. Such an agent command, like `/restart` or `/compact`, waits until the agent is idle. An agent does not record its slash commands as prompts, so the 👍 comes as soon as the command is typed.
+See the [active Telegram command catalog](architecture.md#telegram-commands) for the full list, including commands not shown in Telegram's slash menu. In a linked topic, unrecognized slash commands go to the agent. Use `//name` to send `/name` directly to the agent when the bot would otherwise handle it. Agent commands wait until the agent is idle; 👍 confirms typing, not successful execution.
+
+Common commands and settings:
 
 | Command | What it does |
 | --- | --- |
 | `/info` | Shows the session, the pane, the state, and the settings. |
 | `/screen [lines]`, `/screen text [lines]` | Sends the pane's screen as a picture, or as text. See [`/screen`](#screen). |
 | `/files`, `/changes` | Opens the read-only file browser or available git comparisons in the Mini App. |
-| `/approve`, `/deny` | Answers the open prompt. |
+| `/approve`, `/deny` | Selects a recognized answer to an open permission prompt. |
 | `/esc`, `/interrupt`, `/key <keys>` | Presses Escape, stops the turn, or presses keys. |
 | `/force <text>` | Bypasses readiness and prompt waiting; owner, live-target, process, and pause checks remain. |
 | `/model [name]`, `/effort [level]` | Shows or changes the model and the thinking effort. See [`/model` and `/effort`](#model-and-effort). |
@@ -500,6 +515,24 @@ language = "en"
 rex-tg converts a voice note or audio file to 16 kHz WAV with ffmpeg, and whisper-cli transcribes it. The bot replies with 🎤 and the text. The text then goes to the agent like any message.
 
 When voice is off, the bot replies `Voice notes need whisper.cpp; see the README.`
+
+## Run, stop, and update
+
+`rex-tg install` starts a per-user launchd service. It starts at login; you do not need to keep a terminal open. Keep the Mac awake and Rex running to use the bridge. rex-tg cannot start Rex or wake the Mac.
+
+| Task | Command on the Mac |
+| --- | --- |
+| Restart after changing config | `launchctl kickstart -k gui/$(id -u)/local.rex-tg` |
+| Stop the background service | `launchctl bootout gui/$(id -u)/local.rex-tg` |
+| Load the background service again | `rex-tg install` |
+| Check topic state | `rex-tg status` (add `--all` for closed topics) |
+| Remove the integrations | See [Uninstall](#uninstall). |
+
+Restarting interrupts any in-flight work in the bridge. If a prompt may have been pasted, check the pane rather than sending it again.
+
+**Foreground mode.** On a fresh setup, run `rex-tg install --no-load` to install the integrations without loading the launchd job. If the job is already running, stop it first. Run `rex-tg daemon --log-stderr` and keep that terminal open. Press `Ctrl+C` to stop it. Do not run two pollers for the same bot token.
+
+**Updates.** For Homebrew, run `brew update && brew upgrade rex-tg`. For source builds, run `git pull --ff-only && mise exec -- make install` from the checkout. The launchd service notices a binary replacement and restarts when safe, usually within about a minute. Restart a foreground daemon yourself. If the [release notes](https://github.com/arrokh/rex-tg/releases) mention integration or skill changes, run `rex-tg install` again and restart your agents. Use `--no-load` if you want to keep using foreground mode.
 
 ## Logs
 

@@ -578,19 +578,17 @@ The first line is the topic name (section 7), the state, and how long the agent 
 - A redraw uses the registry's state, so it runs no Rex scan. `↻ Refresh` scans first.
 - The list stays within Telegram's limits (4096 characters, 100 buttons): at most 20 agents, and then "… and N more". The waiting ones come first, so they are never cut.
 
-Commands in the main chat: `/agents`, `/new` (start an agent, see below), `/rt` (rex-tg's control panel, 8.9a), `/topics` (topics and their states), `/status` (daemon health), `/pause` and `/unpause` (stop or allow typing into panes), `/help`. They work in a topic too.
-
-Commands in a topic: `/info`, `/screen [lines]` (a picture; `/screen text` sends text, see below), `/approve`, `/deny`, `/esc`, `/interrupt`, `/key <keys>`, `/force <text>`, `/model [value]`, `/effort [level]`, `/mode progress|block|final`, `/verbose on|full|off`, `/reasoning on|off`, `/resend [id]`, `/mute`, `/unmute`, `/at` (8.9), `/rename <name>` (8.9), `/unlink`, `/help`.
+See the [Telegram command catalog](architecture.md#telegram-commands) for active commands and their scopes.
 
 **`/screen`.** It reads the pane (`rex capture --trim`), redacts the whole text, keeps the last `[lines]` lines (30 by default, at most 80), and renders them to a PNG (`internal/termimg`): Menlo at 2x, light text on a dark background, a wide character in two cells, at most 60 lines and 200 columns, and within Telegram's photo limits (each side and the sum of both at most 10000 px). Redaction comes first, so the picture never holds an unredacted secret. The picture goes out with `sendPhoto`, silently, in one call from a worker, with the topic name and the time as caption. It does not use the outbox, so it is never sent again: a failure with an unknown outcome sends nothing more. When Telegram answers 400, or the request never left, or the picture cannot be made, the text goes out instead, as `<pre>`. `/screen text` always sends text, the last 3800 characters at most. Without Menlo, the picture uses a small built-in font.
 
 How a topic routes text that starts with `/` (D15):
 
-- The commands above go to the bot.
-- Any other `/` text goes to the agent unchanged, for example `/compact`, `/model`, or `/clear`.
+- Recognized bot commands go to the bot. For example, `/model` is intercepted; use `//model` to reach the agent's own command.
+- Unrecognized slash commands go to the agent, for example `/compact` or `/clear` if the agent supports them.
 - `//name` sends `/name` to the agent. Use it for an agent command that has the same name as a bot command, such as `//help`, or `//new`: pi and Codex start a new conversation with `/new`, but in a topic `/new` goes to the bot.
 
-The topic commands avoid the names that the agents use most, such as `/status`. Telegram cannot show a different command menu per topic, so `setMyCommands` registers the topic commands. In the main chat, a topic command answers "Use this inside a topic."
+Telegram cannot show a different command menu per topic. `setMyCommands` registers a subset of bot commands; the full routing list is larger. In the main chat, a linked-topic-only command answers "Use this inside a topic."
 
 rex-tg registers the menu twice: for the default scope, and for the owner's chat once paired. Telegram shows a chat's own list first, so the second list also replaces an older list that another program left for that chat (found live: the menu showed `/commands /sessions /sync /upgrade`). `rex-tg doctor` shows which list the owner sees. Lists for one language are not checked.
 

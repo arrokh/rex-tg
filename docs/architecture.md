@@ -494,19 +494,21 @@ Run these in a source checkout, preferably with `mise exec -- make <target>`. Th
 
 ### Telegram commands
 
-These are messages to your bot. Ownership checks apply to all post-pairing commands. Bot command names are case-insensitive; a command addressed to another bot is ignored.
+These are the active text commands for your bot, including commands that are not in Telegram's slash menu. Ownership checks apply to all post-pairing commands. Bot command names are case-insensitive; a command addressed to another bot is ignored. See [routing](../internal/inbound/route.go) and [handlers](../internal/daemon/commands.go) for the source of truth.
 
 #### Main-chat and global commands
 
-These also work from linked topics. An unlinked Threaded Mode topic acts as the main chat. `/pause` and `/unpause` have global effect wherever sent.
+An unlinked Threaded Mode topic acts as the main chat. These commands also work in linked topics unless noted. `/pause` and `/unpause` have global effect wherever sent.
 
 | Command | Effect |
 | --- | --- |
 | `/start <code>` | Pair during setup with the code printed by `login`/`pair`. It is not an agent-start command. |
 | `/agents` | Show the live agents list and topic-opening buttons. |
+| `/attach` | List available agents to link to this existing Telegram topic. Requires a topic; unlink a live topic before attaching a different agent. |
 | `/new [agent [folder]]` | Start an agent. Without arguments, pick agent/folder interactively. Example: `/new pi ~/work/app`. Agent arguments are a **CLI** feature, not free-form Telegram `/new` flags. |
 | `/rt` | Open the Mini App control panel, if configured. |
 | `/annotate` | Explain how to open Annotate from its keyboard button; the command itself does not submit notes. |
+| `/templates` | Explain how to open Templates from its keyboard button; the command itself does not send a prompt. |
 | `/topics` | List known topics and states. |
 | `/status` | Show daemon health, queues, and relevant Telegram holds. |
 | `/pause` | Persistently stop typing and Telegram-driven new-agent starts. Outgoing replies continue. |

@@ -1,6 +1,6 @@
 # Contributing to rex-tg
 
-Thanks for helping. Start with the [README](README.md) and the [architecture, feature, and command guide](docs/architecture.md). [AGENTS.md](AGENTS.md) contains repository rules for coding agents; the same safety and test rules apply to human contributions.
+Thanks for helping. For user setup, see the [quick start](docs/quickstart.md). For code changes, start with the [architecture guide](docs/architecture.md), [system design](docs/design.md), and [package contracts](docs/implementation.md). The [plan](docs/plan.md) and [spikes](docs/spikes/) are dated research, not current compatibility guarantees. [AGENTS.md](AGENTS.md) contains repository rules for coding agents; the same safety and test rules apply to human contributions.
 
 ## Set up a development checkout
 
@@ -54,14 +54,11 @@ For bugs, include macOS version, `rex-tg version`, agent/runtime version, expect
 
 Contributions to this repository are submitted under its [MIT License](LICENSE). Keep third-party notices with copied or vendored code, and identify its source and version. Do not contribute code or data you cannot legally share. There is no separate CLA specified by this repository.
 
-## Maintainer checklist before a public launch
+## Publish a release (maintainers)
 
-Adding a license does **not** change repository visibility. Before making a restricted repository public:
+1. Test the intended source commit. Check new assets and examples for private data and confirm redistribution rights. Keep `LICENSE` and [third-party notices](THIRD_PARTY_NOTICES.md) in release distributions.
+2. Tag the tested commit and push the tag. Publish [GitHub release notes](https://github.com/arrokh/rex-tg/releases) that mention user-visible changes, required integration updates, and known limits. Use the tag alone as the release title (for example, `v0.6.6`). Never move a published tag.
+3. Run `make formula-release TAG=<tag>` and copy the emitted URL, tag, and revision into `Formula/rex-tg.rb`. Submit the formula update in a reviewed PR to `main`.
+4. Check that the tag and tap are accessible without GitHub credentials. Verify the Homebrew install and upgrade paths in a clean environment, not against a live bot.
 
-- Audit the **full Git history**, not just the current files, for credentials, transcripts, logs, screenshots, private infrastructure, and access-restricted links. Rotate any exposed credentials; deleting a file from a later commit is not enough.
-- Confirm ownership and permission to distribute the original work, bundled assets, and linked dependencies. Preserve required third-party notices in source and release distributions.
-- Publish a release that includes `LICENSE`, then update the Homebrew tag/revision and add `license "MIT"` metadata. The currently pinned v0.5.1 source predates this license file.
-- Check that install URLs, release tags, and the Homebrew tap are accessible to unauthenticated users if that is the intended distribution model.
-- Review the security-reporting channel and enable GitHub private vulnerability reporting if appropriate. Do not advertise a channel before it exists.
-- Follow up the known reliability issues in the [hardening review](docs/reviews/implementation-hardening.md#remaining-issues-and-limits).
-- Decide repository visibility, access, moderation, and support policy explicitly. This docs PR does not change account settings or certify the history safe for public release.
+If credentials were ever committed, rotate them; deleting a file does not remove it from Git history. Track known reliability work in the [hardening review](docs/reviews/implementation-hardening.md#remaining-issues-and-limits).
