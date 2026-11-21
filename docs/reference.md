@@ -34,7 +34,7 @@ If you installed with `make install` before, move to the brew binary in two step
 
 To remove: run `rex-tg uninstall` first, then `brew uninstall rex-tg`.
 
-**Release steps (maintainers).** Test the release source and open a PR first. Tag the intended source commit, push the tag, and publish release notes with known limitations. Run `make formula-release TAG=<tag>`; put its exact URL, tag, and revision into `Formula/rex-tg.rb`. Include that formula update in a reviewed PR to `main`. Once it is merged, users get the release with `brew update && brew upgrade rex-tg`. Never move a published tag. Retain the root license and third-party notices when distributing source or binaries. See the [public-launch checklist](../CONTRIBUTING.md#maintainer-checklist-before-a-public-launch).
+**Release steps (maintainers).** Test the release source and open a PR first. Tag the intended source commit, push the tag, and publish release notes with known limitations. Title the GitHub release with the tag only (for example, `v0.6.6`); GitHub adds its “Latest” badge separately. Run `make formula-release TAG=<tag>`; put its exact URL, tag, and revision into `Formula/rex-tg.rb`. Include that formula update in a reviewed PR to `main`. Once it is merged, users get the release with `brew update && brew upgrade rex-tg`. Never move a published tag. Retain the root license and third-party notices when distributing source or binaries. See the [public-launch checklist](../CONTRIBUTING.md#maintainer-checklist-before-a-public-launch).
 
 ### Token and pairing code (`rex-tg login`)
 

@@ -6,6 +6,7 @@ Guidance for coding agents (Claude Code, Codex, pi, and others) that work in thi
 
 - Do not add AI co-author trailers to commit messages. No `Co-Authored-By: Claude …` line, and no such line for any other agent or tool.
 - Commit only when you are asked to. Never force-push `main`.
+- Title GitHub releases with the version tag only (for example, `v0.6.6`). Do not prefix the repository name; GitHub shows the “Latest” badge separately.
 
 ## Build and check
 
