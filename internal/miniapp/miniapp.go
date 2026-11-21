@@ -35,7 +35,7 @@ import (
 
 // Page is what the Mini App shows.
 type Page struct {
-	Kind   string `json:"kind"`             // KindAnswer, KindDiff, KindScreen, KindFiles, KindChanges or KindControl
+	Kind   string `json:"kind"`             // answer, diff, screen, files, changes, control, annotate, or templates
 	Title  string `json:"title"`            // a short title
 	Text   string `json:"text"`             // Markdown (an answer) or a unified diff
 	Thread int64  `json:"thread,omitempty"` // the topic of a screen, files, changes, annotate or answer page (0 on answer pages made before Annotate)
@@ -264,7 +264,7 @@ var (
 // /api/screen?id=…, /api/files?id=…&path=… and
 // /api/changes?id=…&base=…[&path=…&new=1], and the control panel's
 // /api/control?id=…, /api/control/folders?id=…&path=…[&hidden=1] and
-// POST /api/control/do?id=…
+// POST /api/control/do?id=… and /api/templates/send?id=…
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /app", func(w http.ResponseWriter, r *http.Request) {
@@ -297,6 +297,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/annotate", s.annotateList)
 	mux.HandleFunc("POST /api/annotate/draft", s.annotateDraft)
 	mux.HandleFunc("POST /api/annotate/send", s.annotateSend)
+	mux.HandleFunc("POST /api/templates/send", s.templateSend)
 	if !s.tailnet {
 		return mux
 	}
@@ -337,8 +338,8 @@ func (s *Server) headers(w http.ResponseWriter, ctype string) {
 
 // allowed checks that a request is the owner's: signed by Telegram, or
 // carrying the keyboard's key. The key reads pages and submits validated
-// control-panel actions. Annotate sends require the stronger check in
-// keyCanSendNotes. It answers a refused request itself.
+// control-panel actions. Page-bound agent messages require a stronger check
+// in keyCanSendBoundMessage. It answers a refused request itself.
 func (s *Server) allowed(w http.ResponseWriter, r *http.Request) bool {
 	s.headers(w, "application/json")
 	if r.Header.Get("X-Telegram-Init-Data") == "" && r.Header.Get("X-Rex-Key") != "" {
@@ -374,11 +375,19 @@ func (s *Server) keyed(r *http.Request) bool {
 	return k != "" && r.Header.Get("X-Telegram-Init-Data") == "" && s.keyOK != nil && s.owner() != 0 && s.keyOK(k)
 }
 
-// keyCanSendNotes permits a keyboard page to send notes only when it came
+// keyCanSendBoundMessage permits a keyboard page to send only when it came
 // through Tailscale and that login is trusted for the current key.
-func (s *Server) keyCanSendNotes(r *http.Request) bool {
+func (s *Server) keyCanSendBoundMessage(r *http.Request) bool {
 	return s.tailnet && s.logins != nil && s.keyed(r) && fromTailnet(r) &&
 		s.logins.KeyLoginOK(r.Header.Get("X-Rex-Key"), tailnetLogin(r))
+}
+
+func (s *Server) canSendBoundMessage(r *http.Request) bool {
+	if s.keyed(r) {
+		return s.keyCanSendBoundMessage(r)
+	}
+	_, err := CheckInitData(r.Header.Get("X-Telegram-Init-Data"), s.secret, s.now(), ActMaxAge)
+	return err == nil
 }
 
 // noteRefusal counts a refused request; the address may be reachable by
@@ -414,7 +423,7 @@ func (s *Server) page(w http.ResponseWriter, r *http.Request) {
 	switch p.Kind {
 	case KindDiff:
 		body = RenderDiff(p.Text)
-	case KindScreen, KindFiles, KindChanges, KindControl, KindAnnotate: // the page asks for its content itself
+	case KindScreen, KindFiles, KindChanges, KindControl, KindAnnotate, KindTemplates: // the page asks for its content itself
 	default:
 		body = RenderAnswer(p.Text)
 	}
@@ -422,19 +431,15 @@ func (s *Server) page(w http.ResponseWriter, r *http.Request) {
 	if !p.At.IsZero() {
 		at = p.At.Local().Format("Jan 2 15:04")
 	}
-	out := map[string]any{"kind": p.Kind, "title": p.Title, "html": body, "at": at, "thread": p.Thread}
+	out := map[string]any{"kind": p.Kind, "title": p.Title, "html": body, "at": at, "thread": p.Thread, "conv": p.Conv}
 	if s.annot != nil && (p.Kind == KindAnswer || p.Kind == KindAnnotate) {
 		out["bot"] = s.annot.BotName() // for t.me links (Annotate's "Put in message box")
 	}
 	if s.annot != nil && s.control != nil && (p.Kind == KindAnnotate || p.Kind == KindAnswer) && p.Thread > 0 && p.Conv > 0 {
-		canSend := false
-		if s.keyed(r) {
-			canSend = s.keyCanSendNotes(r)
-		} else {
-			_, err := CheckInitData(r.Header.Get("X-Telegram-Init-Data"), s.secret, s.now(), ActMaxAge)
-			canSend = err == nil
-		}
-		out["can_send_notes"] = canSend
+		out["can_send_notes"] = s.canSendBoundMessage(r)
+	}
+	if s.control != nil && p.Kind == KindTemplates && p.Thread > 0 && p.Conv > 0 {
+		out["can_send_templates"] = s.canSendBoundMessage(r)
 	}
 	_ = json.NewEncoder(w).Encode(out)
 }

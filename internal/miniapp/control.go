@@ -117,10 +117,12 @@ const (
 	OpPage   = "page"   // Pane, Kind: a Mini App page of the agent's topic (PageScreen, PageFiles, PageChanges)
 	OpNew    = "new"    // Agent, Path: start an agent in a new Rex tab, like /new
 	OpUnlink = "unlink" // Thread: like /unlink in the topic
-	// OpNotes: Thread, Text: send the notes of an Annotate or answer page
-	// to the topic's agent, like a message typed in the topic. Only
-	// /api/annotate/send makes it, with the page's own thread.
+	// OpNotes: Thread, Text: send the notes of an Annotate or answer page.
+	// Only /api/annotate/send makes it, with the page's own thread.
 	OpNotes = "notes"
+	// OpTemplateMessage sends a saved template as a normal queued chat message.
+	// Only /api/templates/send makes it, with the page's own thread and session.
+	OpTemplateMessage = "template_message"
 	// OpForgetFolder (Path) drops a recent folder from the panel's and /new's
 	// folder lists. It comes back when an agent runs there again.
 	OpForgetFolder = "forget_folder"
@@ -149,8 +151,8 @@ type ControlAction struct {
 	Agent  string `json:"agent,omitempty"`
 	Path   string `json:"path,omitempty"`
 	Kind   string `json:"kind,omitempty"` // OpPage: PageScreen, PageFiles, or PageChanges
-	Text   string `json:"text,omitempty"` // OpNotes: the notes, as the page joined them
-	Conv   int64  `json:"conv,omitempty"` // OpNotes: the session the page shows; the notes go only to it
+	Text   string `json:"text,omitempty"` // OpNotes/OpTemplateMessage: text to send as a chat message
+	Conv   int64  `json:"conv,omitempty"` // OpNotes/OpTemplateMessage: the page's current agent session
 }
 
 // ControlResult is the outcome of an action, shown on the page.
@@ -226,14 +228,17 @@ func (a ControlAction) Check() error {
 		if a.Thread <= 0 {
 			return errors.New("no topic")
 		}
-	case OpNotes:
+	case OpNotes, OpTemplateMessage:
 		switch {
 		case a.Thread <= 0 || a.Conv <= 0:
 			return errors.New("no topic")
 		case strings.TrimSpace(a.Text) == "":
-			return errors.New("write a note first")
+			if a.Op == OpNotes {
+				return errors.New("write a note first")
+			}
+			return errors.New("write a template first")
 		case len(a.Text) > maxDraftBytes || !utf8.ValidString(a.Text) || strings.ContainsRune(a.Text, 0):
-			return errors.New("these notes are too long; send fewer, or shorter ones")
+			return errors.New("this message is too long; send fewer, or shorter text")
 		}
 	case OpForgetFolder:
 		if !filepath.IsAbs(a.Path) || len(a.Path) > maxPathBytes || strings.ContainsRune(a.Path, 0) {
@@ -415,7 +420,7 @@ func (s *Server) controlDo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.Name = strings.TrimSpace(a.Name)
-	if a.Op == OpNotes { // only /api/annotate/send, with the page's own topic
+	if a.Op == OpNotes || a.Op == OpTemplateMessage { // page-bound send endpoints only
 		http.Error(w, `{"error":"This action is not valid."}`, http.StatusBadRequest)
 		return
 	}

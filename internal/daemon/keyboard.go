@@ -17,7 +17,7 @@ import (
 	"rex-tg/internal/telegram"
 )
 
-// The reply keyboard: five buttons in two rows under the message box, the
+// The reply keyboard: six buttons in two rows under the message box, the
 // same in every topic and in the main chat (inbound.Buttons).
 //
 // With the Mini App on, each button is a web_app button: one tap opens its
@@ -37,7 +37,7 @@ import (
 // keyboardVersion names the buttons. A new value posts the keyboard note to
 // the main chat and every open topic once more, after an update that changes
 // the buttons.
-const keyboardVersion = "3" // 3: web_app buttons with a key, and ✍️ Annotate
+const keyboardVersion = "4" // 4: adds 🧩 Templates to the Mini App buttons
 
 const (
 	keyboardKey = "reply_keyboard" // kv: the version, key generation, and Mini App address that the chats have
@@ -45,7 +45,7 @@ const (
 	kbGenKV     = "kb_gen"         // kv: how often the key was made new (/rekey)
 )
 
-const keyboardTopicNote = "⌨️ Buttons under the message box: 🎛 Panel (/rt), 🖥 Screen, 📂 Files, 📝 Changes, and ✍️ Annotate. " +
+const keyboardTopicNote = "⌨️ Buttons under the message box: 🎛 Panel (/rt), 🖥 Screen, 📂 Files, 📝 Changes, ✍️ Annotate, and 🧩 Templates. " +
 	"With the Mini App on, each button opens its page directly. Tap ⊞ in the message box to show or hide them."
 
 const keyboardNote = keyboardTopicNote + " /help brings them back."
@@ -67,7 +67,7 @@ const annotateText = "✍️ Annotate opens from its button under the message bo
 // opens.
 var buttonViews = map[string]string{
 	"rt": miniapp.ViewPanel, "screen": miniapp.ViewScreen, "files": miniapp.ViewFiles,
-	"changes": miniapp.ViewChanges, "annotate": miniapp.ViewAnnotate,
+	"changes": miniapp.ViewChanges, "annotate": miniapp.ViewAnnotate, "templates": miniapp.ViewTemplates,
 }
 
 // kbSnap is what the keyboard is made from. url is empty when the buttons
@@ -144,13 +144,13 @@ func keyboardFor(s *kbSnap, thread int64) *telegram.ReplyKeyboardMarkup {
 }
 
 // forPart is the sender's Keyboard hook: a topic's first message, its
-// keyboard note, and its /help answer carry the keyboard. None is edited
-// later.
+// keyboard note, its /help answer, and an attached topic's link card carry
+// the keyboard. None is edited later.
 func (k *keyboardSource) forPart(p store.Part) *telegram.ReplyKeyboardMarkup {
 	if p.Kind != "notice" || p.Part != 0 {
 		return nil
 	}
-	if strings.HasPrefix(p.Key, "intro:") || strings.HasPrefix(p.Key, "keyboard:") ||
+	if strings.HasPrefix(p.Key, "intro:") || strings.HasPrefix(p.Key, "attach:") || strings.HasPrefix(p.Key, "keyboard:") ||
 		(strings.HasPrefix(p.Key, "reply:") && strings.HasSuffix(p.Key, ":help")) {
 		return keyboardFor(k.snap.Load(), p.ThreadID)
 	}

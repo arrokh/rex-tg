@@ -196,6 +196,45 @@ func TestLinkTopicAndInvariants(t *testing.T) {
 	noErr(t, s.CheckInvariants(ctx))
 }
 
+func TestAttachToTopicReusesClosedLinkAndGuardsOwnership(t *testing.T) {
+	s := newStore(t)
+	oldThread, oldConv := topic(t, s, 31)
+	newConv := conv(t, s, "attach-target")
+	pane := must(s.UpsertPane(ctx, "local", "block:attach", "session:attach", "pane", t0))
+	noErr(t, s.SetPaneOccupant(ctx, pane.ID, newConv.ID, 321, "node", SourceHook))
+	noErr(t, s.SetThreadStatus(ctx, oldThread.ID, ThreadClosed))
+
+	got, err := s.AttachToTopic(ctx, pane.ID, oldThread.ChatID, oldThread.MessageThreadID, newConv.ID, "ignored", t0.Add(time.Minute))
+	noErr(t, err)
+	if got.ID != oldThread.ID || got.Status != ThreadLive || got.CurrentConversationID != newConv.ID {
+		t.Fatalf("reattached topic = %+v", got)
+	}
+	if c := must(s.Conversation(ctx, newConv.ID)); c.ThreadID != oldThread.ID {
+		t.Errorf("new conversation thread = %d, want %d", c.ThreadID, oldThread.ID)
+	}
+	if c := must(s.Conversation(ctx, oldConv.ID)); c.ThreadID != oldThread.ID {
+		t.Errorf("history conversation thread = %d, want %d", c.ThreadID, oldThread.ID)
+	}
+	noErr(t, s.CheckInvariants(ctx))
+
+	if _, err := s.AttachToTopic(ctx, pane.ID, oldThread.ChatID, oldThread.MessageThreadID, newConv.ID, "ignored", t0); !errors.Is(err, ErrTopicActive) {
+		t.Fatalf("attach to live topic err = %v, want ErrTopicActive", err)
+	}
+}
+
+func TestAttachToNewUntrackedTopic(t *testing.T) {
+	s := newStore(t)
+	c := conv(t, s, "untracked-attach")
+	p := must(s.UpsertPane(ctx, "local", "block:attach", "session:attach", "pane", t0))
+	noErr(t, s.SetPaneOccupant(ctx, p.ID, c.ID, 321, "node", SourceHook))
+	th, err := s.AttachToTopic(ctx, p.ID, 100, 77, c.ID, "agent", t0)
+	noErr(t, err)
+	if th.MessageThreadID != 77 || th.CurrentConversationID != c.ID || th.Status != ThreadLive {
+		t.Fatalf("attached topic = %+v", th)
+	}
+	noErr(t, s.CheckInvariants(ctx))
+}
+
 func TestTakeOver(t *testing.T) {
 	s := newStore(t)
 	th, a := topic(t, s, 1)
@@ -207,6 +246,9 @@ func TestTakeOver(t *testing.T) {
 		t.Fatalf("%+v", got)
 	}
 	noErr(t, s.CheckInvariants(ctx))
+	if _, ok, err := s.ThreadByConversation(ctx, a.ID); err != nil || ok {
+		t.Fatalf("historical conversation has an open topic: ok=%v err=%v", ok, err)
+	}
 	// The old session keeps its topic as history, and can resume it.
 	if old := must(s.Conversation(ctx, a.ID)); old.ThreadID != th.ID {
 		t.Fatal("history link lost")

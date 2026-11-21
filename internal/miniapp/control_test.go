@@ -112,6 +112,7 @@ func TestControlActionCheck(t *testing.T) {
 		{Op: OpPage, Act: act, Pane: 3, Kind: PageChanges},
 		{Op: OpNew, Act: act, Agent: "claude", Path: "/Users/me/app"},
 		{Op: OpUnlink, Act: act, Thread: 2},
+		{Op: OpTemplateMessage, Act: act, Thread: 2, Conv: 4, Text: "please review"},
 		{Op: OpForgetFolder, Act: act, Path: "/Users/me/old"},
 		{Op: OpForgetFolders, Act: act},
 		{Op: OpCleanTopics, Act: act},
@@ -133,6 +134,7 @@ func TestControlActionCheck(t *testing.T) {
 		{Op: OpNew, Act: act, Agent: "claude", Path: "relative/app"},
 		{Op: OpNew, Act: act, Path: "/Users/me/app"},
 		{Op: OpUnlink, Act: act},
+		{Op: OpTemplateMessage, Act: act, Thread: 2, Conv: 4, Text: "  "},
 		{Op: OpForgetFolder, Act: act, Path: "relative"},
 		{Op: "pause", Act: act}, // /pause stays a chat command
 	}

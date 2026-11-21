@@ -10,21 +10,25 @@ import (
 // Mini App was launched from a keyboard button", core.telegram.org/bots/
 // webapps), so such a button's address carries a key instead
 // (app?k=<key>&go=<view>[&t=<thread>]). The key authorizes reads and validated
-// control-panel actions. Sending Annotate notes additionally requires the
-// current key and the owner's verified Tailscale login.
+// control-panel actions. Sending a page-bound message additionally requires
+// the current key and the owner's verified Tailscale login.
 
 // Views that a keyboard button opens.
 const (
-	ViewPanel    = "panel"
-	ViewScreen   = "screen"
-	ViewFiles    = "files"
-	ViewChanges  = "changes"
-	ViewAnnotate = "annotate"
+	ViewPanel     = "panel"
+	ViewScreen    = "screen"
+	ViewFiles     = "files"
+	ViewChanges   = "changes"
+	ViewAnnotate  = "annotate"
+	ViewTemplates = "templates"
 )
 
 // KindAnnotate is a topic's Annotate page: the agent's answers, to add notes
 // to and send back.
 const KindAnnotate = "annotate"
+
+// KindTemplates is the Mini App's locally saved text-template manager.
+const KindTemplates = "templates"
 
 // LaunchResult is the answer to a keyboard button: the page to open, the
 // topics to pick from when the button names none, or why it cannot open.
