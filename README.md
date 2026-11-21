@@ -4,11 +4,7 @@
 
 Say Codex is running tests in Rex when you leave your desk. Open its Telegram topic to check the result, ask for a fix, or answer a supported permission prompt. The same session stays on your Mac with its workspace and permissions.
 
-[Quick start](#quick-start) · [Daily use](docs/quickstart.md#daily-use) · [Troubleshooting](docs/reference.md#troubleshooting) · [All docs](docs/README.md)
-
-[![Watch the 81-second tour of the optional rex-tg Mini App](docs/media/rex-tg-tour-cover.png)](docs/media/rex-tg-tour.mp4)
-
-The tour shows the optional Mini App with sample data. [English captions](docs/media/rex-tg-tour.en.srt).
+[Quick start](#quick-start) · [Feature preview](#feature-preview) · [Daily use](docs/quickstart.md#daily-use) · [Troubleshooting](docs/reference.md#troubleshooting) · [All docs](docs/README.md)
 
 ## Quick start
 
@@ -28,6 +24,12 @@ The tour shows the optional Mini App with sample data. [English captions](docs/m
 [Full setup walkthrough](docs/quickstart.md) · [Build from source](docs/reference.md#build-from-source) · [Homebrew trust and upgrades](docs/reference.md#install-with-homebrew)
 
 Core chat serves one owner in a private bot chat. It needs no webhook, public inbound port, or Tailscale. Bot chats are **not end-to-end encrypted**, and the paired account can send input to your terminals. See the [security policy](SECURITY.md) before linking a sensitive project.
+
+## Feature preview
+
+In the optional [Mini App](docs/reference.md#mini-app), you can check agent status, choose an agent and folder, inspect the Rex pane, browse files, review Git diffs, and annotate replies. This 23-second loop uses sample data.
+
+![The rex-tg Mini App showing agent status, agent and folder selection, a terminal screen, a source file, a Git diff, and an annotated reply](docs/media/rex-tg-features.gif)
 
 ## Where to go next
 
