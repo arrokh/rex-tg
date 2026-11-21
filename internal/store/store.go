@@ -113,9 +113,19 @@ var ErrNotFound = errors.New("store: not found")
 // version of rex-tg than this code.
 var ErrNewerSchema = errors.New("store: database schema is newer than this program")
 
-// ErrTopicTaken is returned (wrapped) when a conversation already belongs to
-// another topic that is not closed.
+// ErrTopicTaken is returned (wrapped) when a conversation is the current
+// session of another topic that is not closed.
 var ErrTopicTaken = errors.New("store: conversation already has a topic")
+
+// ErrTopicActive is returned when the target topic is already linked to an agent.
+var ErrTopicActive = errors.New("store: topic already has an agent")
+
+// ErrAgentNotRunning is returned when the selected conversation no longer
+// occupies the selected Rex pane.
+var ErrAgentNotRunning = errors.New("store: agent is no longer running in that pane")
+
+// ErrTopicOutboxSending is returned when a topic has a message already in flight.
+var ErrTopicOutboxSending = errors.New("store: topic has a message in flight")
 
 const kvSchemaVersion = "schema_version"
 

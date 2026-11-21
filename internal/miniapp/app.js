@@ -32,6 +32,9 @@
       if (v === null) { localStorage.removeItem(k); } else { localStorage.setItem(k, v); }
     } catch (e) { /* no storage: the choice lasts while the page is open */ }
   }
+  function utf8Length(s) {
+    try { return unescape(encodeURIComponent(s)).length; } catch (e) { return s.length * 3; }
+  }
 
   var scale = 1, scaleHooks = [];
   var resetButton = document.getElementById("reset");
@@ -2026,7 +2029,7 @@
 
   // --- the keyboard's buttons: launch ---
 
-  var viewName = { panel: "Panel", screen: "Screen", files: "Files", changes: "Changes", annotate: "Annotate" };
+  var viewName = { panel: "Panel", screen: "Screen", files: "Files", changes: "Changes", annotate: "Annotate", templates: "Templates" };
 
   function skeletons(n, cls) {
     page.className = "";
@@ -2519,6 +2522,7 @@
                 refreshBadges();
                 toast(r);
                 close();
+                if (tg && tg.close) { setTimeout(function () { tg.close(); }, 60); }
                 return;
               }
               persist();
@@ -2539,7 +2543,9 @@
                   finish({ ok: false, pending: true, message: m + " The notes may still arrive." });
                   return;
                 }
-                finish({ ok: false, message: m });
+                finish(tries > 0
+                  ? { ok: false, pending: true, message: m + " The earlier attempt may still have queued the notes; retry the same ID or check the topic." }
+                  : { ok: false, message: m });
               });
           }
           attempt();
@@ -2571,10 +2577,6 @@
       if (!keyMode && initData && pg && pg.thread) { return "This page cannot send notes now. Close it and reopen it from Telegram, or use Copy."; }
       return "Send to agent works when Annotate is opened from its button under the message box. Use Copy instead.";
     }
-    function utf8Length(s) {
-      try { return unescape(encodeURIComponent(s)).length; } catch (e) { return s.length * 3; }
-    }
-
     function copyText(text) {
       function done() { toast({ ok: true, message: "Copied. Paste it in the topic." }); }
       // The hidden textarea copies inside the tap (iOS needs that); the
@@ -2834,6 +2836,244 @@
     }
   }
 
+  // --- reusable message templates ---
+
+  function templatesPage(pg) {
+    document.body.classList.remove("fill", "annot");
+    page.className = "templates";
+    page.textContent = "";
+    var intro = el("p", "template-intro", "Create reusable messages for this topic. Templates stay on this device.");
+    var add = button("＋ New template", "btn primary wide");
+    var list = el("div", "template-list");
+    var hint = el("p", "hint", "");
+    var pendingBox = el("div", "template-pending");
+    page.appendChild(intro);
+    page.appendChild(add);
+    page.appendChild(hint);
+    page.appendChild(pendingBox);
+    page.appendChild(list);
+
+    var templatesKey = "rex-tg.templates.v1";
+    var pendingKey = "rex-tg.templates.pending." + id;
+    var maxTemplates = 50, pendingTTL = 10 * 60 * 1000, sending = false, pending = null;
+    var canSend = !!(pg && pg.can_send_templates && pg.thread && pg.conv);
+
+    function readTemplates() {
+      try {
+        var raw = JSON.parse(load(templatesKey) || "[]");
+        if (!(raw instanceof Array)) { return []; }
+        return raw.filter(function (t) {
+          return t && /^[0-9a-f]{32}$/.test(t.id || "") && typeof t.name === "string" &&
+            t.name.trim().length > 0 && t.name.length <= 80 && typeof t.text === "string" &&
+            t.text.trim().length > 0 && utf8Length(t.text) <= 16000;
+        }).slice(0, maxTemplates);
+      } catch (e) { return []; }
+    }
+    function writeTemplates(next) {
+      try { localStorage.setItem(templatesKey, JSON.stringify(next)); return true; }
+      catch (e) { return false; }
+    }
+    function readPending() {
+      try {
+        var p = JSON.parse(load(pendingKey) || "null");
+        if (p && /^[0-9a-f]{32}$/.test(p.act || "") && typeof p.text === "string" && isFinite(p.at)) { return p; }
+      } catch (e) { /* no usable action */ }
+      return null;
+    }
+    function writePending(p) {
+      try {
+        if (p) { localStorage.setItem(pendingKey, JSON.stringify(p)); }
+        else { localStorage.removeItem(pendingKey); }
+        return true;
+      } catch (e) { return false; }
+    }
+    var items = readTemplates();
+    pending = readPending();
+
+    function editTemplate(existing) {
+      hap("light");
+      sheetUI(existing ? "Edit template" : "New template", function (box, close) {
+        var nameLabel = el("label", "alabel", "Name");
+        var name = el("input", "template-name");
+        name.type = "text";
+        name.maxLength = 80;
+        name.autocomplete = "off";
+        name.value = existing ? existing.name : "";
+        nameLabel.htmlFor = "template-name";
+        name.id = "template-name";
+        var textLabel = el("label", "alabel", "Message");
+        var text = el("textarea", "atxt");
+        text.id = "template-text";
+        text.rows = 7;
+        text.maxLength = 16000;
+        text.value = existing ? existing.text : "";
+        textLabel.htmlFor = "template-text";
+        var message = el("p", "shint", "This exact text is sent to the agent. Maximum 16,000 bytes.");
+        var row = el("div", "srow");
+        var saveButton = button("Save template", "btn primary big");
+        var cancel = button("Cancel", "btn big");
+        row.appendChild(saveButton);
+        row.appendChild(cancel);
+        box.appendChild(nameLabel);
+        box.appendChild(name);
+        box.appendChild(textLabel);
+        box.appendChild(text);
+        box.appendChild(message);
+        box.appendChild(row);
+        if (existing) {
+          var remove = button("Delete template", "btn danger wide");
+          box.appendChild(remove);
+          remove.addEventListener("click", function () {
+            confirmAsk({ title: "Delete this template?", message: "This only removes it from this device.", ok: "Delete", danger: true }, function () {
+              var next = items.filter(function (t) { return t.id !== existing.id; });
+              if (!writeTemplates(next)) { message.textContent = "Could not save the change on this device."; return; }
+              items = next;
+              close();
+              draw();
+              toast({ ok: true, message: "Template deleted." });
+            });
+          });
+        }
+        function syncSave() {
+          var n = name.value.trim(), body = text.value;
+          var tooLong = utf8Length(body) > 16000;
+          saveButton.disabled = !n || n.length > 80 || !body.trim() || tooLong;
+          message.textContent = tooLong ? "This message is over 16,000 bytes. Shorten it before saving." : "This exact text is sent to the agent. Maximum 16,000 bytes.";
+        }
+        name.addEventListener("input", syncSave);
+        text.addEventListener("input", syncSave);
+        saveButton.addEventListener("click", function () {
+          var n = name.value.trim(), body = text.value;
+          if (!n || !body.trim() || utf8Length(body) > 16000) { syncSave(); return; }
+          if (!existing && items.length >= maxTemplates) { message.textContent = "You can save up to 50 templates."; return; }
+          var saved = { id: existing ? existing.id : act(), name: n, text: body, updated: Date.now() };
+          var next = existing ? items.map(function (t) { return t.id === existing.id ? saved : t; }) : [saved].concat(items);
+          if (!writeTemplates(next)) { message.textContent = "Could not save on this device. Check its available storage and try again."; return; }
+          items = next;
+          close();
+          draw();
+          toast({ ok: true, message: "Template saved on this device." });
+        });
+        cancel.addEventListener("click", function () { close(); });
+        syncSave();
+        setTimeout(function () { try { name.focus(); } catch (e) { /* none */ } }, 30);
+      });
+    }
+
+    function sendTemplate(item) {
+      if (!canSend || sending) { return; }
+      var live = pending && Date.now() - pending.at < pendingTTL ? pending : null;
+      if (pending && (!live || live.text !== item.text)) {
+        confirmAsk({
+          title: live ? "Send this template too?" : "Check before sending again",
+          message: live ? "The earlier message may still reach the agent. Send this template too?" : "The earlier message may still reach the agent. Check the topic first, then confirm if you still want to send it again.",
+          ok: live ? "Send" : "Send again"
+        }, function () {
+          pending = null;
+          if (!writePending(null)) { toast({ ok: false, message: "Could not update the saved send state on this device. No new send started." }); return; }
+          run(item, null);
+        });
+        return;
+      }
+      run(item, live);
+    }
+
+    function run(item, live) {
+      var action = live || { act: act(), at: Date.now(), text: item.text };
+      if (!live) { action.text = item.text; }
+      pending = action;
+      if (!writePending(pending)) {
+        pending = null;
+        toast({ ok: false, message: "Could not save a safe send ID on this device. The template was not sent." });
+        return;
+      }
+      sending = true;
+      draw();
+      var tries = 0;
+      function finish(r) {
+        sending = false;
+        if (!r.pending) {
+          if (r.ok) {
+            pending = null;
+            writePending(null);
+            toast(r);
+            if (tg && tg.close) { setTimeout(function () { tg.close(); }, 60); }
+            return;
+          }
+          pending = null;
+          writePending(null);
+        }
+        toast(r);
+        draw();
+      }
+      function attempt() {
+        api("api/templates/send?id=" + encodeURIComponent(id), { act: action.act, text: action.text })
+          .then(function (r) {
+            if (r.pending && tries < 4) { tries++; setTimeout(attempt, 1500); return; }
+            finish(r);
+          })
+          .catch(function (e) {
+            var message = e.message || "The template was not sent.";
+            if (!e.status || e.status >= 500) {
+              if (tries < 4) { tries++; setTimeout(attempt, 1500); return; }
+              finish({ ok: false, pending: true, message: message + " The message may still reach the agent." });
+              return;
+            }
+            finish(tries > 0
+              ? { ok: false, pending: true, message: message + " The earlier attempt may still have queued this template; retry the same ID or check the topic." }
+              : { ok: false, message: message });
+          });
+      }
+      attempt();
+    }
+
+    function draw() {
+      list.textContent = "";
+      items = readTemplates();
+      items.sort(function (a, b) { return (b.updated || 0) - (a.updated || 0); });
+      add.disabled = sending;
+      hint.textContent = canSend ? "" : "Sending needs a fresh page and your verified Tailscale login. Reopen Templates from the topic with Tailscale on.";
+      pendingBox.textContent = "";
+      if (pending) {
+        pendingBox.appendChild(el("p", "template-pending-text", "A previous send may still reach the agent. Retry the same send ID, or check the topic before sending again."));
+        var retry = button("Check same send", "btn");
+        retry.disabled = !canSend || sending;
+        retry.addEventListener("click", function () { sendTemplate({ text: pending.text }); });
+        pendingBox.appendChild(retry);
+      }
+      if (!items.length) {
+        var empty = el("div", "empty");
+        empty.appendChild(el("div", "etitle", "No templates yet"));
+        empty.appendChild(el("div", "ehint", "Save a message once, then send it to the agent from this topic."));
+        list.appendChild(empty);
+        return;
+      }
+      items.forEach(function (t) {
+        var card = el("article", "template-card");
+        var title = el("h2", "template-title", t.name);
+        var body = el("p", "template-body", t.text);
+        var actions = el("div", "template-actions");
+        var sendLabel = sending && pending && pending.text === t.text ? "Sending…" : pending && pending.text === t.text ? "Check send" : "Send to agent";
+        var send = button(sendLabel, "btn primary");
+        send.disabled = !canSend || sending;
+        if (!canSend) { send.title = "Sending needs your verified Tailscale login."; }
+        send.addEventListener("click", function () { sendTemplate(t); });
+        var edit = button("Edit", "btn");
+        edit.disabled = sending;
+        edit.addEventListener("click", function () { editTemplate(t); });
+        actions.appendChild(send);
+        actions.appendChild(edit);
+        card.appendChild(title);
+        card.appendChild(body);
+        card.appendChild(actions);
+        list.appendChild(card);
+      });
+    }
+
+    add.addEventListener("click", function () { editTemplate(null); });
+    draw();
+  }
+
   // --- the page ---
 
   var fromKb = params.get("from") === "kb";
@@ -2867,6 +3107,7 @@
       if (p.kind === "changes") { changesView(); return; }
       if (p.kind === "control") { controlPanel(); return; }
       if (p.kind === "annotate") { annotatePage(p, false); return; }
+      if (p.kind === "templates") { templatesPage(p); return; }
       page.className = "";
       page.innerHTML = p.html; // rendered and escaped by rex-tg
       scrollTables(page);

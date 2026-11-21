@@ -46,7 +46,10 @@ type (
 	evSender      struct{ e sender.Event }
 	evTopicClosed struct {
 		threadID     int64
-		remoteClosed bool
+		closeSettled bool
+	}
+	evAttachAgent struct {
+		updateID, chatID, threadID, paneID, convID int64
 	}
 	// evPrepared is the result of the readiness and safety checks for the
 	// oldest queued message of a topic.
@@ -491,7 +494,9 @@ func (d *daemon) handle(ev any) {
 	case evOpenDone:
 		delete(d.opening, e.paneID)
 	case evTopicClosed:
-		d.finishStoppedTopic(e.threadID, e.remoteClosed)
+		d.finishStoppedTopic(e.threadID, e.closeSettled)
+	case evAttachAgent:
+		d.onAttachAgent(e)
 	case evNewSent:
 		if f, ok := d.newFlows[e.token]; ok && f.msg == 0 {
 			f.msg = e.msg

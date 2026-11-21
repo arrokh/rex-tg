@@ -16,7 +16,7 @@ rex-tg connects pi, Claude Code, and Codex running in Rex terminal panes to topi
 - **Two-way conversation.** Your text goes into the agent's pane; its transcript supplies progress and answers.
 - **Remote supervision.** Inspect the screen, answer supported permission prompts, pause typing, or interrupt a turn.
 - **Useful output.** Receive images and file attachments, schedule messages, and optionally transcribe voice notes locally.
-- **Optional Mini App.** Browse answers, screens, files, and git changes; annotate answers; manage agents and topics.
+- **Optional Mini App.** Browse answers, screens, files, and git changes; annotate answers; create reusable message templates; manage agents and topics.
 - **Recovery before guesswork.** Durable queues, target checks, retryable downloads, and explicit handling of uncertain sends.
 
 See the [complete feature and command catalog](docs/architecture.md#feature-and-command-catalog), including defaults and limitations. Supported: **macOS, local Rex Beta panes, pi, Claude Code (including cux), and Codex**. Not supported: group chats, multiple owners, T3 Code panes, or agents on another Rex host.
@@ -116,7 +116,7 @@ rex-tg doctor
    # Alternatives: rex-tg new claude, rex-tg new codex
    ```
 2. In Telegram, send `/agents` to your bot. Tap **Open** for the agent. Wait for its linked topic and intro card.
-3. Write a request **in that topic**. Its replies appear there. Text outside a linked topic is not forwarded to an agent.
+3. Write a request **in that topic**. Its replies appear there. Text outside a linked topic is not forwarded to an agent. In an existing unlinked Telegram topic, use `/attach` to choose a Rex agent that has no topic and connect it here.
 4. Try `/info` or `/screen`. If the agent asks a supported permission question, read the prompt before tapping an answer.
 
 With Threaded Mode, even the bot's “main chat” is a topic. Any topic not linked to an agent serves as the main chat for commands such as `/agents` and `/new`.
@@ -158,7 +158,7 @@ rex-tg new cux --resume <session>
 
 | Want to… | Read |
 | --- | --- |
-| Open the control panel, live screens, files, changes, or Annotate | [Mini App setup](docs/reference.md#mini-app): Tailscale Serve, not Funnel |
+| Open the control panel, live screens, files, changes, Annotate, or Templates | [Mini App setup](docs/reference.md#mini-app): Tailscale Serve, not Funnel |
 | Send voice notes for local transcription | [Voice notes](docs/reference.md#voice-notes) |
 | Change display mode, busy behavior, proxy, or launch commands | [Every configuration key](docs/reference.md#configuration) |
 | See everything available and what is enabled by default | [Feature and command catalog](docs/architecture.md#feature-and-command-catalog) |

@@ -23,34 +23,21 @@ import (
 
 const (
 	mainHelp = "<b>Main chat</b>\n" +
-		"/agents - agents in Rex panes, with buttons to open a topic\n" +
-		"/new - start a coding agent in a new Rex tab\n" +
-		"/topics - topics and their states\n" +
+		"/attach - choose an unattached Rex agent for this topic (use inside a topic)\n" +
 		"/status - daemon health\n" +
 		"/rt - the control panel: agents, topics, new agents (Mini App)\n" +
-		"/pause - stop typing into panes\n" +
-		"/unpause - allow typing again\n" +
 		"/rekey - make a new key for the keyboard buttons; the old buttons stop working\n" +
 		"/help - this list"
 	topicHelp = "<b>In a topic</b>\n" +
 		"Text goes to the agent. Text that starts with / goes to the agent too, except the commands below. Use //name to send /name.\n" +
 		"/info - session, pane, and state\n" +
-		"/screen [lines] - the pane screen as an image; /screen text sends text\n" +
-		"/files - browse the agent's folder in the Mini App\n" +
-		"/changes - what changed in the agent's repository: not committed, on this branch, or in the last turn\n" +
 		"/approve, /deny - answer the open prompt\n" +
-		"/esc, /interrupt - press Escape, or stop the turn\n" +
-		"/key &lt;keys&gt; - press keys\n" +
+		"/esc - press Escape\n" +
 		"/force &lt;text&gt; - type text now, even at a prompt\n" +
-		"/model [name], /effort [level] - show or change the agent's model and thinking effort\n" +
-		"/mode progress|block|final\n" +
-		"/verbose on|full|off\n" +
-		"/reasoning on|off\n" +
-		"/resend [id] - send again a reply that may not have arrived (the newest one without an id)\n" +
 		"/mute, /unmute - answers without or with sound\n" +
-		"/at &lt;time|delay&gt; &lt;text&gt; - send text to the agent later, at 09:00 or in 30m; /at lists, /at cancel &lt;n&gt; removes one\n" +
 		"/rename &lt;name&gt; - rename this topic, its Rex pane and its tab; /rename auto names them after the session again\n" +
 		"/unlink - stop mirroring this session\n" +
+		"/attach - choose an unattached Rex agent for this topic\n" +
 		"/rekey - make a new key for the keyboard buttons; the old buttons stop working\n" +
 		"/help - this list"
 )
@@ -64,10 +51,14 @@ func (d *daemon) mainCommand(r inbound.Route, chat, thread int64, inTopic bool) 
 	case "agents":
 		mac := d.macThreads()
 		d.spawn(func() { d.sendAgents(chat, thread, mac) })
+	case "attach":
+		d.attachCommand(chat, thread)
 	case "rt":
 		d.panelCommand(chat, thread)
 	case "annotate":
 		d.say(chat, thread, annotateText, nil)
+	case "templates":
+		d.templatesCommand(chat, thread)
 	case "rekey":
 		if !d.rekey(d.ctx) {
 			d.say(chat, thread, "🔑 Could not make a new key: the store did not keep it. The old buttons still work. Try again.", nil)
@@ -403,6 +394,8 @@ func (d *daemon) topicCommand(u telegram.Update, m *telegram.Message, th store.T
 		d.resend(th, upd, r.Args)
 	case "unlink":
 		d.unlink(th)
+	case "attach":
+		d.attachCommand(th.ChatID, th.MessageThreadID)
 	case "at":
 		d.atCommand(th, r.Args, func(html string) { reply("at", html) })
 	case "rename":

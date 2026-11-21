@@ -19,6 +19,7 @@ func TestPartKeyboard(t *testing.T) {
 		{store.Part{Kind: "notice", Key: "intro:4"}, true},
 		{store.Part{Kind: "notice", Key: "reply:812:help"}, true},
 		{store.Part{Kind: "notice", Key: "keyboard:3:1:-"}, true},
+		{store.Part{Kind: "notice", Key: "attach:7:812"}, true},
 		{store.Part{Kind: "notice", Key: "intro:4", Part: 1}, false}, // only the first part
 		{store.Part{Kind: "final", Key: "intro:4"}, false},           // an answer
 		{store.Part{Kind: "notice", Key: "reply:812:info"}, false},   // another command
@@ -40,11 +41,11 @@ func TestKeyboardWebAppURLs(t *testing.T) {
 	k := &keyboardSource{}
 	k.snap.Store(&kbSnap{key: key, gen: "1", url: "https://mac.example.ts.net/"})
 	kb := k.forPart(store.Part{Kind: "notice", Key: "intro:4", ThreadID: 7})
-	if len(kb.Keyboard) != 2 || len(kb.Keyboard[0]) != 3 || len(kb.Keyboard[1]) != 2 {
+	if len(kb.Keyboard) != 2 || len(kb.Keyboard[0]) != 3 || len(kb.Keyboard[1]) != 3 {
 		t.Fatalf("rows: %+v", kb.Keyboard)
 	}
 	want := map[string]string{
-		"🎛 Panel": "panel", "🖥 Screen": "screen", "📂 Files": "files", "📝 Changes": "changes", "✍️ Annotate": "annotate",
+		"🎛 Panel": "panel", "🖥 Screen": "screen", "📂 Files": "files", "📝 Changes": "changes", "✍️ Annotate": "annotate", "🧩 Templates": "templates",
 	}
 	for _, row := range kb.Keyboard {
 		for _, b := range row {

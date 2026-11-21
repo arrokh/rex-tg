@@ -319,9 +319,9 @@ func getThread(ctx context.Context, q querier, id int64) (Thread, error) {
 	return t, nil
 }
 
-// LinkTopic creates a topic for a conversation. It refuses a conversation that
-// already has a topic that is not closed. In one transaction it writes the
-// thread row, then conversation.thread_id.
+// LinkTopic creates a topic for a conversation. It refuses a conversation
+// that is still the current session of another open topic. In one transaction
+// it writes the thread row, then conversation.thread_id.
 func (s *Store) LinkTopic(ctx context.Context, chatID, messageThreadID, convID int64, name string, now time.Time) (Thread, error) {
 	var out Thread
 	err := s.tx(ctx, func(tx *sql.Tx) error {
@@ -334,7 +334,7 @@ func (s *Store) LinkTopic(ctx context.Context, chatID, messageThreadID, convID i
 			if err != nil {
 				return err
 			}
-			if old.Status != ThreadClosed {
+			if old.Status != ThreadClosed && old.CurrentConversationID == convID {
 				return fmt.Errorf("store: conversation %d belongs to topic %d: %w", convID, old.ID, ErrTopicTaken)
 			}
 		}
@@ -351,6 +351,70 @@ func (s *Store) LinkTopic(ctx context.Context, chatID, messageThreadID, convID i
 			return fmt.Errorf("store: link conversation: %w", err)
 		}
 		out, err = getThread(ctx, tx, id)
+		return err
+	})
+	if err != nil {
+		return Thread{}, err
+	}
+	return out, nil
+}
+
+// AttachToTopic binds the conversation running in paneID to the Telegram topic.
+// It creates a local link for an unknown topic, or reuses an offline/closed
+// link. It refuses live topics and conversations currently linked elsewhere.
+func (s *Store) AttachToTopic(ctx context.Context, paneID, chatID, messageThreadID, convID int64, name string, now time.Time) (Thread, error) {
+	var out Thread
+	err := s.tx(ctx, func(tx *sql.Tx) error {
+		p, err := getPane(ctx, tx, paneID)
+		if err != nil {
+			return err
+		}
+		if !p.GoneAt.IsZero() || p.ConversationID != convID {
+			return ErrAgentNotRunning
+		}
+		c, err := getConv(ctx, tx, convID)
+		if err != nil {
+			return err
+		}
+		target, err := scanThread(tx.QueryRowContext(ctx, `SELECT `+threadCols+` FROM thread WHERE chat_id=? AND message_thread_id=?`, chatID, messageThreadID))
+		targetExists := err == nil
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("store: find target topic: %w", err)
+		}
+		if targetExists && target.Status == ThreadLive {
+			return ErrTopicActive
+		}
+		if c.ThreadID != 0 && (!targetExists || c.ThreadID != target.ID) {
+			other, err := getThread(ctx, tx, c.ThreadID)
+			if err != nil {
+				return err
+			}
+			if other.Status != ThreadClosed && other.CurrentConversationID == convID {
+				return fmt.Errorf("store: conversation %d belongs to topic %d: %w", convID, other.ID, ErrTopicTaken)
+			}
+		}
+		if targetExists {
+			if err := discardPendingForReattach(ctx, tx, target.ID, now); err != nil {
+				return err
+			}
+			if _, err := tx.ExecContext(ctx, `UPDATE thread SET current_conversation_id=?, status='live', closed_at=NULL WHERE id=?`, convID, target.ID); err != nil {
+				return fmt.Errorf("store: attach to topic: %w", err)
+			}
+		} else {
+			res, err := tx.ExecContext(ctx, `INSERT INTO thread(chat_id,message_thread_id,current_conversation_id,name,created_at)
+				VALUES(?,?,?,?,?)`, chatID, messageThreadID, convID, name, toMsNN(now))
+			if err != nil {
+				return fmt.Errorf("store: insert attached topic: %w", err)
+			}
+			target.ID, err = res.LastInsertId()
+			if err != nil {
+				return err
+			}
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE conversation SET thread_id=? WHERE id=?`, target.ID, convID); err != nil {
+			return fmt.Errorf("store: attach conversation: %w", err)
+		}
+		out, err = getThread(ctx, tx, target.ID)
 		return err
 	})
 	if err != nil {
@@ -380,7 +444,7 @@ func (s *Store) TakeOver(ctx context.Context, threadID, convID int64) error {
 			if err != nil {
 				return err
 			}
-			if other.Status != ThreadClosed {
+			if other.Status != ThreadClosed && other.CurrentConversationID == convID {
 				return fmt.Errorf("store: conversation %d belongs to topic %d: %w", convID, other.ID, ErrTopicTaken)
 			}
 		}
@@ -404,8 +468,16 @@ func (s *Store) ThreadByTopic(ctx context.Context, chatID, messageThreadID int64
 	return s.oneThread(ctx, `SELECT `+threadCols+` FROM thread WHERE chat_id=? AND message_thread_id=?`, chatID, messageThreadID)
 }
 
-// ThreadByConversation returns the conversation's topic when it is not closed.
+// ThreadByConversation returns an open topic only when this is its current conversation.
 func (s *Store) ThreadByConversation(ctx context.Context, convID int64) (Thread, bool, error) {
+	return s.oneThread(ctx, `SELECT `+threadCols+` FROM thread WHERE status<>'closed' AND current_conversation_id=? AND id=
+		(SELECT thread_id FROM conversation WHERE id=?)`, convID, convID)
+}
+
+// ThreadLinkByConversation returns an open topic referenced by the conversation,
+// even when the conversation is historical there. Session resume uses this to
+// avoid taking over a topic that still belongs to a running session.
+func (s *Store) ThreadLinkByConversation(ctx context.Context, convID int64) (Thread, bool, error) {
 	return s.oneThread(ctx, `SELECT `+threadCols+` FROM thread WHERE status<>'closed' AND id=
 		(SELECT thread_id FROM conversation WHERE id=?)`, convID)
 }

@@ -50,7 +50,7 @@ func (s *Server) launchPage(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	view := q.Get("go")
 	switch view {
-	case ViewPanel, ViewScreen, ViewFiles, ViewChanges, ViewAnnotate:
+	case ViewPanel, ViewScreen, ViewFiles, ViewChanges, ViewAnnotate, ViewTemplates:
 	default:
 		http.Error(w, `{"error":"This button is not known."}`, http.StatusBadRequest)
 		return
@@ -153,13 +153,13 @@ func (s *Server) annotateDraft(w http.ResponseWriter, r *http.Request) {
 // annotateSend sends the notes of an Annotate or answer page to its topic's
 // agent, with an action id so retries do not send twice. A signed page needs
 // fresh Telegram init data. A keyboard page needs the current key and the
-// owner's verified Tailscale login (keyCanSendNotes).
+// owner's verified Tailscale login (keyCanSendBoundMessage).
 func (s *Server) annotateSend(w http.ResponseWriter, r *http.Request) {
 	if !s.allowed(w, r) {
 		return
 	}
 	keyed := s.keyed(r)
-	if keyed && !s.keyCanSendNotes(r) {
+	if keyed && !s.keyCanSendBoundMessage(r) {
 		http.Error(w, `{"error":"Sending notes requires your verified Tailscale login."}`, http.StatusForbidden)
 		return
 	}

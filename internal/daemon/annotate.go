@@ -74,7 +74,7 @@ func (d *daemon) Launch(ctx context.Context, view string, thread int64) miniapp.
 			return fail("Could not open the control panel.")
 		}
 		return miniapp.LaunchResult{Page: id}
-	case miniapp.ViewScreen, miniapp.ViewAnnotate:
+	case miniapp.ViewScreen, miniapp.ViewAnnotate, miniapp.ViewTemplates:
 	case miniapp.ViewFiles:
 		if !d.cfg.MiniApp.Files {
 			return fail("The file browser is off ([miniapp] files).")
@@ -113,6 +113,17 @@ func (d *daemon) Launch(ctx context.Context, view string, thread int64) miniapp.
 		id, err := d.livePageOf(miniapp.Page{Kind: miniapp.KindAnnotate, Title: title, Thread: th.ID, Conv: conv.ID}, fmt.Sprintf("conv:%d", conv.ID))
 		if err != nil {
 			return fail("Could not open Annotate.")
+		}
+		return miniapp.LaunchResult{Page: id}
+	case miniapp.ViewTemplates:
+		conv, err := d.st.Conversation(ctx, th.CurrentConversationID)
+		if th.CurrentConversationID == 0 || err != nil {
+			return fail("This topic has no agent session yet.")
+		}
+		title := "🧩 Templates · " + topicShownName(th)
+		id, err := d.livePageOf(miniapp.Page{Kind: miniapp.KindTemplates, Title: title, Thread: th.ID, Conv: conv.ID}, fmt.Sprintf("conv:%d", conv.ID))
+		if err != nil {
+			return fail("Could not open Templates.")
 		}
 		return miniapp.LaunchResult{Page: id}
 	}

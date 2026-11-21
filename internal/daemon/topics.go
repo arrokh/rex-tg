@@ -79,8 +79,13 @@ func (d *daemon) clearTopicClosePending(threadID int64) {
 	}
 }
 
-func topicCloseSucceeded(err error) bool {
-	return err == nil || telegram.Classify(err) == telegram.ClassThreadNotFound || telegram.Classify(err) == telegram.ClassNotModified
+func topicCloseSettled(err error) bool {
+	switch telegram.Classify(err) {
+	case telegram.ClassNone, telegram.ClassThreadNotFound, telegram.ClassNotModified, telegram.ClassBadRequest:
+		return true
+	default:
+		return false
+	}
 }
 
 // threadOf returns the open topic whose current session is conv.
@@ -540,11 +545,13 @@ func (d *daemon) closeStoppedTopic(th store.Thread) {
 	}
 	d.spawn(func() {
 		err := d.closeTopicInTelegram(th)
-		remoteClosed := topicCloseSucceeded(err)
-		if !remoteClosed && d.ctx.Err() == nil {
+		settled := topicCloseSettled(err)
+		if !settled && d.ctx.Err() == nil {
 			d.log.Warn("close stopped topic; retrying on next start", "thread", th.ID, "err", err)
+		} else if err != nil && telegram.Classify(err) == telegram.ClassBadRequest && d.ctx.Err() == nil {
+			d.log.Warn("Telegram rejected topic close; will not retry", "thread", th.ID, "err", err)
 		}
-		d.emit(evTopicClosed{threadID: th.ID, remoteClosed: remoteClosed})
+		d.emit(evTopicClosed{threadID: th.ID, closeSettled: settled})
 	})
 }
 
@@ -555,10 +562,10 @@ func (d *daemon) closeTopicInTelegram(th store.Thread) error {
 }
 
 // finishStoppedTopic detaches the ended session after Telegram's close
-// attempt. A failed attempt stays marked so the next start can retry it.
-func (d *daemon) finishStoppedTopic(threadID int64, remoteClosed bool) {
+// attempt. A retryable failure stays marked so the next start can retry it.
+func (d *daemon) finishStoppedTopic(threadID int64, closeSettled bool) {
 	d.closeThread(threadID)
-	if remoteClosed {
+	if closeSettled {
 		if th, err := d.st.Thread(d.ctx, threadID); err == nil && th.Status == store.ThreadClosed {
 			d.clearTopicClosePending(threadID)
 		}

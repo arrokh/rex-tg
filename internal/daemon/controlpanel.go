@@ -286,9 +286,9 @@ var controlBusy = miniapp.ControlResult{Message: "rex-tg is busy. Wait a moment.
 // holds: the daemon stopped while the action ran, or it may still run.
 var controlUnknown = controlFail("This action may still run, or rex-tg stopped while it ran. Check the list before you try again.")
 
-// Notes keep an unknown result pending, so Annotate retries the same act
-// instead of creating a second queued message.
-var controlUnknownNotes = miniapp.ControlResult{Message: controlUnknown.Message, Pending: true}
+// Page-bound sends keep an unknown result pending, so Annotate and Templates
+// retry the same act instead of creating a second queued message.
+var controlUnknownPageSend = miniapp.ControlResult{Message: controlUnknown.Message, Pending: true}
 
 func (c *controlPanel) storeResult(act string, r miniapp.ControlResult) error {
 	b, _ := json.Marshal(r)
@@ -342,8 +342,8 @@ func (c *controlPanel) start(a miniapp.ControlAction) (miniapp.ControlResult, <-
 		case c.isLive(a.Act):
 			r = controlRunning
 		default:
-			if a.Op == miniapp.OpNotes {
-				r = controlUnknownNotes // never create a second queued note on uncertainty
+			if a.Op == miniapp.OpNotes || a.Op == miniapp.OpTemplateMessage {
+				r = controlUnknownPageSend // never queue a second page-bound message on uncertainty
 			} else {
 				r = controlUnknown // a placeholder that no run of this process holds
 			}
@@ -383,6 +383,8 @@ func (c *controlPanel) dispatch(a miniapp.ControlAction) (miniapp.ControlResult,
 		res = c.unlink(a)
 	case miniapp.OpNotes:
 		res = c.notes(a)
+	case miniapp.OpTemplateMessage:
+		res = c.templateMessage(a)
 	default:
 		res = controlFail("Unknown action.")
 	}
@@ -788,4 +790,22 @@ func (c *controlPanel) notes(a miniapp.ControlAction) miniapp.ControlResult {
 	}
 	d.annotSent(th.ID, a.Act, a.Text)
 	return miniapp.ControlResult{OK: true, Message: "Sent to the agent. It gets them when it is idle."}
+}
+
+// templateMessage queues a saved template as normal user text (core): the
+// usual pane, prompt, and pause checks apply before anything is typed.
+func (c *controlPanel) templateMessage(a miniapp.ControlAction) miniapp.ControlResult {
+	d := c.d
+	th, err := d.st.Thread(d.ctx, a.Thread)
+	if err != nil || th.Status == store.ThreadClosed {
+		return controlFail("This topic is closed. Open Templates from the topic where you want to send this message.")
+	}
+	if a.Conv <= 0 || th.CurrentConversationID != a.Conv {
+		return controlFail("The agent in this topic is in another session now. The template was not sent.")
+	}
+	if !d.queueText(th.ID, templateRowID(a.Act), 0, a.Text, "text", inbound.ActText) {
+		return controlFail("Could not queue the template message. Try again.")
+	}
+	d.templateSent(th.ID, a.Act, a.Text)
+	return miniapp.ControlResult{OK: true, Message: "Template sent to the agent. It gets the message when it is ready."}
 }

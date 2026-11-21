@@ -137,6 +137,75 @@ func TestThreadedPrivateChatHasNoMainChat(t *testing.T) {
 	}
 }
 
+func TestAttachCommandLinksAndReusesCurrentTopic(t *testing.T) {
+	e := newEnv(t)
+	e.cfg.Display.Mode = "final"
+	existing, err := e.tg.Client().CreateForumTopic(context.Background(), chatID, "existing")
+	if err != nil {
+		t.Fatal(err)
+	}
+	thread := existing.MessageThreadID
+	createCalls := len(e.tg.Calls("createForumTopic"))
+	e.seedOwner()
+	p := e.newPi("pi-attach-current-topic")
+	p.User("original question")
+	p.Final("original answer")
+	e.start()
+	e.hookPi(p, "startup")
+	e.waitFor("the session to be resolved", func() bool {
+		pane, ok, _ := e.peek().PaneByBlock(context.Background(), "local", rexBlock)
+		return ok && pane.ConversationID != 0
+	})
+
+	e.say(thread, "/attach")
+	list := e.waitText(thread, "Attach an agent")
+	button := buttonData(list, "Attach pane one")
+	if !strings.HasPrefix(button, "at:") {
+		t.Fatalf("attach button = %q", button)
+	}
+	e.pressButton(list, button)
+	linked := e.waitText(thread, "Linked")
+	if linked.Keyboard == nil {
+		t.Fatal("newly attached topic has no reply keyboard")
+	}
+	th, ok, err := e.peek().ThreadByTopic(context.Background(), chatID, thread)
+	if err != nil || !ok || th.Status != store.ThreadLive || th.Mode != "final" {
+		t.Fatalf("attached topic = %+v, ok=%v, err=%v", th, ok, err)
+	}
+	if got := len(e.tg.Calls("createForumTopic")); got != createCalls {
+		t.Fatalf("/attach created a Telegram topic: calls %d, want %d", got, createCalls)
+	}
+
+	e.say(thread, "/attach")
+	e.waitText(thread, "already linked")
+
+	// A locally closed Telegram topic can be reused when Telegram still lets
+	// the user send /attach there.
+	e.withStore(func(st *store.Store) {
+		if err := st.SetThreadStatus(context.Background(), th.ID, store.ThreadClosed); err != nil {
+			t.Fatal(err)
+		}
+		if err := st.Set(context.Background(), fmt.Sprintf("topic_close_pending:%d", th.ID), "1"); err != nil {
+			t.Fatal(err)
+		}
+	})
+	before := e.countText(thread, "Linked")
+	e.say(thread, "/attach")
+	list = e.waitText(thread, "Attach an agent")
+	button = buttonData(list, "Attach pane one")
+	e.pressButton(list, button)
+	e.waitFor("the old topic to be linked again", func() bool {
+		got, ok, _ := e.peek().ThreadByTopic(context.Background(), chatID, thread)
+		return ok && got.Status == store.ThreadLive && got.CurrentConversationID == th.CurrentConversationID && e.countText(thread, "Linked") > before
+	})
+	if got := len(e.tg.Calls("createForumTopic")); got != createCalls {
+		t.Fatalf("reattaching created a Telegram topic: calls %d, want %d", got, createCalls)
+	}
+	if _, pending, err := e.peek().Get(context.Background(), fmt.Sprintf("topic_close_pending:%d", th.ID)); err != nil || pending {
+		t.Errorf("stale close marker remains: pending=%v err=%v", pending, err)
+	}
+}
+
 // A sender is locked after five wrong codes, even with the right code on the
 // sixth try (see pairing_test.go for the other senders).
 func TestPairingLocksAfterFiveWrongCodes(t *testing.T) {
@@ -1233,7 +1302,7 @@ func TestReplyKeyboard(t *testing.T) {
 				got = append(got, b.Text)
 			}
 		}
-		if strings.Join(got, "|") != "🎛 Panel|🖥 Screen|📂 Files|📝 Changes|✍️ Annotate" {
+		if strings.Join(got, "|") != "🎛 Panel|🖥 Screen|📂 Files|📝 Changes|✍️ Annotate|🧩 Templates" {
 			t.Errorf("buttons = %v", got)
 		}
 	}
@@ -2048,6 +2117,43 @@ func TestCloseTopicFailureStillDetachesLocally(t *testing.T) {
 	})
 	if got := len(e.tg.Calls("closeForumTopic")); got != 2 {
 		t.Errorf("closeForumTopic calls = %d after retry, want two", got)
+	}
+}
+
+func TestCloseTopicBadRequestIsNotRetried(t *testing.T) {
+	e := newEnvSerial(t)
+	e.seedOwner()
+	p := e.newPi("pi-close-unsupported")
+	p.User("start")
+	p.Final("ready")
+	e.start()
+	e.hookPi(p, "startup")
+	thread := e.openTopic()
+	e.waitText(thread, "ready")
+	e.tg.FailNext("closeForumTopic", 1, 400, "Bad Request: the chat is not a supergroup forum", 0)
+	e.fake.On([]string{"block", "ls"}, `{"blocks":[]}`, 0)
+	e.setProcess("zsh", "-zsh", 777)
+	e.waitText(thread, "pi stopped: its Rex pane was closed.")
+	e.waitFor("the rejected remote close to settle locally", func() bool {
+		th, ok, _ := e.peek().ThreadByTopic(context.Background(), chatID, thread)
+		if !ok || th.Status != store.ThreadClosed {
+			return false
+		}
+		_, pending, err := e.peek().Get(context.Background(), fmt.Sprintf("topic_close_pending:%d", th.ID))
+		return err == nil && !pending
+	})
+	if got := len(e.tg.Calls("closeForumTopic")); got != 1 {
+		t.Fatalf("closeForumTopic calls = %d, want one", got)
+	}
+	for _, tp := range e.tg.Topics(chatID) {
+		if tp.ThreadID == thread && tp.Closed {
+			t.Fatal("Telegram topic closed despite the rejected API call")
+		}
+	}
+	e.stop()
+	e.start()
+	if got := len(e.tg.Calls("closeForumTopic")); got != 1 {
+		t.Errorf("closeForumTopic calls after restart = %d, want one", got)
 	}
 }
 

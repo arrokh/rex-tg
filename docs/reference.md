@@ -112,21 +112,26 @@ Text that starts with `/` goes to the agent, except the commands below and the m
 | `/at <time or delay> <text>`, `/at`, `/at cancel <n>` | Sends text to the agent later, lists the schedules, or removes one. See [`/at`](#at). |
 | `/rename <name>`, `/rename auto` | Renames the topic, its Rex pane, and its Rex tab. `/rename auto` names them after the session again. |
 | `/unlink` | Closes the topic in rex-tg. |
+| `/attach` | Lists resolved Rex agents with no open topic. Choose one to attach it to this existing Telegram topic. A live topic must be unlinked first. |
 | `/annotate` | Says that ✍️ Annotate opens from its button under the message box. |
 | `/rekey` | Makes a new key for the buttons under the message box; the old buttons stop working. |
 | `/help` | Lists the commands and brings the buttons back. |
 
 ### Buttons under the message box
 
-rex-tg adds a keyboard under the message box: 🎛 Panel, 🖥 Screen, 📂 Files, 📝 Changes, and ✍️ Annotate. Telegram shows it in place of your normal keyboard; tap ⊞ in the message box to switch between the two.
+rex-tg adds a keyboard under the message box: 🎛 Panel, 🖥 Screen, 📂 Files, 📝 Changes, ✍️ Annotate, and 🧩 Templates. Telegram shows it in place of your normal keyboard; tap ⊞ in the message box to switch between the two.
 
-- With the Mini App on, each button opens its page at once: the control panel, the live screen, the file browser, the changes view, or [Annotate](#annotate). The page is for the topic where you tapped. In the main chat, the topic buttons first ask which topic.
+- With the Mini App on, each button opens its page at once: the control panel, live screen, file browser, changes view, [Annotate](#annotate), or [Templates](#templates). The page is for the topic where you tapped. In the main chat, topic-specific buttons first ask which topic.
 - Telegram gives a page that a keyboard button opens no signed login data. So each button's address carries a key that rex-tg made (64 random characters, kept in rex-tg's store). The key opens pages and authorizes validated actions in the control panel, including rename, unlink, and starting an agent; you do not need to open `/rt` first. Annotate sends also use the key, but only from the page's bound topic/session and with your verified Tailscale login. Actions are checked and claimed once. The key cannot pause or unpause typing. A signed panel opened with Telegram init data still needs data from the last hour to act. A page opened with an old key says "This button is old"; `/rekey` revokes the old key.
 - `/rekey` makes a new key at once. The old buttons stop working, and the main chat and every open topic get new buttons in a short silent note. Use it when a button's address may have leaked.
-- Without the Mini App, the buttons are text: a tap sends the label as your message, and rex-tg reads it as `/rt`, `/screen`, `/files`, `/changes`, or `/annotate`. A button never goes to the agent as a prompt. The same text typed by hand counts as a tap too.
+- Without the Mini App, the buttons are text: a tap sends the label as your message, and rex-tg reads it as `/rt`, `/screen`, `/files`, `/changes`, `/annotate`, or `/templates`. A button never goes to the agent as a prompt. The same text typed by hand counts as a tap too.
 - Only a new message can carry the keyboard. rex-tg sends it with the pairing answer, with the first message of each new topic, and with every `/help` answer.
 - On the first start after an update that changes the buttons, after a change of `[miniapp] url`, and after `/rekey`, rex-tg posts one short silent note to the main chat and to every open topic. The note carries the keyboard, so a topic that existed before shows the new buttons without `/help`. A closed topic gets no note. Each topic gets each note at most once, also after a restart.
 - It is not yet known whether each Telegram app keeps one keyboard for the whole chat or one per topic. So every open topic gets its own note, with its own topic in the buttons' addresses. If a button opens the wrong topic, send `/help` in the topic you are in.
+
+### Templates
+
+🧩 Templates stores up to 50 named message templates in this device's Mini App storage. They do not sync across devices. Create, edit, or delete a template; sending uses its exact message text, not its name. Sending is tied to the topic and agent session shown by the page, uses the normal queued-message checks, waits until the agent is ready, and follows `/pause`. The topic gets a copy after rex-tg queues the message. Keyboard launches require your verified Tailscale login; signed launches require fresh Telegram data. An uncertain send keeps the same action ID for retry, so a retry does not queue the message twice. If the result stays unknown, check the topic before confirming a new send. A confirmed send closes the Mini App.
 
 ### Annotate
 
@@ -135,18 +140,19 @@ rex-tg adds a keyboard under the message box: 🎛 Panel, 🖥 Screen, 📂 File
 - Tap a paragraph, a list item, a heading, a table row, or a line of code to add a note to it. Or select part of the text and tap `✍️ Note on selection`. Notes are marked with numbers; tap one to change or delete it.
 - The note editor has quick-fill buttons for `Yes`, `No`, and an existing comment. The existing-comment button restores the saved comment on this note, or reuses the latest saved comment when adding a new one. These buttons only fill the editor; tap `Save`, then use `Review` to send.
 - `Review` lists the notes. You can add a message to the agent. Then choose how to send:
-  - `Send to agent`: rex-tg sends the notes to the agent as one queued message. It waits until the agent is idle and follows `/pause`; the topic gets a copy (`✍️ Notes sent to the agent`). Keyboard launches require your verified Tailscale login; signed launches require fresh Telegram data. The action stays on the page's topic and session. If the agent started a new session meanwhile, or the page belongs to another topic, the notes are refused. After a successful send, the notes disappear from this page. An uncertain send keeps the notes and action ID; retries use the same ID. After ten minutes, the page asks you to check the topic before starting another send.
+  - `Send to agent`: rex-tg sends the notes to the agent as one queued message. It waits until the agent is idle and follows `/pause`; the topic gets a copy (`✍️ Notes sent to the agent`). Keyboard launches require your verified Tailscale login; signed launches require fresh Telegram data. The action stays on the page's topic and session. If the agent started a new session meanwhile, or the page belongs to another topic, the notes are refused. After a successful send, the notes disappear from this page and the Mini App closes. An uncertain send keeps the notes and action ID, and leaves the Mini App open; retries use the same ID. After ten minutes, the page asks you to check the topic before starting another send.
   - `Copy`: copies the notes. Paste them in the topic yourself.
   - `Put in message box (beta)`: opens the bot's chat with the notes in the message box. Telegram may open the main chat instead of the topic.
 - The message quotes each part you noted, with your note under it.
 - `📄 Whole answer` pages work the same way: tap or select parts of the long answer, add notes, and send them. There, `Send to agent` goes straight from the page, signed by Telegram (open the page again after an hour). It sends once, also if you tap twice. A whole answer from before this version does not know its topic; use `Copy` there.
-- Notes that you have not sent stay on the phone, also when you close the page. Once sent, they are removed from this page and no restore copy is kept. If the result is uncertain, rex-tg keeps the notes and same action ID. After ten minutes, it asks you to check the topic before starting another send.
+- Notes that you have not sent stay on the phone, also when you close the page. Once sent, they are removed from this page, the Mini App closes, and no restore copy is kept. If the result is uncertain, rex-tg keeps the notes and same action ID. After ten minutes, it asks you to check the topic before starting another send.
 
 ### Agents and topics
 
 - `/agents` lists the agents: the ones that wait for you first, then working, then idle, each with how long it has been in that state, such as `waiting for you · 12m`. `💻 on the Mac` marks a session in use on the Mac.
 - The newest `/agents` list updates by itself when an agent's state changes. Pin it to see all agents at a glance. Older lists do not change.
 - Tap an agent in the list: if the session already has a topic, you get a link to it. If you deleted that topic, a new one is made for the same session.
+- In an unlinked, offline, or locally closed Telegram topic, `/attach` lists resolved Rex sessions that have no open topic. Tap one to link it to this same Telegram topic; rex-tg posts a link card and backfills recent answers. It does not create a new Telegram topic or type into the agent. A live topic must be unlinked first. An agent already serving another open topic is not offered. A closed topic's unsent old-session output is discarded; if a message is already in flight, wait for it to finish and try again. The link card carries the reply keyboard, and the topic uses the configured `[display] mode`.
 - An agent marked `(guess)` has no hook report yet. rex-tg took the newest transcript in the agent's folder that changed after the agent started.
 - An agent marked `(waiting for session)` has no known session file yet. rex-tg learns it at the agent's next prompt or turn end.
 - A topic is named after the name you gave its Rex tab (see below), else its Rex pane when you named the pane, else the agent's session name. The name follows changes of all three.
@@ -154,7 +160,7 @@ rex-tg adds a keyboard under the message box: 🎛 Panel, 🖥 Screen, 📂 File
 - A name starts with a letter or digit, because Telegram draws a topic's icon from its first character. Legacy stopped-topic names (🔴) get the same cleanup. pi's `[folder][kind]` tags before a session name go: the folder tag is dropped, and other tags move to the end. Markdown marks (`**`, `` ` ``) and leading symbols go too.
 - A new session in the same pane, such as after the agent's `/clear`, takes over the topic. The bot posts a divider, such as `── claude · new session (clear) ──`.
 - After a Rex restart, the topic follows the session when the agent resumes in its pane, if the topic is still open.
-- When an agent exits or its pane closes, rex-tg posts `🔴 agent stopped`, finishes any running turn and in-flight paste, then tries to close the Telegram topic after queued answers and notices. The topic and its history stay in Telegram. rex-tg detaches the local link; it does not stop or close the Rex pane. If the session resumes, `/agents` lists it without a topic. Open it there to create a new topic with recent answers backfilled. A Telegram close error is logged; rex-tg still detaches the ended session. Failed or interrupted closes are retried on the next daemon start.
+- When an agent exits or its pane closes, rex-tg posts `🔴 agent stopped`, finishes any running turn and in-flight paste, then tries to close the Telegram topic after queued answers and notices. The topic and its history stay in Telegram. rex-tg detaches the local link; it does not stop or close the Rex pane. If the session resumes, `/agents` lists it without a topic. Open it there to create a new topic with recent answers backfilled. A Telegram close error is logged; rex-tg still detaches the ended session. Retryable or uncertain close failures are retried on the next daemon start. A permanent Bad Request is not retried because Telegram will reject the same close again.
 - When you open a topic, the bot posts an intro card (session, pane, folder, mode) and the last 3 final answers (`backfill`).
 
 ### `/new`
@@ -423,6 +429,7 @@ The Mini App shows what does not fit a chat message. Its pages open from buttons
 - `📝 View changes`, from `/changes`: the changes of the agent's git repository. Three tabs pick what to compare: `Uncommitted` (since the last commit), `This branch` (since the branch left the main branch), and `Last turn`. A tab without anything to compare is dimmed, and tapping it says why. The view opens on the first tab that has changes. The changed files show as a tree, with a letter for each: `M` changed, `A` added, `D` deleted, `U` new and not tracked, `T` turned into a link or back, `!` in conflict. Tap a file for its diff, with the old and the new line numbers. `‹` and `›` go to the previous or next file, and `Wrap` wraps long lines. The view reads git each time it opens, so it shows the changes as they are now. It hides what the file browser hides: ignored files are not listed, and a file with the name of a key or credential is listed with 🔒 but its changes are not shown. Secrets are removed from every diff. A list shows at most 2000 files, and a diff at most 1 MB. Pictures that changed are shown as they are now.
 
 - `✍️ Annotate`, from the button under the message box: the agent's answers, to add notes to and send back ([Annotate](#annotate)).
+- `🧩 Templates`, from the button under the message box: create reusable messages on this device, then send one to the agent in that topic. See [Templates](#templates).
 - `🎛 Open control panel`, from `/rt`: the agents and their topics, with actions on them, and a folder explorer to start a new agent ([`/rt`](#rt-control-panel)). The control panel acts: it opens and unlinks topics, renames agents (topic, pane, and tab), and starts agents. It never types into a pane. There is one control panel page.
 
 A table on a page scrolls sideways in its own box, and the page stays still. A column is as wide as its text, up to about 18 em; longer text wraps at words.
@@ -529,7 +536,7 @@ To delete the token: `security delete-generic-password -s rex-tg -a bot-token`. 
 | No owner is paired | Run `rex-tg pair`, then send `/start <code>` to the bot. |
 | "waiting for session" | rex-tg learns the session file at the agent's next prompt or turn end. |
 | "message thread not found" | You deleted the topic in Telegram, so rex-tg detached it without stopping the agent. Open the agent again with `/agents` to make a replacement topic. |
-| "This topic is not linked" | The topic is closed, or rex-tg did not make it. Open the agent again with `/agents`. |
+| "This topic is not linked" | Use `/attach` in this topic to select an unattached Rex session, or `/agents` to open it in a new topic. |
 | "Checking whether it arrived" | Telegram did not confirm a reply. rex-tg checks the chat's message numbers. A reply that never arrived is sent again by itself. |
 | "may not have arrived" | The reply may be in the chat already, so rex-tg does not send it again by itself. Tap `🔁 Send again`, or send `/resend`, if it is missing. |
 | "may be in the input box without Enter" | The daemon stopped between the paste and Enter. Check the pane with `/screen`. rex-tg does not type the text again. |

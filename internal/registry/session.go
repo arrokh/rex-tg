@@ -301,7 +301,9 @@ func (r *Registry) adopt(ctx context.Context, pane store.Pane, mem *paneMem, rt 
 	}
 	var taken int64 // topic that now shows conv
 
-	th, hasTopic, err := r.st.ThreadByConversation(ctx, conv.ID)
+	// Keep history-aware lookup here: if this resumed session used to own
+	// a topic now occupied by another live session, it must not take it over.
+	th, hasTopic, err := r.st.ThreadLinkByConversation(ctx, conv.ID)
 	if err != nil {
 		return nil, fmt.Errorf("registry: find topic: %w", err)
 	}

@@ -509,6 +509,19 @@
   .segc.stack button { flex: none; height: 44px; font-size: 15px; justify-content: flex-start; padding: 0 12px; white-space: normal; }
   .segc.stack button::before { content: ""; flex: none; width: 16px; height: 16px; border-radius: 8px; box-shadow: inset 0 0 0 2px var(--hint); }
   .segc.stack button.on::before { box-shadow: inset 0 0 0 5px var(--btn); }
+  /* locally saved message templates */
+  .templates { display: flex; flex-direction: column; gap: 12px; }
+  .template-intro { margin: 0 2px; color: var(--hint); font-size: 0.875rem; }
+  .template-list { display: flex; flex-direction: column; gap: 8px; }
+  .template-pending { padding: 10px 12px; border-radius: 12px; background: color-mix(in srgb, var(--warn) 12%, var(--bg)); }
+  .template-pending:empty { display: none; }
+  .template-pending-text { margin: 0 0 8px; font-size: 0.875rem; }
+  .template-card { min-width: 0; padding: 12px; border-radius: 12px; background: var(--code); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--hint) 14%, transparent); }
+  .template-title { margin: 0; font-size: 1rem; overflow-wrap: anywhere; }
+  .template-body { margin: 6px 0 0; color: var(--hint); font-size: 0.875rem; white-space: pre-wrap; overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 5; overflow: hidden; }
+  .template-actions { display: flex; gap: 6px; margin-top: 10px; }
+  .template-actions .btn { flex: 1; min-width: 0; padding-left: 8px; padding-right: 8px; }
+  .template-name { display: block; width: 100%; height: 44px; padding: 0 12px; border: none; border-radius: 10px; background: var(--code); color: var(--fg); font: 16px/1.4 -apple-system, system-ui, sans-serif; box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--hint) 28%, transparent); }
   @media (prefers-reduced-motion: reduce) { .skel, .sheet, .toast { animation: none; } .rowmain .chev { transition: none; } }
 </style>
 </head>

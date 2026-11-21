@@ -61,7 +61,7 @@ func TestReplyKeyboardWebApp(t *testing.T) {
 	// The Mini App's address is new for this daemon: the start has the
 	// markers of the same address, so no note came yet. Ask for the buttons.
 	e.say(0, "/help")
-	keyRe := regexp.MustCompile(`^` + regexp.QuoteMeta(base) + `/app\?k=([0-9a-f]{64})&go=(panel|screen|files|changes|annotate)(&t=\d+)?$`)
+	keyRe := regexp.MustCompile(`^` + regexp.QuoteMeta(base) + `/app\?k=([0-9a-f]{64})&go=(panel|screen|files|changes|annotate|templates)(&t=\d+)?$`)
 	check := func(m tgtest.Message, wantT bool) string {
 		t.Helper()
 		kb := m.Keyboard

@@ -15,7 +15,7 @@ import (
 
 const (
 	textOnly      = "Only text is supported for now."
-	notLinkedText = "This topic is not linked to an agent. Send /agents to list the agents and open one."
+	notLinkedText = "This topic is not linked to an agent. Use /attach to connect one here, or /agents to open a new topic."
 )
 
 // onUpdates stores and routes a batch of updates (flow 3). The poll offset
@@ -245,6 +245,17 @@ func (d *daemon) onCallback(u telegram.Update) {
 				d.retryFileButton(u.UpdateID, cb, id)
 				return
 			}
+		}
+	case "ap":
+		if offset, ok := arg(1); ok && offset >= 0 && offset <= 1_000_000 && cb.Message.MessageThreadID != 0 {
+			d.answerCallback(cb.ID, "Refreshing agents…", false)
+			d.attachCommandPage(cb.Message.Chat.ID, cb.Message.MessageThreadID, int(offset))
+			return
+		}
+	case "at":
+		if id, ok := arg(1); ok && id > 0 {
+			d.attachAgentButton(u.UpdateID, cb, id)
+			return
 		}
 	case "o":
 		if id, ok := arg(1); ok {
