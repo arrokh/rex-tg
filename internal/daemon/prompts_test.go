@@ -99,6 +99,43 @@ func TestNoteAnswer(t *testing.T) {
 	}
 }
 
+func TestApproveAnswerRequiresAClearOneTimeChoice(t *testing.T) {
+	alert := func(kind string, labels ...string) store.Alert {
+		var opts []store.AlertOption
+		for i, label := range labels {
+			opts = append(opts, store.AlertOption{Label: label, Keys: []string{string(rune('1' + i))}})
+		}
+		return store.Alert{Kind: kind, Options: withEsc(opts)}
+	}
+	tests := []struct {
+		name string
+		al   store.Alert
+		want int
+		ok   bool
+	}{
+		{"question with unrelated choices", alert(store.AlertQuestion, "1 Blue", "2 No preference"), 0, false},
+		{"yes no question", alert(store.AlertQuestion, "1 Yes", "2 No"), 0, true},
+		{"clear allow", alert(store.AlertPermission, "1 Allow"), 0, true},
+		{"destructive choice without an affirmative label", alert(store.AlertPermission, "1 Delete all files", "2 Cancel"), 0, false},
+		{"permission with only No", alert(store.AlertPermission, "1 No"), 0, false},
+		{"explicit one-time choice before lasting rule", alert(store.AlertPermission, "1 Yes, and don't ask again", "2 Yes, proceed", "3 No"), 1, true},
+		{"session-wide allow needs a tap", alert(store.AlertPermission, "1 Allow for this session"), 0, false},
+		{"future allow needs a tap", alert(store.AlertPermission, "1 Yes, allow this host in the future"), 0, false},
+		{"broad allow needs a tap", alert(store.AlertPermission, "1 Yes, allow all edits"), 0, false},
+		{"continue is not a clear yes", alert(store.AlertPermission, "1 Continue", "2 Cancel"), 0, false},
+		{"proceed is not a clear yes", alert(store.AlertPermission, "1 Proceed", "2 Cancel"), 0, false},
+		{"run is not a clear yes", alert(store.AlertPermission, "1 Run", "2 Cancel"), 0, false},
+		{"default allow needs a tap", alert(store.AlertPermission, "1 Allow and set as default"), 0, false},
+		{"trusted-folder allow needs a tap", alert(store.AlertPermission, "1 Yes, trust this folder"), 0, false},
+	}
+	for _, tc := range tests {
+		i, ok := approveAnswer(tc.al)
+		if i != tc.want || ok != tc.ok {
+			t.Errorf("%s: approveAnswer = %d, %v; want %d, %v", tc.name, i, ok, tc.want, tc.ok)
+		}
+	}
+}
+
 func TestClockText(t *testing.T) {
 	for d, want := range map[time.Duration]string{2 * time.Minute: "2:00", 45 * time.Second: "0:45", 29600 * time.Millisecond: "0:30"} {
 		if got := clockText(d); got != want {
@@ -140,6 +177,12 @@ func TestDenyAnswer(t *testing.T) {
 	}}
 	if i, ok := denyAnswer(plain); !ok || plain.Options[i].Keys[0] != "3" {
 		t.Errorf("without Esc: picked %d %v, want 3 No", i, ok)
+	}
+	for _, label := range []string{"No, remember this rule", "No, trust this folder", "No, set this as default", "No, and tell the agent what to do differently"} {
+		al := store.Alert{Kind: store.AlertPermission, Options: []store.AlertOption{{Label: label, Keys: []string{"2"}}}}
+		if _, ok := denyAnswer(al); ok {
+			t.Errorf("without Esc, chose lasting refusal %q", label)
+		}
 	}
 }
 

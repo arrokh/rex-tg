@@ -591,8 +591,8 @@ func (d *daemon) keysCommand(th store.Thread, upd int64, keys []string, piVim bo
 	})
 }
 
-// approveDeny presses the first (approve) or last (deny) answer of the open
-// prompt, not counting Esc.
+// approveDeny presses a clear one-time affirmative or refusing answer of the
+// open prompt. If none is safe, the owner must tap the intended choice.
 func (d *daemon) approveDeny(th store.Thread, upd int64, approve bool) {
 	tag := fmt.Sprintf("%d:answer", upd)
 	als, err := d.st.OpenAlerts(d.ctx, th.ID)
@@ -601,26 +601,12 @@ func (d *daemon) approveDeny(th store.Thread, upd int64, approve bool) {
 		return
 	}
 	al := als[len(als)-1]
-	var idx []int
-	for i, o := range al.Options {
-		if len(o.Keys) == 1 && o.Keys[0] == "escape" {
-			continue
-		}
-		idx = append(idx, i)
-	}
-	if len(idx) == 0 && approve {
-		d.replyTopic(th, tag, "This prompt has no answer to press. Use /esc.")
-		return
-	}
 	var pick int
 	if approve {
-		// The first answer that says yes, else the first one.
-		pick = idx[0]
-		for i, o := range al.Options {
-			if answerWord(o.Label) == "yes" {
-				pick = i
-				break
-			}
+		var ok bool
+		if pick, ok = approveAnswer(al); !ok {
+			d.replyTopic(th, tag, "This prompt has no clear one-time Yes or Allow answer. Tap the choice you want.")
+			return
 		}
 	} else {
 		// Never the last answer on a guess: on a menu without a No it may
@@ -733,6 +719,49 @@ func (d *daemon) unlink(th store.Thread) {
 }
 
 var _ = agents.Pi
+
+// approveAnswer finds an explicit, one-time affirmative choice. It never
+// picks the first option on a question or a permission whose choices are not
+// clear; lasting choices such as "don't ask again" stay manual taps.
+func approveAnswer(al store.Alert) (int, bool) {
+	for i, o := range al.Options {
+		if len(o.Keys) == 1 && o.Keys[0] == "escape" {
+			continue
+		}
+		f := strings.Fields(strings.ToLower(o.Label))
+		if len(f) > 1 && strings.Trim(f[0], "0123456789.)") == "" {
+			f = f[1:]
+		}
+		if len(f) == 0 {
+			continue
+		}
+		word := strings.Trim(f[0], ",.:;!")
+		switch word {
+		case "yes", "allow":
+			if !lastingChoice(o.Label) {
+				return i, true
+			}
+		}
+	}
+	return 0, false
+}
+
+func lastingChoice(label string) bool {
+	l := strings.ToLower(label)
+	for _, w := range []string{"always", "never", "don't ask", "do not ask", "future", "session", "remember", "permanent", "forever", "everything", "every time", "each time", "default", "trust", "allowlist", "allow list", "whitelist", "until revoked", "from now on"} {
+		if strings.Contains(l, w) {
+			return true
+		}
+	}
+	for _, word := range strings.FieldsFunc(l, func(r rune) bool {
+		return !((r >= 'a' && r <= 'z') || (r >= '0' && r <= '9'))
+	}) {
+		if word == "all" {
+			return true
+		}
+	}
+	return false
+}
 
 // answerWord returns "yes" or "no" when an answer label is a plain yes or no
 // ("Yes", "1 Yes", "4 No", "No, and tell the agent"), else "".

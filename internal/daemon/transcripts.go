@@ -359,12 +359,7 @@ func (d *daemon) textParts(md, kind string, allowRich bool) []store.PartContent 
 	if allowRich && d.cfg.Display.RichMessages && format.UTF16Len(md) <= maxRichRunes && md != "" {
 		return []store.PartContent{{Content: md, Format: store.FormatRich}}
 	}
-	parts := format.Messages(md, d.cfg.Display.MessageLength, partLimit)
-	if len(parts) > maxChatMessages {
-		// Too many to read on a phone: fuller messages, still split at
-		// paragraphs.
-		parts = format.Messages(md, partLimit, partLimit)
-	}
+	parts := d.messageParts(md)
 	total := 0
 	for _, p := range parts {
 		total += format.VisibleLen(p.HTML)
@@ -384,6 +379,32 @@ func (d *daemon) textParts(md, kind string, allowRich bool) []store.PartContent 
 		out[i] = store.PartContent{Content: p.HTML, Format: store.FormatHTML}
 	}
 	return out
+}
+
+// messageParts is the exact text-message split used by textParts, before the
+// long-answer document fallback.
+func (d *daemon) messageParts(md string) []format.Part {
+	parts := format.Messages(md, d.cfg.Display.MessageLength, partLimit)
+	if len(parts) > maxChatMessages {
+		// Too many to read on a phone: fuller messages, still split at
+		// paragraphs.
+		parts = format.Messages(md, partLimit, partLimit)
+	}
+	return parts
+}
+
+// wouldSplitIntoMessages tells whether textParts would send more than one
+// Telegram text message, rather than one message or a single Markdown file.
+func (d *daemon) wouldSplitIntoMessages(md string) bool {
+	parts := d.messageParts(md)
+	if len(parts) < 2 {
+		return false
+	}
+	total := 0
+	for _, p := range parts {
+		total += format.VisibleLen(p.HTML)
+	}
+	return total <= maxTextParts*partLimit
 }
 
 // work carries out the tracker's actions: progress changes go to the sender

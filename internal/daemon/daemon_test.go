@@ -17,6 +17,7 @@ import (
 
 	"rex-tg/internal/agents"
 	"rex-tg/internal/agents/pi"
+	"rex-tg/internal/config"
 	"rex-tg/internal/daemon"
 	"rex-tg/internal/store"
 	"rex-tg/internal/telegram"
@@ -1586,6 +1587,8 @@ func TestTypingIndicatorForTheTopicUsedLast(t *testing.T) {
 
 func TestCodexAlertUsesConfiguredAnswersAndDenyIsNo(t *testing.T) {
 	e := newEnv(t)
+	e.cfg.Agents.Codex.AllowUnknownPermissionAnswers = true
+	e.cfg.Agents.Codex.Answers = []config.Answer{{Label: "Yes", Keys: []string{"y"}}, {Label: "No", Keys: []string{"escape"}}}
 	e.seedOwner()
 	e.setProcess("codex", "codex", 6161)
 	dir := filepath.Join(e.home, ".codex", "sessions", "2026", "11", "11")
@@ -1609,7 +1612,7 @@ func TestCodexAlertUsesConfiguredAnswersAndDenyIsNo(t *testing.T) {
 
 	e.setScreen("Allow command?\n  git push origin main\n  [y] yes  [p] always  [esc] no\n")
 	e.setStatus("blocked", "permission")
-	alert := e.waitText(thread, "Permission needed")
+	alert := e.waitText(thread, "Permission needs attention")
 	var labels []string
 	for _, row := range alert.Markup.InlineKeyboard {
 		for _, b := range row {

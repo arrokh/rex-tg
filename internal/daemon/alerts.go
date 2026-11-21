@@ -103,6 +103,9 @@ func withEsc(opts []store.AlertOption) []store.AlertOption {
 
 // alertMarkup builds the buttons: `a:<alert id>:<index>`, three to a row.
 func alertMarkup(id int64, opts []store.AlertOption) *telegram.InlineKeyboardMarkup {
+	if len(opts) == 0 {
+		return nil
+	}
 	var rows [][]telegram.InlineKeyboardButton
 	var row []telegram.InlineKeyboardButton
 	for i, o := range opts {
@@ -143,7 +146,7 @@ func (d *daemon) reopenAlert(threadID int64) {
 	if err != nil || !ok || p.State != "blocked" {
 		return
 	}
-	if p.StateKind == store.AlertPermission || p.StateKind == store.AlertQuestion {
+	if p.StateKind == store.AlertPermission || p.StateKind == store.AlertQuestion || p.StateKind == "" {
 		d.openAlert(th, p.StateKind)
 	}
 }
@@ -184,10 +187,9 @@ func (d *daemon) alertDone(threadID int64) {
 	}
 }
 
-// createAlert posts the alert of a blocked pane (a worker). follow is the
-// hash of the prompt that was just answered: a follow-up (the next question
-// of several, or their review page) is posted only when the screen shows
-// another prompt with answers.
+// createAlert posts an alert of a blocked pane (a worker). follow is the hash
+// of the screen just answered. A changed follow-up is read again; if its
+// controls are unknown, alertContent keeps it visible without answer buttons.
 func (d *daemon) createAlert(th store.Thread, kind, follow string) {
 	ctx := d.ctx
 	conv, err := d.st.Conversation(ctx, th.CurrentConversationID)
@@ -203,10 +205,8 @@ func (d *daemon) createAlert(th store.Thread, kind, follow string) {
 		d.log.Warn("alert: capture", "err", err)
 	}
 	lines := lastLines(screen, alertLines)
-	if follow != "" {
-		if v := parsePromptView(lines, true); !v.ok || alertHash(lines) == follow {
-			return
-		}
+	if follow != "" && !followUpScreenChanged(lines, follow) {
+		return // suppress the screen just answered; changed unknown prompts stay visible
 	}
 	c := d.alertContent(lines, kind, conv.Runtime)
 	if c.kind != store.AlertPermission && c.kind != store.AlertQuestion {
@@ -240,9 +240,22 @@ func (d *daemon) createAlert(th store.Thread, kind, follow string) {
 	}
 	err = send(c.text)
 	if cl := telegram.Classify(err); cl == telegram.ClassBadRequest || cl == telegram.ClassParseEntities {
-		// Refused, so nothing was posted: the screen's bottom lines instead.
+		// Refused, so nothing was posted: send a safe raw-screen fallback.
 		d.log.Warn("alert: refused; sending the screen instead", "err", err)
-		err = send("🔐 <b>Permission needed</b>\n" + preBlock(lastLines(strings.Join(lines, "\n"), alertRawLines), alertMaxText))
+		fallback := c.head
+		if fallback == "" {
+			fallback = "🔐 <b>Permission needed</b>"
+		}
+		if c.dl != nil {
+			fallback += "\n" + deadlineLine(*c.dl)
+		}
+		if len(c.opts) == 0 {
+			fallback += "\n<i>No keys will be sent. Answer this prompt on the Mac.</i>"
+		}
+		if raw := lastLines(strings.Join(lines, "\n"), alertRawLines); len(raw) > 0 {
+			fallback += "\n" + preBlock(raw, alertMaxText)
+		}
+		err = send(fallback)
 	}
 	if err != nil {
 		if d.ctx.Err() == nil {
@@ -267,9 +280,10 @@ type alertContent struct {
 	dl               *alertDeadline
 }
 
-// alertContent reads a prompt from the screen's lines: the readable view
-// when the prompt is understood (alertview.go), else the screen's bottom
-// lines with the numbered answers or the agent's configured ones.
+// alertContent reads a prompt from the screen's lines. It offers only
+// choices that parsePromptView recognizes as an active prompt. An explicit
+// fallback in the user's config is the only exception for an unknown
+// permission screen; a numbered list in other output is not a prompt.
 func (d *daemon) alertContent(lines []string, kind string, rt agents.Runtime) alertContent {
 	agent := runtimeName(rt)
 	c := alertContent{kind: kind}
@@ -278,39 +292,82 @@ func (d *daemon) alertContent(lines []string, kind string, rt agents.Runtime) al
 		dl := newDeadline(d.now(), left, rough, agent)
 		c.dl = &dl
 	}
-	if v := parsePromptView(lines, kind == store.AlertPermission); v.ok {
+	v := parsePromptView(lines, kind != store.AlertQuestion)
+	if v.ok {
 		if v.isQuestion() {
 			c.kind = store.AlertQuestion // Claude Code reports a question as a permission
 		} else if kind == "" {
 			c.kind = inferAlertKind(v)
 		}
 		if c.kind == "" {
-			return c
+			return unrecognizedAlertContent(lines, "", rt, c.dl)
 		}
 		c.text, c.head, c.opts = alertHTML(v, agent, c.kind, c.dl), alertHead(v, agent, c.kind), v.alertOptions()
 		if format.VisibleLen(c.text) <= alertMaxText {
 			return c
 		}
-		// Too long for one message: the screen's bottom lines instead.
-		c.kind = kind
-	}
-	c.opts = parseOptions(lines, kind == store.AlertPermission)
-	if len(c.opts) == 0 {
-		for _, a := range d.cfg.Input(rt).Answers {
-			c.opts = append(c.opts, store.AlertOption{Label: a.Label, Keys: a.Keys})
+		// Too long for one message: use the raw screen, but retain every
+		// recognized choice, including tick and follow-up actions.
+		c.text = c.head
+		if c.dl != nil {
+			c.text += "\n" + deadlineLine(*c.dl)
 		}
-	}
-	c.opts = withEsc(c.opts)
-	c.head = "🔐 <b>Permission needed</b> · " + format.Escape(agent)
-	if kind == store.AlertQuestion {
-		c.head = "❓ <b>Question</b> · " + format.Escape(agent)
-	}
-	c.text = c.head
-	if c.dl != nil {
-		c.text += "\n" + deadlineLine(*c.dl)
+		if c.kind == store.AlertPermission {
+			c.text += "\n<i>Reply with text to answer No and send it as a note.</i>"
+		}
+		if raw := lastLines(strings.Join(lines, "\n"), alertRawLines); len(raw) > 0 {
+			c.text += "\n" + preBlock(raw, alertMaxText)
+		}
+		return c
 	}
 	if kind == store.AlertPermission {
-		c.text += "\n<i>Reply with text to answer No and send it as a note.</i>"
+		// A custom fallback is an explicit operator choice, not a guess made
+		// from the screen. It requires a separate opt-in because old config
+		// files may contain the former default answers. Do not scrape numbered
+		// output or add Esc when the prompt controls are not understood.
+		input := d.cfg.Input(rt)
+		if answers := input.Answers; input.AllowUnknownPermissionAnswers && len(answers) > 0 {
+			c.kind = store.AlertPermission
+			c.head = "🔐 <b>Permission needs attention</b> · " + format.Escape(agent)
+			c.text = c.head + "\n<i>Prompt controls are not recognized; these are your configured fallback choices.</i>"
+			for _, a := range answers {
+				c.opts = append(c.opts, store.AlertOption{Label: a.Label, Keys: a.Keys})
+			}
+			if _, ok := denyAnswer(store.Alert{Kind: c.kind, Options: c.opts}); ok {
+				c.text += "\n<i>Reply with text to answer No and send it as a note.</i>"
+			}
+			if c.dl != nil {
+				c.text += "\n" + deadlineLine(*c.dl)
+			}
+			if raw := lastLines(strings.Join(lines, "\n"), alertRawLines); len(raw) > 0 {
+				c.text += "\n" + preBlock(raw, alertMaxText)
+			}
+			return c
+		}
+	}
+	return unrecognizedAlertContent(lines, kind, rt, c.dl)
+}
+
+// unrecognizedAlertContent still brings an unclassified blocked screen to
+// Telegram, but offers no keys. The owner can answer on the Mac; a guessed
+// button could approve the wrong action.
+func unrecognizedAlertContent(lines []string, kind string, rt agents.Runtime, dl *alertDeadline) alertContent {
+	generic := kind == ""
+	if kind != store.AlertPermission && kind != store.AlertQuestion {
+		kind = store.AlertQuestion // the schema has no generic alert kind
+	}
+	agent := format.Escape(runtimeName(rt))
+	label, icon := "Agent needs input", "⚠️"
+	if !generic && kind == store.AlertQuestion {
+		label, icon = "Question needs attention", "❓"
+	} else if kind == store.AlertPermission {
+		label, icon = "Permission needs attention", "🔐"
+	}
+	head := icon + " <b>" + label + "</b> · " + agent
+	c := alertContent{kind: kind, head: head, text: head + "\n<i>rex-tg could not identify this prompt's controls. No keys will be sent. Answer it on the Mac.</i>"}
+	if dl != nil {
+		c.dl = dl
+		c.text += "\n" + deadlineLine(*dl)
 	}
 	if raw := lastLines(strings.Join(lines, "\n"), alertRawLines); len(raw) > 0 {
 		c.text += "\n" + preBlock(raw, alertMaxText)

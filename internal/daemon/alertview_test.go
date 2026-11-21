@@ -155,6 +155,9 @@ func TestPromptViewPermissions(t *testing.T) {
 	if got := alertHead(v, "Claude Code", store.AlertPermission); got != "🔐 Claude Code: Bash command · rm -rf build" {
 		t.Errorf("head %q", got)
 	}
+	if got := labels(v.alertOptions()); got != "1 Yes=1 | 2 No=2 | Esc=escape" {
+		t.Errorf("Claude permission choices = %s", got)
+	}
 
 	c := parsePromptView(screenLines(codexScreen), true)
 	if !c.ok || c.question != "Would you like to run the following command?" {
@@ -220,6 +223,105 @@ func TestAlertContentTooLongFallsBack(t *testing.T) {
 	c := d.alertContent(screenLines(screen), store.AlertPermission, agents.Claude)
 	if format.VisibleLen(c.text) > alertMaxText+200 || !strings.Contains(c.text, "<pre>") {
 		t.Errorf("alert of %d characters, fallback %v", format.VisibleLen(c.text), strings.Contains(c.text, "<pre>"))
+	}
+}
+
+func TestUnknownBlockedPromptsAreVisibleWithoutGuessedActions(t *testing.T) {
+	d := &daemon{cfg: config.Default("/h"), now: time.Now}
+	lines := screenLines("A future confirmation prompt\nPress a key to continue")
+	for _, rt := range []agents.Runtime{agents.Pi, agents.Claude, agents.Codex} {
+		c := d.alertContent(lines, "", rt)
+		if c.kind != store.AlertQuestion || len(c.opts) != 0 {
+			t.Errorf("%s: kind %q, options %+v; want a no-action alert", rt, c.kind, c.opts)
+		}
+		if !strings.Contains(c.text, "No keys will be sent") || !strings.Contains(c.text, "Press a key to continue") {
+			t.Errorf("%s: alert does not explain the safe fallback: %q", rt, c.text)
+		}
+		if alertMarkup(1, c.opts) != nil {
+			t.Errorf("%s: an unrecognized prompt has a keyboard", rt)
+		}
+	}
+}
+
+func TestUnknownTypedPermissionHasNoGuessedActions(t *testing.T) {
+	cfg := config.Default("/h")
+	// Older generated configs may still contain these former default answers.
+	cfg.Agents.Claude.Answers = []config.Answer{{Label: "1 Yes", Keys: []string{"1"}}}
+	cfg.Agents.Codex.Answers = []config.Answer{{Label: "Yes", Keys: []string{"y"}}}
+	d := &daemon{cfg: cfg, now: time.Now}
+	lines := []string{"A future permission screen", "Delete the selected directory?", "  1. Continue", "  2. Cancel"}
+	for _, rt := range []agents.Runtime{agents.Pi, agents.Claude, agents.Codex} {
+		c := d.alertContent(lines, store.AlertPermission, rt)
+		if c.kind != store.AlertPermission || len(c.opts) != 0 || alertMarkup(1, c.opts) != nil {
+			t.Errorf("%s: kind %q, options %+v; want a no-action permission alert", rt, c.kind, c.opts)
+		}
+		if !strings.Contains(c.text, "No keys will be sent") || !strings.Contains(c.text, "Delete the selected directory") {
+			t.Errorf("%s: the unknown action is not explained: %q", rt, c.text)
+		}
+	}
+}
+
+func TestConfiguredPermissionFallbackIsExplicitAndPermissionOnly(t *testing.T) {
+	cfg := config.Default("/h")
+	cfg.Agents.Claude.Answers = []config.Answer{{Label: "Known legacy choice", Keys: []string{"1"}}}
+	lines := []string{"A future permission screen", "Delete the selected directory?", "  1. Continue", "  2. Cancel"}
+	d := &daemon{cfg: cfg, now: time.Now}
+	withoutOptIn := d.alertContent(lines, store.AlertPermission, agents.Claude)
+	if len(withoutOptIn.opts) != 0 {
+		t.Fatalf("answers without the opt-in = %+v", withoutOptIn.opts)
+	}
+	cfg.Agents.Claude.AllowUnknownPermissionAnswers = true
+	d.cfg = cfg
+	permission := d.alertContent(lines, store.AlertPermission, agents.Claude)
+	if len(permission.opts) != 1 || permission.opts[0].Label != "Known legacy choice" ||
+		!strings.Contains(permission.text, "configured fallback choices") {
+		t.Fatalf("explicit fallback = %+v", permission)
+	}
+	for _, kind := range []string{"", store.AlertQuestion} {
+		question := d.alertContent(lines, kind, agents.Claude)
+		if len(question.opts) != 0 || alertMarkup(1, question.opts) != nil {
+			t.Errorf("kind %q got configured permission choices: %+v", kind, question.opts)
+		}
+	}
+}
+
+func TestUnknownQuestionDoesNotUsePermissionFallbackAnswers(t *testing.T) {
+	cfg := config.Default("/h")
+	cfg.Agents.Claude.AllowUnknownPermissionAnswers = true
+	cfg.Agents.Claude.Answers = []config.Answer{{Label: "Known fallback", Keys: []string{"1"}}}
+	d := &daemon{cfg: cfg, now: time.Now}
+	c := d.alertContent([]string{"Question needs input", "Type a response"}, store.AlertQuestion, agents.Claude)
+	if c.kind != store.AlertQuestion || len(c.opts) != 0 {
+		t.Fatalf("kind %q, options %+v; want a no-action question alert", c.kind, c.opts)
+	}
+	for _, opt := range c.opts {
+		if strings.Contains(strings.ToLower(opt.Label), "always") || strings.Contains(strings.ToLower(opt.Label), "yes") {
+			t.Errorf("permission fallback leaked into a question: %+v", opt)
+		}
+	}
+}
+
+func TestOversizedUntypedQuestionKeepsItsChoices(t *testing.T) {
+	d := &daemon{cfg: config.Default("/h"), now: time.Now}
+	var b strings.Builder
+	b.WriteString("────────────────────\nPick each operation?\n\n❯ 1. [ ] Option 1\n")
+	b.WriteString(strings.Repeat("         A detailed explanation of this choice. ", 30) + "\n")
+	for i := 2; i <= 8; i++ {
+		fmt.Fprintf(&b, "  %d. [ ] Option %d\n", i, i)
+		b.WriteString(strings.Repeat("         A detailed explanation of this choice. ", 30) + "\n")
+	}
+	b.WriteString("     Next\n────────────────────\nEsc to cancel\n")
+	lines := screenLines(b.String())
+	v := parsePromptView(lines, false)
+	c := d.alertContent(lines, "", agents.Claude)
+	if c.kind != store.AlertQuestion || len(c.opts) < 8 {
+		t.Fatalf("view ok %v, options %d, question %q; kind %q, options %d; oversized untyped question lost its choices", v.ok, len(v.options), v.question, c.kind, len(c.opts))
+	}
+	if !strings.Contains(c.text, "❓ Claude Code:") || !strings.Contains(c.text, "Pick each operation?") || strings.Contains(c.text, "Permission needed") {
+		t.Errorf("fallback mislabels the question: %q", c.text)
+	}
+	if got := labels(c.opts); !strings.Contains(got, "Next ➡="+nextKey) {
+		t.Errorf("oversized question lost its Next action: %s", got)
 	}
 }
 
@@ -527,6 +629,20 @@ func TestInferAlertKindNeedsRecognizableChoices(t *testing.T) {
 				t.Errorf("kind = %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestUnknownChangedFollowUpScreenStaysEligibleForNoActionAlert(t *testing.T) {
+	previous := alertHash(screenLines(piConfirmScreen))
+	unknown := screenLines("A future follow-up prompt\nPress a key to continue")
+	if parsePromptView(unknown, true).ok {
+		t.Fatal("fixture unexpectedly parses as a prompt")
+	}
+	if !followUpScreenChanged(unknown, previous) {
+		t.Fatal("changed unknown follow-up was suppressed")
+	}
+	if followUpScreenChanged(screenLines(piConfirmScreen), previous) {
+		t.Fatal("the screen just answered was treated as a new follow-up")
 	}
 }
 
