@@ -34,6 +34,31 @@ func TestPartKeyboard(t *testing.T) {
 	}
 }
 
+func TestWaitMarkupEligiblePrefix(t *testing.T) {
+	for _, tc := range []struct {
+		total, sendable int
+		want            string
+	}{
+		{3, 3, "⚡ Send all now"},
+		{3, 2, "⚡ Send 2 now"},
+		{3, 1, "⚡ Send now"},
+		{3, 0, ""},
+	} {
+		markup := waitMarkup(8, tc.total, tc.sendable)
+		var send string
+		for _, row := range markup.InlineKeyboard {
+			for _, button := range row {
+				if strings.Contains(button.Text, "Send") {
+					send = button.Text
+				}
+			}
+		}
+		if send != tc.want {
+			t.Errorf("total %d, sendable %d: button %q, want %q", tc.total, tc.sendable, send, tc.want)
+		}
+	}
+}
+
 // With the Mini App, each button opens its page; the topic's store id is in
 // the address, and the main chat has none.
 func TestKeyboardWebAppURLs(t *testing.T) {
@@ -41,7 +66,7 @@ func TestKeyboardWebAppURLs(t *testing.T) {
 	k := &keyboardSource{}
 	k.snap.Store(&kbSnap{key: key, gen: "1", url: "https://mac.example.ts.net/"})
 	kb := k.forPart(store.Part{Kind: "notice", Key: "intro:4", ThreadID: 7})
-	if len(kb.Keyboard) != 2 || len(kb.Keyboard[0]) != 3 || len(kb.Keyboard[1]) != 3 {
+	if len(kb.Keyboard) != 3 || len(kb.Keyboard[0]) != 3 || len(kb.Keyboard[1]) != 3 || len(kb.Keyboard[2]) != 1 {
 		t.Fatalf("rows: %+v", kb.Keyboard)
 	}
 	want := map[string]string{
@@ -49,17 +74,24 @@ func TestKeyboardWebAppURLs(t *testing.T) {
 	}
 	for _, row := range kb.Keyboard {
 		for _, b := range row {
+			view, hasView := want[b.Text]
+			if !hasView {
+				if b.Text != "📥 Queue" || b.WebApp != nil {
+					t.Errorf("unexpected non-page button: %+v", b)
+				}
+				continue
+			}
 			if b.WebApp == nil {
 				t.Fatalf("%q has no web_app", b.Text)
 			}
-			if exp := "https://mac.example.ts.net/app?k=" + key + "&go=" + want[b.Text] + "&t=7"; b.WebApp.URL != exp {
+			if exp := "https://mac.example.ts.net/app?k=" + key + "&go=" + view + "&t=7"; b.WebApp.URL != exp {
 				t.Errorf("%q: %s, want %s", b.Text, b.WebApp.URL, exp)
 			}
 		}
 	}
 	for _, row := range keyboardFor(k.snap.Load(), 0).Keyboard {
 		for _, b := range row {
-			if strings.Contains(b.WebApp.URL, "&t=") {
+			if b.WebApp != nil && strings.Contains(b.WebApp.URL, "&t=") {
 				t.Errorf("main chat button with a topic: %s", b.WebApp.URL)
 			}
 		}

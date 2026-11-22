@@ -17,8 +17,8 @@ import (
 	"rex-tg/internal/telegram"
 )
 
-// The reply keyboard: six buttons in two rows under the message box, the
-// same in every topic and in the main chat (inbound.Buttons).
+// The persistent reply keyboard is the same in every topic and in the main
+// chat (inbound.Buttons).
 //
 // With the Mini App on, each button is a web_app button: one tap opens its
 // page. Its address carries a key (kv "kb_key"), because Telegram gives a
@@ -37,7 +37,7 @@ import (
 // keyboardVersion names the buttons. A new value posts the keyboard note to
 // the main chat and every open topic once more, after an update that changes
 // the buttons.
-const keyboardVersion = "5" // Project and Config replace Files and Changes
+const keyboardVersion = "6" // Queue adds access to a topic's waiting messages
 
 const (
 	keyboardKey = "reply_keyboard" // kv: the version, key generation, and Mini App address that the chats have
@@ -45,8 +45,8 @@ const (
 	kbGenKV     = "kb_gen"         // kv: how often the key was made new (/rekey)
 )
 
-const keyboardTopicNote = "⌨️ Buttons under the message box: 🎛 Panel (/rt), 🖥 Screen, 📁 Project, ⚙️ Config, ✍️ Annotate, and 🧩 Templates. " +
-	"With the Mini App on, each button opens its page directly. Tap ⊞ in the message box to show or hide them."
+const keyboardTopicNote = "⌨️ Buttons under the message box: 🎛 Panel (/rt), 🖥 Screen, 📁 Project, ⚙️ Config, ✍️ Annotate, 🧩 Templates, and 📥 Queue (/queue). " +
+	"With the Mini App on, the page buttons open directly; Queue shows waiting messages in chat. Tap ⊞ in the message box to show or hide them."
 
 const keyboardNote = keyboardTopicNote + " /help brings them back."
 
@@ -131,12 +131,12 @@ func keyboardURL(base, key, view string, thread int64) string {
 func keyboardFor(s *kbSnap, thread int64) *telegram.ReplyKeyboardMarkup {
 	var rows [][]telegram.KeyboardButton
 	for i, b := range inbound.Buttons {
-		if i == 0 || i == 3 { // two rows of three
+		if i%3 == 0 { // three buttons per row
 			rows = append(rows, nil)
 		}
 		btn := telegram.KeyboardButton{Text: b.Label}
-		if s != nil && s.url != "" {
-			btn.WebApp = &telegram.WebAppInfo{URL: keyboardURL(s.url, s.key, buttonViews[b.Command], thread)}
+		if view, ok := buttonViews[b.Command]; ok && s != nil && s.url != "" {
+			btn.WebApp = &telegram.WebAppInfo{URL: keyboardURL(s.url, s.key, view, thread)}
 		}
 		rows[len(rows)-1] = append(rows[len(rows)-1], btn)
 	}

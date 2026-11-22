@@ -65,12 +65,18 @@ func TestReplyKeyboardWebApp(t *testing.T) {
 	check := func(m tgtest.Message, wantT bool) string {
 		t.Helper()
 		kb := m.Keyboard
-		if kb == nil || len(kb.Keyboard) != 2 {
+		if kb == nil || len(kb.Keyboard) != 3 {
 			t.Fatalf("%q: keyboard %+v", m.Text, kb)
 		}
 		key := ""
 		for _, row := range kb.Keyboard {
 			for _, b := range row {
+				if b.Text == "📥 Queue" {
+					if b.WebApp != nil {
+						t.Fatalf("Queue must remain a text command: %+v", b)
+					}
+					continue
+				}
 				if b.WebApp == nil {
 					t.Fatalf("%q: not a web_app button", b.Text)
 				}

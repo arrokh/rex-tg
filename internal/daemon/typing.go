@@ -383,12 +383,14 @@ func (d *daemon) onPrepared(e evPrepared) {
 		n := d.waitingCount(tid)
 		text := waitNoticeFor(e.res.notice, n)
 		if d.waitNoticed[e.in.UpdateID] || e.in.Reason == reasonWaitNoticed {
-			d.updateWaitNotice(e.in.UpdateID, text, n)
+			d.updateWaitNotice(tid, e.in.UpdateID, text, n)
 		}
 		if !d.waitNoticed[e.in.UpdateID] && e.in.Reason != reasonWaitNoticed && d.now().Sub(e.in.CreatedAt) >= d.timing.WaitNotice {
 			d.waitNoticed[e.in.UpdateID] = true
 			d.waitTexts[e.in.UpdateID] = text
-			d.postWaitNotice(th, e.in.UpdateID, text, n)
+			sendable := d.sendNowEligibleCount(tid)
+			d.waitSendables[e.in.UpdateID] = sendable
+			d.postWaitNotice(th, e.in.UpdateID, text, n, sendable)
 			if err := d.st.SetInboundState(d.ctx, e.in.UpdateID, store.InboundQueued, reasonWaitNoticed, d.now()); err != nil {
 				d.log.Warn("waiting: state", "err", err)
 			}
@@ -410,17 +412,27 @@ func (d *daemon) onPrepared(e evPrepared) {
 	}
 }
 
-// waitMarkup is the buttons of the waiting notice. They act on every
-// waiting message of the topic, so with several they say so.
-func waitMarkup(updateID int64, n int) *telegram.InlineKeyboardMarkup {
-	send, cancel := "⚡ Send now", "✖ Cancel"
-	if n > 1 {
-		send, cancel = "⚡ Send all now", "✖ Cancel all"
+// waitMarkup gives Send-now access only to the eligible FIFO prefix. A
+// command, pause, or open prompt must not be presented as sendable.
+func waitMarkup(updateID int64, total, sendable int) *telegram.InlineKeyboardMarkup {
+	var row []telegram.InlineKeyboardButton
+	if sendable > 0 {
+		send := "⚡ Send now"
+		if sendable > 1 {
+			if sendable == total {
+				send = "⚡ Send all now"
+			} else {
+				send = fmt.Sprintf("⚡ Send %d now", sendable)
+			}
+		}
+		row = append(row, telegram.InlineKeyboardButton{Text: send, CallbackData: fmt.Sprintf("s:%d:%d", updateID, sendable)})
 	}
-	return &telegram.InlineKeyboardMarkup{InlineKeyboard: [][]telegram.InlineKeyboardButton{{
-		{Text: send, CallbackData: fmt.Sprintf("s:%d", updateID)},
-		{Text: cancel, CallbackData: fmt.Sprintf("c:%d", updateID)},
-	}}}
+	cancel := "✖ Cancel"
+	if total > 1 {
+		cancel = "✖ Cancel all"
+	}
+	row = append(row, telegram.InlineKeyboardButton{Text: cancel, CallbackData: fmt.Sprintf("c:%d", updateID)})
+	return &telegram.InlineKeyboardMarkup{InlineKeyboard: [][]telegram.InlineKeyboardButton{row}}
 }
 
 // waitingCount is the number of messages that wait in a topic's queue, not
@@ -446,6 +458,7 @@ func (d *daemon) forget(updateID int64) {
 	delete(d.actions, updateID)
 	delete(d.waitNoticed, updateID)
 	delete(d.waitTexts, updateID)
+	delete(d.waitSendables, updateID)
 	delete(d.vimNoticed, updateID)
 }
 

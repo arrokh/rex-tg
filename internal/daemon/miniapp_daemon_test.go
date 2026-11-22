@@ -382,20 +382,31 @@ func TestConfigUsesTheLinkedSession(t *testing.T) {
 	if model["name"] != "model" || model["free"] != nil || fmt.Sprint(model["choices"]) != "[test/model-one test/model-two]" {
 		t.Fatalf("model picker does not match the session registry: %v", model)
 	}
-	body := strings.NewReader(`{"act":"0123456789abcdef0123456789abcdef","name":"model","value":"test/model-two"}`)
-	req, _ := http.NewRequest("POST", "http://"+addr+"/api/config/do?id="+id, body)
-	req.Header.Set("X-Telegram-Init-Data", signedInit(e.tg.Token(), ownerID))
-	req.Header.Set("Tailscale-User-Login", "owner@example.com")
-	req.Header.Set("Content-Type", "application/json")
-	res, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatal(err)
+	post := func(body string) (int, map[string]any) {
+		t.Helper()
+		req, err := http.NewRequest("POST", "http://"+addr+"/api/config/do?id="+id, strings.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("X-Telegram-Init-Data", signedInit(e.tg.Token(), ownerID))
+		req.Header.Set("Tailscale-User-Login", "owner@example.com")
+		req.Header.Set("Content-Type", "application/json")
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer res.Body.Close()
+		var result map[string]any
+		if err := json.NewDecoder(res.Body).Decode(&result); err != nil {
+			t.Fatal(err)
+		}
+		return res.StatusCode, result
 	}
-	var result map[string]any
-	_ = json.NewDecoder(res.Body).Decode(&result)
-	res.Body.Close()
-	if res.StatusCode != http.StatusOK || result["ok"] != true {
-		t.Fatalf("change model: %d %v", res.StatusCode, result)
+	if code, result := post(`{"act":"2123456789abcdef0123456789abcdef","name":"model","value":"test/not-available"}`); code != http.StatusOK || result["ok"] != false || !strings.Contains(fmt.Sprint(result["message"]), "not in this session") {
+		t.Fatalf("unlisted model: %d %v", code, result)
+	}
+	if code, result := post(`{"act":"0123456789abcdef0123456789abcdef","name":"model","value":"test/model-two"}`); code != http.StatusOK || result["ok"] != true {
+		t.Fatalf("change model: %d %v", code, result)
 	}
 	e.waitFor("Config setting typed once", func() bool { return len(e.pastes()) == 1 })
 	if got := e.pastes()[0]; got != "/model test/model-two" {
@@ -416,20 +427,8 @@ func TestConfigUsesTheLinkedSession(t *testing.T) {
 	if code, _ := miniGet(t, e, addr, "/api/config?id="+id, ownerID); code != http.StatusConflict {
 		t.Errorf("stale Config page read: %d, want conflict", code)
 	}
-	body = strings.NewReader(`{"act":"1123456789abcdef0123456789abcdef","name":"effort","value":"medium"}`)
-	req, _ = http.NewRequest("POST", "http://"+addr+"/api/config/do?id="+id, body)
-	req.Header.Set("X-Telegram-Init-Data", signedInit(e.tg.Token(), ownerID))
-	req.Header.Set("Tailscale-User-Login", "owner@example.com")
-	req.Header.Set("Content-Type", "application/json")
-	res, err = http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	result = map[string]any{}
-	_ = json.NewDecoder(res.Body).Decode(&result)
-	res.Body.Close()
-	if res.StatusCode != http.StatusOK || result["ok"] != false {
-		t.Errorf("stale Config action: %d %v", res.StatusCode, result)
+	if code, result := post(`{"act":"1123456789abcdef0123456789abcdef","name":"effort","value":"medium"}`); code != http.StatusOK || result["ok"] != false {
+		t.Errorf("stale Config action: %d %v", code, result)
 	}
 	if got := len(e.pastes()); got != 1 {
 		t.Errorf("stale action typed a second command: %v", e.pastes())

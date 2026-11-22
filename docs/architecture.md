@@ -545,6 +545,7 @@ An unlinked Threaded Mode topic acts as the main chat. These commands also work 
 | `/at cancel <n>` | Cancel the schedule identified by the list. |
 | `/rename <name>` | Rename topic, Rex pane, and eligible tab; the response reports what succeeded. |
 | `/rename auto` | Clear manual naming and resume automatic naming. |
+| `/queue` | Show the linked topic’s waiting messages and offer Send now for the eligible messages at the front of the queue. |
 | `/unlink` | Stop mirroring the topic and cancel queued/in-flight work where possible. Leaves Telegram history; does not close the agent's pane. |
 
 #### Sending commands to the agent
@@ -558,7 +559,7 @@ An unlinked Threaded Mode topic acts as the main chat. These commands also work 
 
 | Surface | Actions |
 | --- | --- |
-| Reply keyboard | 🎛 Panel, 🖥 Screen, 📁 Project, ⚙️ Config, ✍️ Annotate, 🧩 Templates. Project groups Files and Changes. Config adjusts the linked session's model and thinking effort. Buttons never route as agent prompt text. |
+| Reply keyboard | 🎛 Panel, 🖥 Screen, 📁 Project, ⚙️ Config, ✍️ Annotate, 🧩 Templates, 📥 Queue. Project groups Files and Changes. Config adjusts the linked session's model and thinking effort. Buttons never route as agent prompt text. |
 | Waiting notice | Send now / Send all now, Cancel / Cancel all. Sending stops at the first non-steerable command or note and never bypasses prompt checks. |
 | Permission / question | Options from the supported prompt, Escape, and where supported tick/next/text-answer flows. Read the full prompt. |
 | Startup question | Checked cursor movement and Enter; buttons are bound to the question's process. |

@@ -41,6 +41,8 @@ func TestRouteText(t *testing.T) {
 		{"topic new is the bot's", "/new pi ~/app", true, cmd("new", "pi ~/app")},
 		{"topic double slash new", "//new", true, txt("/new")},
 		{"topic help", "/help", true, cmd("help", "")},
+		{"topic queue", "/queue", true, cmd("queue", "")},
+		{"main queue", "/queue", false, cmd(inbound.CmdTopicOnly, "queue")},
 		{"topic pause", "/pause", true, cmd("pause", "")},
 		{"main command", "/agents", false, cmd("agents", "")},
 		{"main attach command", "/attach", false, cmd("attach", "")},
@@ -91,7 +93,7 @@ func TestRouteTextButtons(t *testing.T) {
 }
 
 func TestRouteTextAllCommands(t *testing.T) {
-	for _, c := range []string{"info", "screen", "files", "changes", "approve", "deny", "esc", "interrupt", "key", "force", "mode", "verbose", "reasoning", "resend", "unlink", "mute", "unmute", "help"} {
+	for _, c := range []string{"info", "screen", "files", "changes", "approve", "deny", "esc", "interrupt", "key", "force", "mode", "verbose", "reasoning", "resend", "unlink", "mute", "unmute", "queue", "help"} {
 		if r := inbound.RouteText("/"+c, true, "b"); r.Kind != inbound.RouteCommand || r.Command != c {
 			t.Errorf("topic /%s: %+v", c, r)
 		}

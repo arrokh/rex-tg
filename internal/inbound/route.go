@@ -36,7 +36,7 @@ type Route struct {
 }
 
 var topicCommands = setOf("info", "screen", "files", "changes", "approve", "deny", "esc", "interrupt",
-	"key", "force", "model", "effort", "mode", "verbose", "reasoning", "resend", "unlink", "mute", "unmute", "rename", "at", "help")
+	"key", "force", "model", "effort", "mode", "verbose", "reasoning", "resend", "unlink", "mute", "unmute", "rename", "at", "queue", "help")
 
 var mainCommands = setOf("start", "agents", "attach", "new", "topics", "status", "pause", "unpause", "rt", "annotate", "templates", "rekey", "help")
 
@@ -57,6 +57,7 @@ var Buttons = []Button{
 	{"⚙️ Config", "config"},
 	{"✍️ Annotate", "annotate"},
 	{"🧩 Templates", "templates"},
+	{"📥 Queue", "queue"},
 }
 
 // buttonCommands maps a label, without emoji variation selectors, to its

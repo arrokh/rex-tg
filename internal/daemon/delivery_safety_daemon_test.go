@@ -1,7 +1,6 @@
 package daemon_test
 
 import (
-	"strings"
 	"testing"
 	"time"
 )
@@ -22,15 +21,9 @@ func TestSendNowCannotForceAControlCommand(t *testing.T) {
 	working(e, p, thread)
 	e.say(thread, "/model beta-1")
 	waiting := e.waitText(thread, "Waiting until the agent is idle")
-	e.pressButton(waiting, buttonData(waiting, "Send now"))
-	e.waitFor("the control to stay queued", func() bool {
-		for _, text := range e.callbackTexts() {
-			if strings.Contains(text, "Commands and prompt notes wait") {
-				return true
-			}
-		}
-		return false
-	})
+	if buttonData(waiting, "Send now") != "" {
+		t.Fatal("offered Send now for an idle-only control")
+	}
 	e.never("a control typed into the running turn", 250*time.Millisecond, func() bool { return len(e.pastes()) != 0 })
 	if m, _ := e.message(waiting.ID); buttonData(m, "Cancel") == "" {
 		t.Fatal("the queued control lost its Cancel button")

@@ -233,6 +233,7 @@ type daemon struct {
 	delivering           map[int64]*delivery
 	waitNoticed          map[int64]bool
 	waitTexts            map[int64]string        // the text of each posted waiting notice
+	waitSendables        map[int64]int           // eligible FIFO prefix shown on each waiting notice
 	macNotes             map[int64]*macNote      // the Mac hold's notice, by thread
 	drafts               map[int64]*draft        // the draft of a running turn, by thread
 	deadlines            map[int64]alertDeadline // the time limit of an open alert, by alert
@@ -302,6 +303,7 @@ func newDaemon(cfg config.Config, home string, log *slog.Logger, now func() time
 		delivering:     map[int64]*delivery{},
 		waitNoticed:    map[int64]bool{},
 		waitTexts:      map[int64]string{},
+		waitSendables:  map[int64]int{},
 		macNotes:       map[int64]*macNote{},
 		drafts:         map[int64]*draft{},
 		deadlines:      map[int64]alertDeadline{},
