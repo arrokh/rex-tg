@@ -55,6 +55,10 @@ func (d *daemon) mainCommand(r inbound.Route, chat, thread int64, inTopic bool) 
 		d.attachCommand(chat, thread)
 	case "rt":
 		d.panelCommand(chat, thread)
+	case "project":
+		d.say(chat, thread, "📁 Project needs the Mini App. You can also use /files or /changes in a linked topic.", nil)
+	case "config":
+		d.say(chat, thread, "⚙️ Config needs the Mini App. Use /model or /effort in a linked topic to configure that session.", nil)
 	case "annotate":
 		d.say(chat, thread, annotateText, nil)
 	case "templates":

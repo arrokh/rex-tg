@@ -50,7 +50,7 @@ func (s *Server) launchPage(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	view := q.Get("go")
 	switch view {
-	case ViewPanel, ViewScreen, ViewFiles, ViewChanges, ViewAnnotate, ViewTemplates:
+	case ViewPanel, ViewScreen, ViewFiles, ViewChanges, ViewProject, ViewConfig, ViewAnnotate, ViewTemplates:
 	default:
 		http.Error(w, `{"error":"This button is not known."}`, http.StatusBadRequest)
 		return

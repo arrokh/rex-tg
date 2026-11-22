@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"rex-tg/internal/format"
+	"rex-tg/internal/miniapp"
 	"rex-tg/internal/store"
 	"rex-tg/internal/telegram"
 	"rex-tg/internal/turn"
@@ -38,9 +39,10 @@ func fileOfferKey(thread int64, key string) string { return fmt.Sprintf("files:%
 
 // fileOffer is what the store keeps of an offer.
 type fileOffer struct {
-	At    int64    `json:"at"` // unix seconds
-	Paths []string `json:"paths"`
-	CWD   string   `json:"cwd,omitempty"` // the agent's folder, for the check at the tap
+	At       int64    `json:"at"` // unix seconds
+	Paths    []string `json:"paths"`
+	CWD      string   `json:"cwd,omitempty"`      // the agent's folder, for the check at the tap
+	Previews []string `json:"previews,omitempty"` // private Mini App file pages, by path index
 }
 
 // fileOfferItem makes the offer of the files a final answer names, or
@@ -60,13 +62,27 @@ func (d *daemon) fileOfferItem(th store.Thread, a turn.Post) (store.OutboxItem, 
 		return store.OutboxItem{}, false
 	}
 	key := a.Key + ":files"
-	b, _ := json.Marshal(fileOffer{At: d.now().Unix(), Paths: paths, CWD: conv.CWD})
+	o := fileOffer{At: d.now().Unix(), Paths: paths, CWD: conv.CWD}
+	if d.miniAppReady() && d.cfg.MiniApp.Files && filepath.IsAbs(conv.CWD) && filepath.Clean(conv.CWD) != string(filepath.Separator) {
+		o.Previews = make([]string, len(paths))
+		for i, path := range paths {
+			rel, err := filepath.Rel(conv.CWD, path)
+			if err != nil || !filepath.IsLocal(rel) {
+				continue // outside the Files browser root; attachment only
+			}
+			id, err := d.savePageOf(miniapp.Page{Kind: miniapp.KindFiles, Title: "📂 " + filepath.Base(conv.CWD), Thread: th.ID, Dir: conv.CWD, InitialFile: filepath.ToSlash(rel)})
+			if err == nil {
+				o.Previews[i] = id
+			}
+		}
+	}
+	b, _ := json.Marshal(o)
 	if err := d.st.Set(d.ctx, fileOfferKey(th.ID, key), string(b)); err != nil {
 		d.log.Warn("file offer: keep the paths", "err", err)
 		return store.OutboxItem{}, false
 	}
 	var sb strings.Builder
-	sb.WriteString("📎 <b>Files in this answer</b>. Tap one to get it here.")
+	sb.WriteString("📎 <b>Files in this answer</b>. Open a preview or send a file as an attachment.")
 	for _, p := range paths {
 		sb.WriteString("\n• <code>" + esc(format.Truncate(d.tildePath(p), maxShownPath)) + "</code>")
 		if fi, err := os.Stat(p); err == nil {
@@ -104,7 +120,7 @@ func loadFileOffer(ctx context.Context, st *store.Store, thread int64, key strin
 
 // fileOfferMarkup gives the sender the buttons of an offer: one per file.
 // It runs in the sender.
-func fileOfferMarkup(st *store.Store) func(store.Part) *telegram.InlineKeyboardMarkup {
+func fileOfferMarkup(st *store.Store, base string) func(store.Part) *telegram.InlineKeyboardMarkup {
 	return func(p store.Part) *telegram.InlineKeyboardMarkup {
 		if p.Kind != fileOfferKind {
 			return nil
@@ -115,10 +131,17 @@ func fileOfferMarkup(st *store.Store) func(store.Part) *telegram.InlineKeyboardM
 		}
 		var rows [][]telegram.InlineKeyboardButton
 		for i, path := range o.Paths {
-			rows = append(rows, []telegram.InlineKeyboardButton{{
-				Text:         "📎 " + format.Truncate(filepath.Base(path), 40),
+			var row []telegram.InlineKeyboardButton
+			if strings.TrimSpace(base) != "" && i < len(o.Previews) && o.Previews[i] != "" {
+				row = append(row, telegram.InlineKeyboardButton{
+					Text: "👁 " + format.Truncate(filepath.Base(path), 32), WebApp: &telegram.WebAppInfo{URL: miniAppURL(base, o.Previews[i])},
+				})
+			}
+			row = append(row, telegram.InlineKeyboardButton{
+				Text:         "📎 Attach " + format.Truncate(filepath.Base(path), 32),
 				CallbackData: fmt.Sprintf("%s:%d:%d", fileOfferData, p.OutboxID, i),
-			}})
+			})
+			rows = append(rows, row)
 		}
 		return &telegram.InlineKeyboardMarkup{InlineKeyboard: rows}
 	}

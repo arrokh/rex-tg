@@ -172,6 +172,9 @@ func TestLaunch(t *testing.T) {
 	if code, body := c.do("GET", "/api/launch?go=screen&t=7", key, ""); code != http.StatusOK || body["page"] != "an1" || fl.view != ViewScreen || fl.thread != 7 {
 		t.Fatalf("screen of 7: %d %v %+v", code, body, fl)
 	}
+	if code, _ := c.do("GET", "/api/launch?go=project&t=7", key, ""); code != http.StatusOK || fl.view != ViewProject || fl.thread != 7 {
+		t.Errorf("project of 7: %d %+v", code, fl)
+	}
 	if code, body := c.do("GET", "/api/launch?go=annotate", key, ""); code != http.StatusOK || len(body["pick"].([]any)) != 1 {
 		t.Fatalf("no topic: %d %v", code, body)
 	}

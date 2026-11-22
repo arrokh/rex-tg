@@ -1,6 +1,7 @@
 package daemon_test
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
@@ -347,6 +348,81 @@ func miniGet(t *testing.T, e *env, addr, path string, user int64) (int, map[stri
 func pageID(u string) string {
 	_, id, _ := strings.Cut(u, "/app?p=")
 	return id
+}
+
+// TestConfigUsesTheLinkedSession opens Config for a linked topic, reads its
+// settings, and queues one validated setting change through the normal input path.
+func TestConfigUsesTheLinkedSession(t *testing.T) {
+	addr := freeAddr(t)
+	e, _, thread := piTopicCfg(t, "pi-config", func(e *env) {
+		e.cfg.MiniApp.URL = "https://mac.example.ts.net:8443"
+		e.cfg.MiniApp.Listen = addr
+	})
+	topic, ok, err := e.peek().ThreadByTopic(context.Background(), chatID, thread)
+	if err != nil || !ok {
+		t.Fatalf("read linked topic: %v, %v", ok, err)
+	}
+	code, launched := miniGet(t, e, addr, fmt.Sprintf("/api/launch?go=config&t=%d", topic.ID), ownerID)
+	if code != http.StatusOK || launched["page"] == nil {
+		t.Fatalf("launch Config: %d %v", code, launched)
+	}
+	id := fmt.Sprint(launched["page"])
+	code, state := miniGet(t, e, addr, "/api/config?id="+id, ownerID)
+	if code != http.StatusOK || len(state["controls"].([]any)) != 2 {
+		t.Fatalf("Config state: %d %v", code, state)
+	}
+	body := strings.NewReader(`{"act":"0123456789abcdef0123456789abcdef","name":"effort","value":"high"}`)
+	req, _ := http.NewRequest("POST", "http://"+addr+"/api/config/do?id="+id, body)
+	req.Header.Set("X-Telegram-Init-Data", signedInit(e.tg.Token(), ownerID))
+	req.Header.Set("Tailscale-User-Login", "owner@example.com")
+	req.Header.Set("Content-Type", "application/json")
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result map[string]any
+	_ = json.NewDecoder(res.Body).Decode(&result)
+	res.Body.Close()
+	if res.StatusCode != http.StatusOK || result["ok"] != true {
+		t.Fatalf("change effort: %d %v", res.StatusCode, result)
+	}
+	e.waitFor("Config setting typed once", func() bool { return len(e.pastes()) == 1 })
+	if got := e.pastes()[0]; got != "/thinking high" {
+		t.Errorf("typed %q, want the agent's effort command", got)
+	}
+
+	th, ok, err := e.peek().ThreadByTopic(context.Background(), chatID, thread)
+	if err != nil || !ok {
+		t.Fatalf("read linked topic: %v, %v", ok, err)
+	}
+	oldConv := th.CurrentConversationID
+	newSession := e.newPi("pi-config-new")
+	e.hookPi(newSession, "clear")
+	e.waitFor("Config topic session to change", func() bool {
+		current, ok, err := e.peek().ThreadByTopic(context.Background(), chatID, thread)
+		return err == nil && ok && current.CurrentConversationID != oldConv
+	})
+	if code, _ := miniGet(t, e, addr, "/api/config?id="+id, ownerID); code != http.StatusConflict {
+		t.Errorf("stale Config page read: %d, want conflict", code)
+	}
+	body = strings.NewReader(`{"act":"1123456789abcdef0123456789abcdef","name":"effort","value":"medium"}`)
+	req, _ = http.NewRequest("POST", "http://"+addr+"/api/config/do?id="+id, body)
+	req.Header.Set("X-Telegram-Init-Data", signedInit(e.tg.Token(), ownerID))
+	req.Header.Set("Tailscale-User-Login", "owner@example.com")
+	req.Header.Set("Content-Type", "application/json")
+	res, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result = map[string]any{}
+	_ = json.NewDecoder(res.Body).Decode(&result)
+	res.Body.Close()
+	if res.StatusCode != http.StatusOK || result["ok"] != false {
+		t.Errorf("stale Config action: %d %v", res.StatusCode, result)
+	}
+	if got := len(e.pastes()); got != 1 {
+		t.Errorf("stale action typed a second command: %v", e.pastes())
+	}
 }
 
 // /screen's picture has a button that opens the live screen. The live

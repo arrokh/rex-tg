@@ -141,7 +141,7 @@ func Run(ctx context.Context, opt Options) error {
 		Now:           opt.Now,
 		Logger:        log,
 		CheckDelay:    timing.CheckDelay,
-		Markup:        bothMarkups(fileRetryMarkup, bothMarkups(fileOfferMarkup(st), answerMarkup(st, cfg.Display.QuickReplies, miniBase(cfg)))),
+		Markup:        bothMarkups(fileRetryMarkup, bothMarkups(fileOfferMarkup(st, miniBase(cfg)), answerMarkup(st, cfg.Display.QuickReplies, miniBase(cfg)))),
 		Keyboard:      kb.forPart,
 		PolledSince:   func(t time.Time) bool { return polled.Load() >= t.UnixNano() },
 	})

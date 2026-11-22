@@ -265,6 +265,11 @@ func (d *daemon) changesPage(th store.Thread, top string) (string, error) {
 	return d.livePage(miniapp.KindChanges, th.ID, top, "📝 "+filepath.Base(top), top)
 }
 
+// projectPage returns the combined files and changes page for a folder.
+func (d *daemon) projectPage(th store.Thread, root string) (string, error) {
+	return d.livePage(miniapp.KindProject, th.ID, root, "📁 "+filepath.Base(root), root)
+}
+
 // filesCommand answers /files with a button that opens the agent's folder
 // in the Mini App: the repository's top folder when the agent works in a
 // git repository, else its working folder.

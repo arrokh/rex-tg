@@ -1,12 +1,16 @@
 package daemon_test
 
 import (
+	"context"
+	"encoding/json"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"rex-tg/internal/miniapp"
 	"rex-tg/internal/telegram/tgtest"
 )
 
@@ -28,6 +32,9 @@ func TestFileOfferSendsAFileOnlyOnTap(t *testing.T) {
 	offer := e.waitText(thread, "Files in this answer")
 	if offer.ID < answer.ID || !offer.Silent || offer.Markup == nil || len(offer.Markup.InlineKeyboard) != 2 {
 		t.Fatalf("offer %+v, answer %d: want a silent offer with 2 buttons after the answer", offer, answer.ID)
+	}
+	if got := offer.Markup.InlineKeyboard[0][0].Text; !strings.Contains(got, "Attach report.pdf") {
+		t.Errorf("file action label = %q, want explicit attachment fallback", got)
 	}
 	documents := func(name string) []tgtest.Message {
 		var out []tgtest.Message
@@ -82,4 +89,50 @@ func TestFileOfferSendsAFileOnlyOnTap(t *testing.T) {
 	e.never("an upload of the linked file", 300*time.Millisecond, func() bool {
 		return len(documents("data.csv"))+len(documents("keys.csv")) > 0
 	})
+}
+
+// A file offer with the Mini App enabled has an authenticated, scoped preview
+// action and keeps document delivery as an explicit fallback.
+func TestFileOfferIncludesMiniAppPreviewAndAttachmentFallback(t *testing.T) {
+	addr := freeAddr(t)
+	e, p, thread, repo := repoTopic(t, "pi-file-preview", func(e *env) {
+		e.cfg.MiniApp.URL = "https://mac.example.ts.net:8443"
+		e.cfg.MiniApp.Listen = addr
+		e.cfg.MiniApp.Files = true
+		e.cfg.Display.SendFiles = []string{"md"}
+	})
+	path := filepath.Join(repo, "preview.md")
+	if err := os.WriteFile(path, []byte("preview content"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	p.User("show the Markdown file")
+	p.Final("Here is " + path)
+	offer := e.waitText(thread, "Files in this answer")
+	if offer.Markup == nil {
+		t.Fatal("missing file offer buttons")
+	}
+	var pageID string
+	var attach bool
+	for _, row := range offer.Markup.InlineKeyboard {
+		for _, button := range row {
+			if button.WebApp != nil {
+				u, err := url.Parse(button.WebApp.URL)
+				if err != nil {
+					t.Fatal(err)
+				}
+				pageID = u.Query().Get("p")
+			}
+			if button.CallbackData != "" && strings.Contains(button.Text, "Attach preview.md") {
+				attach = true
+			}
+		}
+	}
+	if pageID == "" || !attach {
+		t.Fatalf("offer buttons = %+v; want scoped Mini App preview and attachment fallback", offer.Markup.InlineKeyboard)
+	}
+	raw, ok, err := e.peek().Get(context.Background(), "page:"+pageID)
+	var pg miniapp.Page
+	if err != nil || !ok || json.Unmarshal([]byte(raw), &pg) != nil || pg.Dir != repo || pg.InitialFile != "preview.md" {
+		t.Fatalf("preview is not bound to the project and file: %+v (found %v, err %v)", pg, ok, err)
+	}
 }

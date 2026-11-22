@@ -509,6 +509,17 @@
   .segc.stack button { flex: none; height: 44px; font-size: 15px; justify-content: flex-start; padding: 0 12px; white-space: normal; }
   .segc.stack button::before { content: ""; flex: none; width: 16px; height: 16px; border-radius: 8px; box-shadow: inset 0 0 0 2px var(--hint); }
   .segc.stack button.on::before { box-shadow: inset 0 0 0 5px var(--btn); }
+  /* session-scoped agent configuration */
+  .config-page { display: flex; flex-direction: column; gap: 12px; }
+  .config-hint { margin: 0 2px; color: var(--hint); font-size: 0.875rem; }
+  .config-list { display: flex; flex-direction: column; gap: 12px; }
+  .config-item, .config-pending { border: 1px solid color-mix(in srgb, var(--hint) 22%, transparent); border-radius: 12px; padding: 14px; background: var(--code); }
+  .config-name { margin: 0 0 4px; font-size: 1rem; }
+  .config-current { margin: 0 0 10px; color: var(--hint); font-size: 0.875rem; overflow-wrap: anywhere; }
+  .config-options { display: flex; flex-wrap: wrap; gap: 8px; }
+  .config-options .selected { box-shadow: inset 0 0 0 2px var(--btn); }
+  .config-input { min-width: 12rem; flex: 1; height: 40px; padding: 0 10px; border: 0; border-radius: 10px; background: var(--bg); color: var(--fg); font: 16px/1.4 -apple-system, system-ui, sans-serif; }
+
   /* locally saved message templates */
   .templates { display: flex; flex-direction: column; gap: 12px; }
   .template-intro { margin: 0 2px; color: var(--hint); font-size: 0.875rem; }

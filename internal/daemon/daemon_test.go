@@ -1302,7 +1302,7 @@ func TestReplyKeyboard(t *testing.T) {
 				got = append(got, b.Text)
 			}
 		}
-		if strings.Join(got, "|") != "🎛 Panel|🖥 Screen|📂 Files|📝 Changes|✍️ Annotate|🧩 Templates" {
+		if strings.Join(got, "|") != "🎛 Panel|🖥 Screen|📁 Project|⚙️ Config|✍️ Annotate|🧩 Templates" {
 			t.Errorf("buttons = %v", got)
 		}
 	}
