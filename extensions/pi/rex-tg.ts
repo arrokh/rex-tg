@@ -28,9 +28,14 @@ function reportModels(ctx: any): void {
   try {
     const id = String(ctx?.sessionManager?.getSessionId?.() ?? "");
     if (!process.env.REX_BLOCK || !REX_TG_LIVE || !/^[A-Za-z0-9_-]{1,128}$/.test(id)) return;
-    const available = ctx?.modelRegistry?.getAvailable?.();
-    if (!Array.isArray(available)) return;
-    const models = [...new Set(available
+    // Pi resolves enabledModels and --models itself, including wildcard
+    // patterns and runtime edits. An empty scope means all available models.
+    const scope = ctx?.scopedModels;
+    const choices = Array.isArray(scope) && scope.length > 0
+      ? scope.map((entry: any) => entry.model)
+      : ctx?.modelRegistry?.getAvailable?.();
+    if (!Array.isArray(choices)) return;
+    const models = [...new Set(choices
       .filter((m: any) => typeof m?.provider === "string" && typeof m?.id === "string")
       .map((m: any) => `${m.provider}/${m.id}`)
       .filter((name: string) => name.length <= 80))].slice(0, 2048);
@@ -149,6 +154,7 @@ export default function (pi: any) {
     clearLive(ctx);
     report("agent_end", ctx);
   });
+  pi.on("model_select", (_event: any, ctx: any) => reportModels(ctx));
   pi.on("message_update", (event: any, ctx: any) => writeLive(ctx, event?.message));
   pi.on("message_end", (_event: any, ctx: any) => clearLive(ctx));
 }
