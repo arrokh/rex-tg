@@ -66,7 +66,7 @@ func TestKeyboardWebAppURLs(t *testing.T) {
 	k := &keyboardSource{}
 	k.snap.Store(&kbSnap{key: key, gen: "1", url: "https://mac.example.ts.net/"})
 	kb := k.forPart(store.Part{Kind: "notice", Key: "intro:4", ThreadID: 7})
-	if len(kb.Keyboard) != 3 || len(kb.Keyboard[0]) != 3 || len(kb.Keyboard[1]) != 3 || len(kb.Keyboard[2]) != 1 {
+	if len(kb.Keyboard) != 2 || len(kb.Keyboard[0]) != 3 || len(kb.Keyboard[1]) != 3 {
 		t.Fatalf("rows: %+v", kb.Keyboard)
 	}
 	want := map[string]string{

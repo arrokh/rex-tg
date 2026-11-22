@@ -37,7 +37,7 @@ import (
 // keyboardVersion names the buttons. A new value posts the keyboard note to
 // the main chat and every open topic once more, after an update that changes
 // the buttons.
-const keyboardVersion = "6" // Queue adds access to a topic's waiting messages
+const keyboardVersion = "7" // waiting controls stay in the chat, not in the keyboard
 
 const (
 	keyboardKey = "reply_keyboard" // kv: the version, key generation, and Mini App address that the chats have
@@ -45,8 +45,8 @@ const (
 	kbGenKV     = "kb_gen"         // kv: how often the key was made new (/rekey)
 )
 
-const keyboardTopicNote = "⌨️ Buttons under the message box: 🎛 Panel (/rt), 🖥 Screen, 📁 Project, ⚙️ Config, ✍️ Annotate, 🧩 Templates, and 📥 Queue (/queue). " +
-	"With the Mini App on, the page buttons open directly; Queue shows waiting messages in chat. Tap ⊞ in the message box to show or hide them."
+const keyboardTopicNote = "⌨️ Buttons under the message box: 🎛 Panel (/rt), 🖥 Screen, 📁 Project, ⚙️ Config, ✍️ Annotate, and 🧩 Templates. " +
+	"With the Mini App on, the page buttons open directly. Tap ⊞ in the message box to show or hide them."
 
 const keyboardNote = keyboardTopicNote + " /help brings them back."
 

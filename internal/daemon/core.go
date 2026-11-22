@@ -61,6 +61,8 @@ type (
 	// evWaitNotice reports the message number of a posted waiting notice.
 	evWaitNotice struct {
 		updateID, chat, msg int64
+		replaced            bool // the previous notice was removed
+		moving              bool
 	}
 	// evTyped reports the end of a paste and Enter.
 	evTyped struct {
@@ -232,7 +234,9 @@ type daemon struct {
 	nextPrep             map[int64]time.Time
 	delivering           map[int64]*delivery
 	waitNoticed          map[int64]bool
-	waitTexts            map[int64]string        // the text of each posted waiting notice
+	waitTexts            map[int64]string // the text of each posted waiting notice
+	waitMoving           map[int64]bool
+	waitMoveTried        map[int64]int64         // last notice ID we tried to move
 	waitSendables        map[int64]int           // eligible FIFO prefix shown on each waiting notice
 	macNotes             map[int64]*macNote      // the Mac hold's notice, by thread
 	drafts               map[int64]*draft        // the draft of a running turn, by thread
@@ -304,6 +308,8 @@ func newDaemon(cfg config.Config, home string, log *slog.Logger, now func() time
 		waitNoticed:    map[int64]bool{},
 		waitTexts:      map[int64]string{},
 		waitSendables:  map[int64]int{},
+		waitMoving:     map[int64]bool{},
+		waitMoveTried:  map[int64]int64{},
 		macNotes:       map[int64]*macNote{},
 		drafts:         map[int64]*draft{},
 		deadlines:      map[int64]alertDeadline{},

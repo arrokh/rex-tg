@@ -459,6 +459,7 @@ func (d *daemon) forget(updateID int64) {
 	delete(d.waitNoticed, updateID)
 	delete(d.waitTexts, updateID)
 	delete(d.waitSendables, updateID)
+	delete(d.waitMoveTried, updateID)
 	delete(d.vimNoticed, updateID)
 }
 

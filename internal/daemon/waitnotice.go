@@ -10,7 +10,8 @@ import (
 )
 
 // The waiting notice: "⏳ Waiting until the agent is idle." with ⚡ Send now
-// and ✖ Cancel. A topic has one: the oldest waiting message gets it, and it
+// and ✖ Cancel. A topic has one, keyed to the oldest waiting input. It moves
+// below newer chat messages and
 // counts the messages behind it ("⏳ 2 messages wait …", ⚡ Send all now,
 // ✖ Cancel all); its buttons act on every waiting message of the topic. It
 // is only true while that message waits, so it goes away when the message
@@ -50,12 +51,21 @@ const reasonCancelled = "cancelled"
 // message left the queue while the notice was on its way, the notice goes at
 // once, unless ✖ Cancel was tapped on it: that turns it into "✖ Cancelled".
 func (d *daemon) onWaitNotice(e evWaitNotice) {
+	if e.moving {
+		delete(d.waitMoving, e.updateID)
+		if e.replaced {
+			d.keepWaitNotice(e.updateID)
+		}
+		if e.msg == 0 {
+			return
+		}
+	}
 	in, ok, err := d.st.InboundByID(d.ctx, e.updateID)
 	if err != nil {
 		d.log.Warn("waiting notice: read message", "err", err)
 		return
 	}
-	if ok && in.State == store.InboundDone && in.Reason == reasonCancelled {
+	if !e.moving && ok && in.State == store.InboundDone && in.Reason == reasonCancelled {
 		return
 	}
 	if err := d.st.Set(d.ctx, waitNoticeKey(e.updateID), fmt.Sprintf("%d:%d", e.chat, e.msg)); err != nil {
@@ -73,7 +83,7 @@ func (d *daemon) onWaitNotice(e evWaitNotice) {
 // changes (core).
 func (d *daemon) updateWaitNotice(threadID, updateID int64, text string, n int) {
 	sendable := d.sendNowEligibleCount(threadID)
-	if d.waitTexts[updateID] == text && d.waitSendables[updateID] == sendable {
+	if d.waitMoving[updateID] {
 		return
 	}
 	v, ok, err := d.st.Get(d.ctx, waitNoticeKey(updateID))
@@ -84,6 +94,18 @@ func (d *daemon) updateWaitNotice(threadID, updateID int64, text string, n int) 
 	if _, err := fmt.Sscanf(v, "%d:%d", &chat, &msg); err != nil || msg == 0 {
 		return
 	}
+	if d.waitMoveTried[updateID] != msg {
+		if newer, err := d.st.TopicMessageAfter(d.ctx, threadID, msg); err == nil && newer {
+			th, err := d.st.Thread(d.ctx, threadID)
+			if err == nil {
+				d.moveWaitNotice(th, updateID, msg, text, n, sendable)
+				return
+			}
+		}
+	}
+	if d.waitTexts[updateID] == text && d.waitSendables[updateID] == sendable {
+		return
+	}
 	d.waitTexts[updateID] = text
 	d.waitSendables[updateID] = sendable
 	d.spawn(func() {
@@ -92,6 +114,36 @@ func (d *daemon) updateWaitNotice(threadID, updateID int64, text string, n int) 
 				ChatID: chat, MessageID: msg, Text: text, ReplyMarkup: waitMarkup(updateID, n, sendable)})
 			return err
 		})
+	})
+}
+
+// moveWaitNotice removes the old notice before posting its replacement.
+// An ambiguous delete or send must not cause a duplicate notice.
+func (d *daemon) moveWaitNotice(th store.Thread, updateID, old int64, text string, n, sendable int) {
+	d.waitMoving[updateID] = true
+	d.waitMoveTried[updateID] = old
+	// If deletion fails, the next check can still edit the original.
+	delete(d.waitTexts, updateID)
+	d.spawn(func() {
+		e := evWaitNotice{updateID: updateID, chat: th.ChatID, moving: true}
+		defer func() { d.emit(e) }()
+		err := d.snd.Call(sender.PriorityEdit, func(ctx context.Context, tg *telegram.Client) error {
+			return tg.DeleteMessage(ctx, th.ChatID, old)
+		})
+		switch telegram.Classify(err) {
+		case telegram.ClassNone, telegram.ClassDeleteTargetGone:
+		default:
+			return
+		}
+		e.replaced = true
+		in, ok, err := d.st.InboundByID(d.ctx, updateID)
+		if err != nil || !ok || in.State != store.InboundQueued {
+			return
+		}
+		m, err := d.sendNow(th.ChatID, th.MessageThreadID, text, waitMarkup(updateID, n, sendable))
+		if err == nil {
+			e.msg = m.MessageID
+		}
 	})
 }
 

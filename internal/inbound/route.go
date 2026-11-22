@@ -57,14 +57,13 @@ var Buttons = []Button{
 	{"⚙️ Config", "config"},
 	{"✍️ Annotate", "annotate"},
 	{"🧩 Templates", "templates"},
-	{"📥 Queue", "queue"},
 }
 
 // buttonCommands maps a label, without emoji variation selectors, to its
 // command. The first keyboard's labels were the commands themselves
 // ("/screen"), so a keyboard that an app still shows keeps working.
 var buttonCommands = func() map[string]string {
-	m := map[string]string{"📂 Files": "files", "📝 Changes": "changes"}
+	m := map[string]string{"📂 Files": "files", "📝 Changes": "changes", "📥 Queue": "queue"}
 	for _, b := range Buttons {
 		m[noVariation(b.Label)] = b.Command
 	}

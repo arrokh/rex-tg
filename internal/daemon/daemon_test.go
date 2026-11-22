@@ -1088,32 +1088,18 @@ func TestOneWaitNoticeForAllWaitingMessages(t *testing.T) {
 	working(e, e.pi, thread)
 	e.say(thread, "first thing")
 	notice := e.waitText(thread, "Waiting until the agent is idle")
-	e.say(thread, "//compact")
-	e.waitFor("the notice counts two", func() bool {
-		m, _ := e.message(notice.ID)
-		return strings.Contains(m.Text, "2 messages wait")
-	})
-	e.say(thread, "second thing")
-	e.waitFor("the notice counts all three", func() bool {
-		m, _ := e.message(notice.ID)
-		return strings.Contains(m.Text, "3 messages wait until the agent is idle") && buttonData(m, "Send now") != ""
-	})
-	if m, _ := e.message(notice.ID); buttonData(m, "Send all now") != "" {
-		t.Fatal("offered Send all when the FIFO queue starts with an idle-only command")
+	command := e.say(thread, "//compact")
+	two := e.waitText(thread, "2 messages wait")
+	if two.ID <= command || two.ID <= notice.ID {
+		t.Fatal("waiting notice did not move below the newer message")
 	}
-	e.say(thread, "📥 Queue")
-	queue := e.waitText(thread, "3 messages waiting")
-	if buttonData(queue, "Send now") == "" || buttonData(queue, "Send all now") != "" {
-		t.Fatalf("Queue offered an incorrect send action: %+v", queue.Markup)
+	latest := e.say(thread, "second thing")
+	queue := e.waitText(thread, "3 messages wait until the agent is idle")
+	if queue.ID <= latest || buttonData(queue, "Send now") == "" || buttonData(queue, "Send all now") != "" {
+		t.Fatalf("wrong notice position or action: %+v", queue)
 	}
-	n := 0
-	for _, m := range e.botMessages(thread) {
-		if strings.Contains(m.Text, "Waiting") || strings.Contains(m.Text, "messages wait until") {
-			n++
-		}
-	}
-	if n != 1 {
-		t.Fatalf("%d waiting notices, want one for both messages", n)
+	if n := e.countText(thread, "messages wait until"); n != 1 {
+		t.Fatalf("%d waiting notices, want one", n)
 	}
 	e.pressButton(queue, buttonData(queue, "Send now"))
 	e.waitFor("the first message typed", func() bool { return len(e.pastes()) == 1 })
@@ -1297,7 +1283,7 @@ func TestReplyKeyboard(t *testing.T) {
 	wantKeyboard := func(m tgtest.Message) {
 		t.Helper()
 		kb := m.Keyboard
-		if kb == nil || !kb.IsPersistent || !kb.ResizeKeyboard || len(kb.Keyboard) != 3 {
+		if kb == nil || !kb.IsPersistent || !kb.ResizeKeyboard || len(kb.Keyboard) != 2 {
 			t.Fatalf("%q: keyboard = %+v", m.Text, kb)
 		}
 		var got []string
@@ -1309,7 +1295,7 @@ func TestReplyKeyboard(t *testing.T) {
 				got = append(got, b.Text)
 			}
 		}
-		if strings.Join(got, "|") != "🎛 Panel|🖥 Screen|📁 Project|⚙️ Config|✍️ Annotate|🧩 Templates|📥 Queue" {
+		if strings.Join(got, "|") != "🎛 Panel|🖥 Screen|📁 Project|⚙️ Config|✍️ Annotate|🧩 Templates" {
 			t.Errorf("buttons = %v", got)
 		}
 	}
