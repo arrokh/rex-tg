@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"syscall"
 
 	"rex-tg/internal/agents"
 	"rex-tg/internal/miniapp"
@@ -34,8 +35,15 @@ func (d *daemon) configControl(conv store.Conversation, name string) (agents.Con
 	if !ok || name != "model" {
 		return c, ctrl, ok
 	}
-	if conv.Runtime == agents.Pi && len(d.cfg.Input(conv.Runtime).Choices[name]) == 0 {
-		c.Choices = piConfigModels(d.cfg.LiveDir(), conv.NativeID)
+	if len(d.cfg.Input(conv.Runtime).Choices[name]) == 0 {
+		switch conv.Runtime {
+		case agents.Pi:
+			c.Choices = piConfigModels(d.cfg.LiveDir(), conv.NativeID)
+		case agents.Codex:
+			c.Choices = codexConfigModels(conv)
+		case agents.Claude:
+			c.Choices = claudeConfigModels(conv, "/Library/Application Support/ClaudeCode/managed-settings.json")
+		}
 	}
 	choices := make([]string, 0, len(c.Choices))
 	seen := map[string]bool{}
@@ -57,19 +65,35 @@ func piConfigModels(dir, id string) []string {
 	if !configPiID.MatchString(id) {
 		return nil
 	}
-	f, err := os.Open(filepath.Join(dir, "models", id+".json"))
-	if err != nil {
-		return nil
-	}
-	defer f.Close()
-	if info, err := f.Stat(); err != nil || !info.Mode().IsRegular() {
-		return nil
-	}
 	var choices []string
-	if b, err := io.ReadAll(io.LimitReader(f, 1<<20)); err != nil || json.Unmarshal(b, &choices) != nil || len(choices) > 2048 {
+	if b, err := readCatalogFile(filepath.Join(dir, "models", id+".json")); err != nil || json.Unmarshal(b, &choices) != nil || len(choices) > 2048 {
 		return nil
 	}
 	return choices
+}
+
+func readCatalogFile(path string) ([]byte, error) {
+	const limit = 4 << 20
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() || info.Size() > limit {
+		return nil, errors.New("invalid model catalog file")
+	}
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	if info, err := f.Stat(); err != nil || !info.Mode().IsRegular() {
+		return nil, errors.New("invalid model catalog file")
+	}
+	data, err := io.ReadAll(io.LimitReader(f, limit+1))
+	if len(data) > limit {
+		return nil, errors.New("model catalog is too large")
+	}
+	return data, err
 }
 
 // State reads only the controls of the session named by a Config page.
