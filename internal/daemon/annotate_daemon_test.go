@@ -65,7 +65,7 @@ func TestReplyKeyboardWebApp(t *testing.T) {
 	check := func(m tgtest.Message, wantT bool) string {
 		t.Helper()
 		kb := m.Keyboard
-		if kb == nil || len(kb.Keyboard) != 3 {
+		if kb == nil || len(kb.Keyboard) != 2 {
 			t.Fatalf("%q: keyboard %+v", m.Text, kb)
 		}
 		key := ""

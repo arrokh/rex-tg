@@ -438,6 +438,19 @@ func (s *Store) OutboxRow(ctx context.Context, id int64) (OutboxRow, error) {
 	return r, nil
 }
 
+// TopicMessageAfter reports whether an observed user message or a delivered
+// outbox part is newer than the waiting notice in this topic.
+func (s *Store) TopicMessageAfter(ctx context.Context, thread, msg int64) (bool, error) {
+	var found bool
+	err := s.db.QueryRowContext(ctx, `SELECT EXISTS (
+		SELECT 1 FROM inbound WHERE thread_id=? AND tg_message_id>?
+		UNION ALL
+		SELECT 1 FROM outbox o JOIN outbox_part p ON p.outbox_id=o.id
+		WHERE o.thread_id=? AND p.tg_message_id>?
+	)`, thread, msg, thread, msg).Scan(&found)
+	return found, err
+}
+
 // OutboxIDByKey returns the id of a topic's outbox item with an event key.
 func (s *Store) OutboxIDByKey(ctx context.Context, threadID int64, key string) (int64, bool, error) {
 	var id int64
