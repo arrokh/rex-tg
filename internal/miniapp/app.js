@@ -434,15 +434,23 @@
     return row;
   }
 
+  // Project tabs keep their own back action while hidden.
+  var viewBack = new WeakMap();
+
   // views makes the two views of a tree page: the list, and one item.
-  function views() {
-    page.className = "";
-    page.textContent = "";
+  function views(mount) {
+    mount = mount || page;
+    mount.className = "";
+    mount.textContent = "";
     var list = el("div", "view"), item = el("div", "view");
     item.hidden = true;
-    page.appendChild(list);
-    page.appendChild(item);
+    mount.appendChild(list);
+    mount.appendChild(item);
     var scrollY = 0;
+    function setViewBack(back) {
+      viewBack.set(mount, back);
+      if (!mount.hidden) { setBack(back); }
+    }
     return {
       list: list, item: item,
       showItem: function (back) {
@@ -450,14 +458,14 @@
         list.hidden = true;
         item.hidden = false;
         window.scrollTo(0, 0);
-        setBack(back);
+        setViewBack(back);
       },
       showList: function () {
         item.hidden = true;
         item.textContent = "";
         list.hidden = false;
         window.scrollTo(0, scrollY);
-        setBack(null);
+        setViewBack(null);
       }
     };
   }
@@ -471,11 +479,11 @@
 
   // --- the file explorer ---
 
-  function fileBrowser(rootTitle) {
-    var v = views();
+  function fileBrowser(rootTitle, mount, initialFile) {
+    var v = views(mount);
     var open = {}; // the folders that are open, by path
     var bar = el("div", "bar");
-    var name = el("span", "status", rootTitle.replace(/^📂\s*/, ""));
+    var name = el("span", "status", rootTitle.replace(/^(?:📂|📁)\s*/, ""));
     var chips = el("div", "chips");
     var collapse = chip("Collapse all"), reload = chip("↻", "Load again");
     chips.appendChild(collapse);
@@ -567,6 +575,7 @@
     collapse.addEventListener("click", function () { open = {}; load("", tree, 0); });
     reload.addEventListener("click", function () { load("", tree, 0); });
     load("", tree, 0);
+    if (initialFile) { showFile(initialFile); }
   }
 
   // --- the changes of a repository ---
@@ -620,8 +629,8 @@
     return root;
   }
 
-  function changesView() {
-    var v = views();
+  function changesView(mount) {
+    var v = views(mount);
     var bases = [
       { key: "head", label: "Uncommitted" },
       { key: "branch", label: "This branch" },
@@ -835,6 +844,44 @@
       if (!document.hidden && !v.list.hidden) { refresh(); }
     });
     refresh();
+  }
+
+  // --- the combined project view ---
+
+  function projectView(rootTitle) {
+    page.className = "";
+    page.textContent = "";
+    var tabs = el("div", "tabs"), content = el("div", "project-content");
+    tabs.setAttribute("role", "tablist");
+    var active = "files", mounted = {};
+    function show(which) {
+      active = which;
+      tabs.querySelectorAll("button").forEach(function (b) {
+        var on = b.getAttribute("data-view") === which;
+        b.classList.toggle("on", on);
+        b.setAttribute("aria-selected", on ? "true" : "false");
+      });
+      Object.keys(mounted).forEach(function (k) { mounted[k].hidden = k !== which; });
+      if (!mounted[which]) {
+        var pane = el("div", "view-pane");
+        pane.hidden = which !== active;
+        mounted[which] = pane;
+        content.appendChild(pane);
+        if (which === "files") { fileBrowser(rootTitle, pane); } else { changesView(pane); }
+      }
+      setBack(viewBack.get(mounted[which]));
+    }
+    [{key:"files",label:"Files"},{key:"changes",label:"Changes"}].forEach(function (v) {
+      var b = el("button", "", v.label);
+      b.type = "button";
+      b.setAttribute("role", "tab");
+      b.setAttribute("data-view", v.key);
+      b.addEventListener("click", function () { show(v.key); });
+      tabs.appendChild(b);
+    });
+    page.appendChild(tabs);
+    page.appendChild(content);
+    show("files");
   }
 
   // --- the control panel ---
@@ -2029,7 +2076,7 @@
 
   // --- the keyboard's buttons: launch ---
 
-  var viewName = { panel: "Panel", screen: "Screen", files: "Files", changes: "Changes", annotate: "Annotate", templates: "Templates" };
+  var viewName = { panel: "Panel", screen: "Screen", files: "Files", changes: "Changes", config: "Config", annotate: "Annotate", templates: "Templates" };
 
   function skeletons(n, cls) {
     page.className = "";
@@ -3074,6 +3121,98 @@
     draw();
   }
 
+  // --- session-scoped agent settings ---
+
+  function configPage() {
+    document.body.classList.remove("fill", "annot");
+    page.className = "config-page";
+    page.textContent = "";
+    var hint = el("p", "config-hint", "Changes apply only to this topic's current agent session.");
+    var content = el("div", "config-list");
+    page.appendChild(hint);
+    page.appendChild(content);
+    var pendingKey = "rex-tg.config.pending." + id;
+    var pending = null, submitting = false, latest = null;
+    try { pending = JSON.parse(load(pendingKey) || "null"); } catch (e) { pending = null; }
+
+    function clearPending() {
+      pending = null;
+      save(pendingKey, null);
+    }
+    function draw(state) {
+      latest = state;
+      content.textContent = "";
+      if (pending) {
+        var alert = el("div", "config-pending");
+        alert.appendChild(el("p", "", "A setting change may still be queued. Check its status before choosing another value."));
+        var retry = button(submitting ? "Checking…" : "Check the same change", "btn");
+        retry.disabled = submitting;
+        retry.addEventListener("click", function () { submit(pending.name, pending.value, true); });
+        alert.appendChild(retry);
+        content.appendChild(alert);
+      }
+      (state.controls || []).forEach(function (item) {
+        var card = el("section", "config-item");
+        card.appendChild(el("h2", "config-name", item.title));
+        card.appendChild(el("p", "config-current", item.value ? "Current: " + item.value : "Current value not seen yet"));
+        var options = el("div", "config-options");
+        (item.choices || []).forEach(function (value) {
+          var b = button(value, "btn" + (value === item.value ? " selected" : ""));
+          b.disabled = !!pending;
+          b.addEventListener("click", function () { submit(item.name, value, false); });
+          options.appendChild(b);
+        });
+        if (item.free) {
+          var input = el("input", "config-input");
+          input.type = "text";
+          input.autocomplete = "off";
+          input.placeholder = "Enter a value";
+          input.value = item.value || "";
+          input.disabled = !!pending;
+          var set = button("Set", "btn primary");
+          set.disabled = !!pending;
+          set.addEventListener("click", function () { submit(item.name, input.value, false); });
+          input.addEventListener("keydown", function (ev) { if (ev.key === "Enter") { ev.preventDefault(); submit(item.name, input.value, false); } });
+          options.appendChild(input);
+          options.appendChild(set);
+        }
+        card.appendChild(options);
+        content.appendChild(card);
+      });
+      if (!state.controls || !state.controls.length) { content.appendChild(el("p", "", "This agent has no model or effort settings.")); }
+    }
+    function submit(name, value, retry) {
+      if (submitting || (pending && !retry) || !value.trim()) { return; }
+      if (!pending) {
+        pending = { act: act(), name: name, value: value };
+        save(pendingKey, JSON.stringify(pending));
+      }
+      submitting = true;
+      draw(latest);
+      api("api/config/do?id=" + encodeURIComponent(id), pending).then(function (r) {
+        if (r.pending) {
+          hint.textContent = r.message || "The change is still being checked. Retry the same action to check again.";
+          return;
+        }
+        clearPending();
+        hint.textContent = r.message || (r.ok ? "Setting queued." : "The setting was not changed.");
+      }).catch(function (e) {
+        hint.textContent = e.message || "Could not check this change. Retry the same action.";
+      }).finally(function () {
+        submitting = false;
+        draw(latest);
+        if (!pending) { refresh(); }
+      });
+    }
+    function refresh() {
+      api("api/config?id=" + encodeURIComponent(id)).then(function (state) { draw(state); }).catch(function (e) {
+        content.textContent = "";
+        content.appendChild(el("p", "", e.message || "This Config page is no longer current. Open it again from the topic."));
+      });
+    }
+    refresh();
+  }
+
   // --- the page ---
 
   var fromKb = params.get("from") === "kb";
@@ -3103,8 +3242,10 @@
       }
       setBack(null);
       if (p.kind === "screen") { liveScreen(); return; }
-      if (p.kind === "files") { fileBrowser(p.title || "Files"); return; }
+      if (p.kind === "files") { fileBrowser(p.title || "Files", null, p.initial_file); return; }
       if (p.kind === "changes") { changesView(); return; }
+      if (p.kind === "project") { projectView(p.title || "Project"); return; }
+      if (p.kind === "config") { configPage(); return; }
       if (p.kind === "control") { controlPanel(); return; }
       if (p.kind === "annotate") { annotatePage(p, false); return; }
       if (p.kind === "templates") { templatesPage(p); return; }

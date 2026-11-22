@@ -342,7 +342,7 @@ func (c *controlPanel) start(a miniapp.ControlAction) (miniapp.ControlResult, <-
 		case c.isLive(a.Act):
 			r = controlRunning
 		default:
-			if a.Op == miniapp.OpNotes || a.Op == miniapp.OpTemplateMessage {
+			if a.Op == miniapp.OpConfig || a.Op == miniapp.OpNotes || a.Op == miniapp.OpTemplateMessage {
 				r = controlUnknownPageSend // never queue a second page-bound message on uncertainty
 			} else {
 				r = controlUnknown // a placeholder that no run of this process holds
@@ -381,6 +381,8 @@ func (c *controlPanel) dispatch(a miniapp.ControlAction) (miniapp.ControlResult,
 		res = c.cleanTopics()
 	case miniapp.OpUnlink:
 		res = c.unlink(a)
+	case miniapp.OpConfig:
+		res = c.config(a)
 	case miniapp.OpNotes:
 		res = c.notes(a)
 	case miniapp.OpTemplateMessage:
@@ -770,6 +772,49 @@ func (d *daemon) pruneFolderHides() {
 			_ = d.st.Delete(d.ctx, k)
 		}
 	}
+}
+
+// config queues a setting change only while the page's exact topic and
+// conversation are still current. The queued control retains its session
+// binding, which the typing path checks again before touching the pane.
+func (c *controlPanel) config(a miniapp.ControlAction) miniapp.ControlResult {
+	d := c.d
+	th, err := d.st.Thread(d.ctx, a.Thread)
+	if err != nil || th.Status == store.ThreadClosed {
+		return controlFail("This topic is closed. Open Config again from the topic.")
+	}
+	if a.Conv <= 0 || th.CurrentConversationID != a.Conv {
+		return controlFail("This topic is in another session now. The setting was not changed.")
+	}
+	conv, err := d.st.Conversation(d.ctx, a.Conv)
+	if err != nil || conv.ThreadID != th.ID {
+		return controlFail("This topic is in another session now. The setting was not changed.")
+	}
+	setting, ctrl, ok := d.controlOf(conv.Runtime, a.Name)
+	if !ok || setting.Name != "model" && setting.Name != "effort" {
+		return controlFail("This setting is not available for this agent.")
+	}
+	value, err := setting.CheckValue(a.Value)
+	if err != nil {
+		return controlFail(err.Error())
+	}
+	text, err := ctrl.Command(setting.Name, value, d.currentValues(conv, ctrl))
+	if err != nil {
+		return controlFail(err.Error())
+	}
+	if queued, err := d.st.QueuedInbound(d.ctx, th.ID); err == nil {
+		for _, q := range queued {
+			if q.Body == text {
+				return controlFail("That command is already waiting for the agent.")
+			}
+		}
+	}
+	orig := configRowID(a.Act)
+	if !d.keepPending(-orig, ctlSet{conv: conv.ID, name: setting.Name, value: value}) ||
+		!d.queueText(th.ID, orig, 0, text, kindControl, inbound.ActText) {
+		return controlFail("Could not queue this setting change.")
+	}
+	return miniapp.ControlResult{OK: true, Message: "Queued for the agent. It will be applied when the agent is idle."}
 }
 
 // notes sends the notes of an Annotate or answer page to the topic's agent,

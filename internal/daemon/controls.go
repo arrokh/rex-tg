@@ -272,8 +272,7 @@ func (d *daemon) controlTyped(row int64, typed bool) bool {
 func ctlPendingKey(row int64) string { return fmt.Sprintf("ctl_pending:%d", row) }
 
 // keepPending records a queued control command (core).
-func (d *daemon) keepPending(row int64, p ctlSet) {
-	d.ctlPending[row] = p
+func (d *daemon) keepPending(row int64, p ctlSet) bool {
 	b, err := json.Marshal(struct {
 		Conv  int64  `json:"conv"`
 		Name  string `json:"name"`
@@ -284,7 +283,10 @@ func (d *daemon) keepPending(row int64, p ctlSet) {
 	}
 	if err != nil {
 		d.log.Warn("control: keep the pending command", "err", err)
+		return false
 	}
+	d.ctlPending[row] = p
+	return true
 }
 
 // loadPending restores the control commands that were queued before a stop

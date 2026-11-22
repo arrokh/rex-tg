@@ -19,6 +19,8 @@ const (
 	ViewScreen    = "screen"
 	ViewFiles     = "files"
 	ViewChanges   = "changes"
+	ViewProject   = "project"
+	ViewConfig    = "config"
 	ViewAnnotate  = "annotate"
 	ViewTemplates = "templates"
 )

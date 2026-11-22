@@ -37,7 +37,7 @@ import (
 // keyboardVersion names the buttons. A new value posts the keyboard note to
 // the main chat and every open topic once more, after an update that changes
 // the buttons.
-const keyboardVersion = "4" // 4: adds 🧩 Templates to the Mini App buttons
+const keyboardVersion = "5" // Project and Config replace Files and Changes
 
 const (
 	keyboardKey = "reply_keyboard" // kv: the version, key generation, and Mini App address that the chats have
@@ -45,7 +45,7 @@ const (
 	kbGenKV     = "kb_gen"         // kv: how often the key was made new (/rekey)
 )
 
-const keyboardTopicNote = "⌨️ Buttons under the message box: 🎛 Panel (/rt), 🖥 Screen, 📂 Files, 📝 Changes, ✍️ Annotate, and 🧩 Templates. " +
+const keyboardTopicNote = "⌨️ Buttons under the message box: 🎛 Panel (/rt), 🖥 Screen, 📁 Project, ⚙️ Config, ✍️ Annotate, and 🧩 Templates. " +
 	"With the Mini App on, each button opens its page directly. Tap ⊞ in the message box to show or hide them."
 
 const keyboardNote = keyboardTopicNote + " /help brings them back."
@@ -66,8 +66,8 @@ const annotateText = "✍️ Annotate opens from its button under the message bo
 // buttonViews maps a button's command to the page that its web_app button
 // opens.
 var buttonViews = map[string]string{
-	"rt": miniapp.ViewPanel, "screen": miniapp.ViewScreen, "files": miniapp.ViewFiles,
-	"changes": miniapp.ViewChanges, "annotate": miniapp.ViewAnnotate, "templates": miniapp.ViewTemplates,
+	"rt": miniapp.ViewPanel, "screen": miniapp.ViewScreen, "project": miniapp.ViewProject,
+	"config": miniapp.ViewConfig, "annotate": miniapp.ViewAnnotate, "templates": miniapp.ViewTemplates,
 }
 
 // kbSnap is what the keyboard is made from. url is empty when the buttons
@@ -131,7 +131,7 @@ func keyboardURL(base, key, view string, thread int64) string {
 func keyboardFor(s *kbSnap, thread int64) *telegram.ReplyKeyboardMarkup {
 	var rows [][]telegram.KeyboardButton
 	for i, b := range inbound.Buttons {
-		if i == 0 || i == 3 { // 🎛 🖥 📂 / 📝 ✍️
+		if i == 0 || i == 3 { // two rows of three
 			rows = append(rows, nil)
 		}
 		btn := telegram.KeyboardButton{Text: b.Label}

@@ -120,6 +120,8 @@ const (
 	// OpNotes: Thread, Text: send the notes of an Annotate or answer page.
 	// Only /api/annotate/send makes it, with the page's own thread.
 	OpNotes = "notes"
+	// OpConfig queues a model/thinking-effort setting change for the page's exact session.
+	OpConfig = "config"
 	// OpTemplateMessage sends a saved template as a normal queued chat message.
 	// Only /api/templates/send makes it, with the page's own thread and session.
 	OpTemplateMessage = "template_message"
@@ -150,9 +152,10 @@ type ControlAction struct {
 	Name   string `json:"name,omitempty"`
 	Agent  string `json:"agent,omitempty"`
 	Path   string `json:"path,omitempty"`
-	Kind   string `json:"kind,omitempty"` // OpPage: PageScreen, PageFiles, or PageChanges
-	Text   string `json:"text,omitempty"` // OpNotes/OpTemplateMessage: text to send as a chat message
-	Conv   int64  `json:"conv,omitempty"` // OpNotes/OpTemplateMessage: the page's current agent session
+	Kind   string `json:"kind,omitempty"`  // OpPage: PageScreen, PageFiles, or PageChanges
+	Text   string `json:"text,omitempty"`  // OpNotes/OpTemplateMessage: text to send as a chat message
+	Conv   int64  `json:"conv,omitempty"`  // page-bound action: the page's current agent session
+	Value  string `json:"value,omitempty"` // OpConfig: setting value
 }
 
 // ControlResult is the outcome of an action, shown on the page.
@@ -227,6 +230,10 @@ func (a ControlAction) Check() error {
 	case OpUnlink:
 		if a.Thread <= 0 {
 			return errors.New("no topic")
+		}
+	case OpConfig:
+		if a.Thread <= 0 || a.Conv <= 0 || strings.TrimSpace(a.Name) == "" || strings.TrimSpace(a.Value) == "" {
+			return errors.New("choose a setting and value")
 		}
 	case OpNotes, OpTemplateMessage:
 		switch {
@@ -420,7 +427,7 @@ func (s *Server) controlDo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.Name = strings.TrimSpace(a.Name)
-	if a.Op == OpNotes || a.Op == OpTemplateMessage { // page-bound send endpoints only
+	if a.Op == OpConfig || a.Op == OpNotes || a.Op == OpTemplateMessage { // page-bound endpoints only
 		http.Error(w, `{"error":"This action is not valid."}`, http.StatusBadRequest)
 		return
 	}

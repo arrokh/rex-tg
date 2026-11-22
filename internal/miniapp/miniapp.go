@@ -35,11 +35,12 @@ import (
 
 // Page is what the Mini App shows.
 type Page struct {
-	Kind   string `json:"kind"`             // answer, diff, screen, files, changes, control, annotate, or templates
-	Title  string `json:"title"`            // a short title
-	Text   string `json:"text"`             // Markdown (an answer) or a unified diff
-	Thread int64  `json:"thread,omitempty"` // the topic of a screen, files, changes, annotate or answer page (0 on answer pages made before Annotate)
-	Dir    string `json:"dir,omitempty"`    // the folder of a files or changes page
+	InitialFile string `json:"initial_file,omitempty"` // a path relative to the Files browser root
+	Kind        string `json:"kind"`                   // answer, diff, screen, files, changes, project, control, annotate, or templates
+	Title       string `json:"title"`                  // a short title
+	Text        string `json:"text"`                   // Markdown (an answer) or a unified diff
+	Thread      int64  `json:"thread,omitempty"`       // the topic of a screen, files, changes, annotate or answer page (0 on answer pages made before Annotate)
+	Dir         string `json:"dir,omitempty"`          // the folder of a files or changes page
 	// Conv is the agent's session (conversation) of an Annotate or answer
 	// page: the page shows only that session's answers, and its notes go
 	// to the agent only while the topic is still in that session.
@@ -55,6 +56,8 @@ const (
 	KindFiles  = "files"  // the files of a folder
 	// KindChanges is the changes of a repository, read when the page asks.
 	KindChanges = "changes"
+	// KindProject combines the files and changes views for one topic.
+	KindProject = "project"
 )
 
 // Screen is what the live screen shows: the pane's text, or why there is
@@ -88,6 +91,7 @@ type Server struct {
 	launch  Launcher             // the keyboard buttons' pages (nil: off)
 	keyOK   func(string) bool    // checks the keyboard's key (nil: no key works)
 	annot   Annotations          // the Annotate page (nil: off)
+	config  Configurator         // topic/session settings (nil: off)
 	tailnet bool                 // refuse a request that did not come from the tailnet
 	logins  Logins               // whose tailnet devices may use the key (nil: any)
 	reads   reads                // folder and file reads that may wait for macOS (slowread.go)
@@ -293,6 +297,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/control", s.controlState)
 	mux.HandleFunc("GET /api/control/folders", s.controlFolders)
 	mux.HandleFunc("POST /api/control/do", s.controlDo)
+	mux.HandleFunc("GET /api/config", s.configState)
+	mux.HandleFunc("POST /api/config/do", s.configDo)
 	mux.HandleFunc("GET /api/launch", s.launchPage)
 	mux.HandleFunc("GET /api/annotate", s.annotateList)
 	mux.HandleFunc("POST /api/annotate/draft", s.annotateDraft)
@@ -402,9 +408,13 @@ func (s *Server) noteRefusal(reason string) {
 
 // loadKind loads the page of the request's id. With kind set, the page must
 // be of that kind. It answers a missing page itself.
-func (s *Server) loadKind(w http.ResponseWriter, r *http.Request, kind string) (Page, bool) {
+func (s *Server) loadKind(w http.ResponseWriter, r *http.Request, kinds ...string) (Page, bool) {
 	p, ok := s.load(r.URL.Query().Get("id"))
-	if !ok || (kind != "" && p.Kind != kind) {
+	kindOK := len(kinds) == 0
+	for _, kind := range kinds {
+		kindOK = kindOK || kind == "" || p.Kind == kind
+	}
+	if !ok || !kindOK {
 		http.Error(w, `{"error":"This page is gone."}`, http.StatusNotFound)
 		return Page{}, false
 	}
@@ -415,7 +425,7 @@ func (s *Server) page(w http.ResponseWriter, r *http.Request) {
 	if !s.allowed(w, r) {
 		return
 	}
-	p, ok := s.loadKind(w, r, "")
+	p, ok := s.loadKind(w, r)
 	if !ok {
 		return
 	}
@@ -423,7 +433,7 @@ func (s *Server) page(w http.ResponseWriter, r *http.Request) {
 	switch p.Kind {
 	case KindDiff:
 		body = RenderDiff(p.Text)
-	case KindScreen, KindFiles, KindChanges, KindControl, KindAnnotate, KindTemplates: // the page asks for its content itself
+	case KindScreen, KindFiles, KindChanges, KindProject, KindControl, KindConfig, KindAnnotate, KindTemplates: // the page asks for its content itself
 	default:
 		body = RenderAnswer(p.Text)
 	}
@@ -432,6 +442,9 @@ func (s *Server) page(w http.ResponseWriter, r *http.Request) {
 		at = p.At.Local().Format("Jan 2 15:04")
 	}
 	out := map[string]any{"kind": p.Kind, "title": p.Title, "html": body, "at": at, "thread": p.Thread, "conv": p.Conv}
+	if p.Kind == KindFiles && p.InitialFile != "" {
+		out["initial_file"] = p.InitialFile
+	}
 	if s.annot != nil && (p.Kind == KindAnswer || p.Kind == KindAnnotate) {
 		out["bot"] = s.annot.BotName() // for t.me links (Annotate's "Put in message box")
 	}
@@ -471,7 +484,7 @@ func (s *Server) fileView(w http.ResponseWriter, r *http.Request) {
 	if !s.allowed(w, r) {
 		return
 	}
-	p, ok := s.loadKind(w, r, KindFiles)
+	p, ok := s.loadKind(w, r, KindFiles, KindProject)
 	if !ok {
 		return
 	}
@@ -509,7 +522,7 @@ func (s *Server) changesView(w http.ResponseWriter, r *http.Request) {
 	if !s.allowed(w, r) {
 		return
 	}
-	p, ok := s.loadKind(w, r, KindChanges)
+	p, ok := s.loadKind(w, r, KindChanges, KindProject)
 	if !ok {
 		return
 	}

@@ -45,7 +45,7 @@ func TestKeyboardWebAppURLs(t *testing.T) {
 		t.Fatalf("rows: %+v", kb.Keyboard)
 	}
 	want := map[string]string{
-		"🎛 Panel": "panel", "🖥 Screen": "screen", "📂 Files": "files", "📝 Changes": "changes", "✍️ Annotate": "annotate", "🧩 Templates": "templates",
+		"🎛 Panel": "panel", "🖥 Screen": "screen", "📁 Project": "project", "⚙️ Config": "config", "✍️ Annotate": "annotate", "🧩 Templates": "templates",
 	}
 	for _, row := range kb.Keyboard {
 		for _, b := range row {

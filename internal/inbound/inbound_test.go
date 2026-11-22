@@ -80,6 +80,11 @@ func TestRouteTextButtons(t *testing.T) {
 	if r := inbound.RouteText("🖥 Screen", false, "bot"); r.Command != inbound.CmdTopicOnly || r.Args != "screen" {
 		t.Errorf("main chat screen: %+v", r)
 	}
+	for _, name := range []string{"project", "config"} {
+		if r := inbound.RouteText("/"+name, true, "bot"); r.Kind != inbound.RouteAgentText {
+			t.Errorf("button-only name /%s was treated as a bot command: %+v", name, r)
+		}
+	}
 	if r := inbound.RouteText("🖥 Screen please", true, "bot"); r.Kind != inbound.RouteAgentText {
 		t.Errorf("text that starts like a label: %+v", r)
 	}

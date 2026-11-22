@@ -59,7 +59,11 @@ func TestReplyQuotesTheAnsweredMessage(t *testing.T) {
 		e.waitFor(s.name+": Enter", func() bool { return len(e.keys()) == i+1 })
 		// The agent takes the prompt (👍 shows that rex-tg saw it) and
 		// answers, so the pane is idle again.
-		p.User(s.want)
+		// The agent's slash command does not write a user prompt. Its ack
+		// confirms typing, not a new prompt event in the transcript.
+		if !strings.HasPrefix(s.want, "/") {
+			p.User(s.want)
+		}
 		e.waitFor(s.name+": 👍", func() bool { m, _ := e.message(u.Message.MessageID); return m.Reaction == "👍" })
 		p.Final(s.answers)
 		e.waitText(thread, strings.SplitN(s.answers, "\n", 2)[0])

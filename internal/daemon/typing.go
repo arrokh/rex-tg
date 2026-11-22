@@ -256,6 +256,12 @@ func (d *daemon) pump(now time.Time) {
 			d.expire(th, in)
 			continue
 		}
+		if in.Kind == kindControl {
+			if _, bound := d.ctlPending[in.UpdateID]; !bound {
+				d.refuse(th, in, "the original session for this setting change could not be verified")
+				continue
+			}
+		}
 		if d.controlStale(th, in.UpdateID) {
 			d.refuse(th, in, "the session in this pane changed after the command was sent (/clear, a resume, or another agent); send it again")
 			continue

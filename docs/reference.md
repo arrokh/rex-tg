@@ -134,12 +134,12 @@ Common commands and settings:
 
 ### Buttons under the message box
 
-rex-tg adds a keyboard under the message box: 🎛 Panel, 🖥 Screen, 📂 Files, 📝 Changes, ✍️ Annotate, and 🧩 Templates. Telegram shows it in place of your normal keyboard; tap ⊞ in the message box to switch between the two.
+rex-tg adds a keyboard under the message box: 🎛 Panel, 🖥 Screen, 📁 Project, ⚙️ Config, ✍️ Annotate, and 🧩 Templates. Telegram shows it in place of your normal keyboard; tap ⊞ in the message box to switch between the two.
 
-- With the Mini App on, each button opens its page at once: the control panel, live screen, file browser, changes view, [Annotate](#annotate), or [Templates](#templates). The page is for the topic where you tapped. In the main chat, topic-specific buttons first ask which topic.
+- With the Mini App on, each button opens its page at once: the control panel, live screen, Project, Config, [Annotate](#annotate), or [Templates](#templates). Project groups the file browser and Git changes; `/files` and `/changes` still open their individual views. Config applies only to the session in the linked topic where you open it.
 - Telegram gives a page that a keyboard button opens no signed login data. So each button's address carries a key that rex-tg made (64 random characters, kept in rex-tg's store). The key opens pages and authorizes validated actions in the control panel, including rename, unlink, and starting an agent; you do not need to open `/rt` first. Annotate sends also use the key, but only from the page's bound topic/session and with your verified Tailscale login. Actions are checked and claimed once. The key cannot pause or unpause typing. A signed panel opened with Telegram init data still needs data from the last hour to act. A page opened with an old key says "This button is old"; `/rekey` revokes the old key.
 - `/rekey` makes a new key at once. The old buttons stop working, and the main chat and every open topic get new buttons in a short silent note. Use it when a button's address may have leaked.
-- Without the Mini App, the buttons are text: a tap sends the label as your message, and rex-tg reads it as `/rt`, `/screen`, `/files`, `/changes`, `/annotate`, or `/templates`. A button never goes to the agent as a prompt. The same text typed by hand counts as a tap too.
+- Without the Mini App, the buttons send their labels as text. Project and Config explain which existing commands to use. The other buttons act like `/rt`, `/screen`, `/annotate`, or `/templates`. A button never goes to the agent as a prompt.
 - Only a new message can carry the keyboard. rex-tg sends it with the pairing answer, with the first message of each new topic, and with every `/help` answer.
 - On the first start after an update that changes the buttons, after a change of `[miniapp] url`, and after `/rekey`, rex-tg posts one short silent note to the main chat and to every open topic. The note carries the keyboard, so a topic that existed before shows the new buttons without `/help`. A closed topic gets no note. Each topic gets each note at most once, also after a restart.
 - It is not yet known whether each Telegram app keeps one keyboard for the whole chat or one per topic. So every open topic gets its own note, with its own topic in the buttons' addresses. If a button opens the wrong topic, send `/help` in the topic you are in.
@@ -204,6 +204,8 @@ rex-tg adds a keyboard under the message box: 🎛 Panel, 🖥 Screen, 📂 File
 
 ### `/model` and `/effort`
 
+In a linked topic, **⚙️ Config** opens a Mini App for changing the model and thinking effort of that session. It uses the same supported values and queue as the commands below. It does not change defaults for new sessions. If the topic switches to another session, reopen Config before making a change.
+
 - `/model` and `/effort` with no value show the current value and buttons. `/model opus` or `/effort high` set a value at once. Use `/model <name>` for a model that has no button.
 - rex-tg types the agent's own command, such as `/model opus`, like a message. It waits until the agent is idle, and every safety check applies. A button press gets no 👀 on your message, but the bot says "⚙️ Sending …". The agent writes no prompt for a slash command, so the 👍 comes as soon as it is typed. This holds for every slash command you send to the agent, such as `/restart`.
 - The commands by agent:
@@ -246,7 +248,7 @@ rex-tg adds a keyboard under the message box: 🎛 Panel, 🖥 Screen, 📂 File
 - Images named in a final answer come by themselves, as photos, up to 10 per answer. Set `send_images = false` to turn this off.
 - When the answer names no image file, the images that the agent looked at during the turn come after it instead: the pictures in its tool results, such as a screenshot that it read with its `read` tool. This works for pi and Claude Code. The last 4 come (`turn_images`, 0 to 10; 0 turns this off), each image once. A photo that you sent from Telegram is never sent back. The pictures are saved for 3 days in the `shown` folder of the state folder, readable only by you.
 - Files go to Telegram only from the agent's folder, your home folder, or a temporary folder, never from a hidden place such as `~/.ssh` or `.env`, or from `~/Library`. A tap checks the place again before the file goes.
-- Other files named in a final answer (`pdf`, `csv`, `tsv`, `html`, `htm`, `xlsx`, `docx`, `pptx`) come only when you ask: a silent `📎 Files in this answer` message lists them with a button each. A tap sends that file as a document, once. Change the types with `send_files` (`[]` turns the offers off).
+- Other files named in a final answer (`pdf`, `csv`, `tsv`, `html`, `htm`, `xlsx`, `docx`, `pptx`) come only when you ask: a silent `📎 Files in this answer` message lists them with a button each. When Mini App Files is enabled, files inside the agent’s working folder can open directly in the Files viewer. **Attach** sends the file as a Telegram document instead. The attachment button also works without the Mini App. Change the types with `send_files` (`[]` turns the offers off).
 - Work on the Mac: when you type in the pane on the Mac, the topic gets one silent notice, `💻 In use on the Mac`, instead of the prompts and replies. The notice shows the latest prompt and whether the agent is working or done. `📄 Last answer` posts the newest answer. Write in the topic to go on in Telegram: from then on, replies come as usual. Permission prompts still come.
 - Set `mac_notice = false` to show Mac turns instead. `💻 You (on Mac)` then shows the prompts typed on the Mac. Prompts that no person typed, such as Claude Code's task notifications, are not shown. Set `show_mac_prompts = false` to hide all of them.
 

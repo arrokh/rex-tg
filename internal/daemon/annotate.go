@@ -74,7 +74,11 @@ func (d *daemon) Launch(ctx context.Context, view string, thread int64) miniapp.
 			return fail("Could not open the control panel.")
 		}
 		return miniapp.LaunchResult{Page: id}
-	case miniapp.ViewScreen, miniapp.ViewAnnotate, miniapp.ViewTemplates:
+	case miniapp.ViewScreen, miniapp.ViewConfig, miniapp.ViewAnnotate, miniapp.ViewTemplates:
+	case miniapp.ViewProject:
+		if !d.cfg.MiniApp.Files && !d.cfg.MiniApp.Changes {
+			return fail("Files and Changes are both off in the Mini App settings.")
+		}
 	case miniapp.ViewFiles:
 		if !d.cfg.MiniApp.Files {
 			return fail("The file browser is off ([miniapp] files).")
@@ -93,6 +97,9 @@ func (d *daemon) Launch(ctx context.Context, view string, thread int64) miniapp.
 		}
 	}
 	if th.ID == 0 {
+		if view == miniapp.ViewConfig {
+			return fail("Open Config from a linked topic.")
+		}
 		return d.pickTopic(ctx)
 	}
 	switch view {
@@ -100,6 +107,20 @@ func (d *daemon) Launch(ctx context.Context, view string, thread int64) miniapp.
 		id, err := d.screenPage(th)
 		if err != nil {
 			return fail("Could not open the live screen.")
+		}
+		return miniapp.LaunchResult{Page: id}
+	case miniapp.ViewConfig:
+		conv, err := d.st.Conversation(ctx, th.CurrentConversationID)
+		if th.CurrentConversationID == 0 || err != nil || conv.ThreadID != th.ID {
+			return fail("This topic has no agent session yet.")
+		}
+		if _, err := d.State(ctx, th.ID, conv.ID); err != nil {
+			return fail("This agent has no model or effort settings.")
+		}
+		title := "⚙️ Config · " + topicShownName(th)
+		id, err := d.livePageOf(miniapp.Page{Kind: miniapp.KindConfig, Title: title, Thread: th.ID, Conv: conv.ID}, fmt.Sprintf("conv:%d", conv.ID))
+		if err != nil {
+			return fail("Could not open Config.")
 		}
 		return miniapp.LaunchResult{Page: id}
 	case miniapp.ViewAnnotate:
@@ -136,6 +157,12 @@ func (d *daemon) Launch(ctx context.Context, view string, thread int64) miniapp.
 	var id string
 	if view == miniapp.ViewFiles {
 		id, err = d.filesPage(gctx, th, conv.CWD)
+	} else if view == miniapp.ViewProject {
+		root := conv.CWD
+		if top, ok := d.repoTop(gctx, root); ok {
+			root = top
+		}
+		id, err = d.projectPage(th, root)
 	} else {
 		top, ok := d.repoTop(gctx, conv.CWD)
 		if !ok {

@@ -145,6 +145,7 @@ func TestLiveScreenAndFilesOnlyForTheOwner(t *testing.T) {
 	pages := map[string]Page{
 		"s1": {Kind: KindScreen, Title: "pi", Thread: 7},
 		"f1": {Kind: KindFiles, Title: "📂 repo", Thread: 7, Dir: root},
+		"p1": {Kind: KindProject, Title: "📁 repo", Thread: 7, Dir: root},
 		"a1": {Kind: KindAnswer, Title: "Answer", Text: "x"},
 	}
 	var asked []int64
@@ -195,6 +196,9 @@ func TestLiveScreenAndFilesOnlyForTheOwner(t *testing.T) {
 	if code, body := get("/api/files?id=f1&path=a.txt", owner); code != http.StatusOK || !strings.Contains(body["html"].(string), "hello") {
 		t.Errorf("a.txt: %d %v", code, body)
 	}
+	if code, body := get("/api/files?id=p1&path=a.txt", owner); code != http.StatusOK || !strings.Contains(body["html"].(string), "hello") {
+		t.Errorf("project file: %d %v", code, body)
+	}
 	if code, _ := get("/api/files?id=f1&path=../../etc/passwd", owner); code != http.StatusNotFound {
 		t.Errorf("a path out of the folder: %d", code)
 	}
@@ -212,6 +216,7 @@ func TestChangesOnlyForTheOwner(t *testing.T) {
 	pages := map[string]Page{
 		"c1": {Kind: KindChanges, Title: "📝 repo", Thread: 7, Dir: root},
 		"f1": {Kind: KindFiles, Title: "📂 repo", Thread: 7, Dir: root},
+		"p1": {Kind: KindProject, Title: "📁 repo", Thread: 7, Dir: root},
 	}
 	on := true
 	var turns []int64
@@ -238,6 +243,9 @@ func TestChangesOnlyForTheOwner(t *testing.T) {
 	code, body := get("/api/changes?id=c1", owner)
 	if code != http.StatusOK || body["base"] != BaseHead || body["total"] != float64(1) || len(turns) != 1 || turns[0] != 7 {
 		t.Fatalf("list: %d %v %v", code, body, turns)
+	}
+	if code, body := get("/api/changes?id=p1", owner); code != http.StatusOK || body["total"] != float64(1) {
+		t.Errorf("project changes: %d %v", code, body)
 	}
 	if code, body := get("/api/changes?id=c1&base=head&path=main.go", owner); code != http.StatusOK || !strings.Contains(fmt.Sprint(body["html"]), "println(2)") {
 		t.Errorf("main.go: %d %v", code, body)

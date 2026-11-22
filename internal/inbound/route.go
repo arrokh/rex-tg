@@ -53,8 +53,8 @@ type Button struct {
 var Buttons = []Button{
 	{"🎛 Panel", "rt"},
 	{"🖥 Screen", "screen"},
-	{"📂 Files", "files"},
-	{"📝 Changes", "changes"},
+	{"📁 Project", "project"},
+	{"⚙️ Config", "config"},
 	{"✍️ Annotate", "annotate"},
 	{"🧩 Templates", "templates"},
 }
@@ -63,7 +63,7 @@ var Buttons = []Button{
 // command. The first keyboard's labels were the commands themselves
 // ("/screen"), so a keyboard that an app still shows keeps working.
 var buttonCommands = func() map[string]string {
-	m := map[string]string{}
+	m := map[string]string{"📂 Files": "files", "📝 Changes": "changes"}
 	for _, b := range Buttons {
 		m[noVariation(b.Label)] = b.Command
 	}
@@ -128,6 +128,9 @@ func RouteText(text string, inTopic bool, botUsername string) Route {
 		return Route{Kind: RouteIgnore}
 	}
 	if c, ok := buttonCommands[noVariation(t)]; ok {
+		if c == "project" || c == "config" {
+			return Route{Kind: RouteCommand, Command: c}
+		}
 		t = "/" + c // a tap on a keyboard button
 	}
 	if !strings.HasPrefix(t, "/") {

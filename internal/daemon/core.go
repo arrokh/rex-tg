@@ -462,10 +462,18 @@ func (d *daemon) handle(ev any) {
 	case evTopicCreated:
 		d.onTopicCreated(e)
 	case evQueueText:
+		valid := true
 		if e.ctl != nil {
-			d.keepPending(-e.orig, *e.ctl) // the row's id; kept before the row, so a stop between loses neither
+			th, err := d.st.Thread(d.ctx, e.threadID)
+			valid = err == nil && th.Status != store.ThreadClosed && th.CurrentConversationID == e.ctl.conv
+			if valid {
+				valid = d.keepPending(-e.orig, *e.ctl) // never queue without a persisted session binding
+			}
 		}
-		queued := d.queueText(e.threadID, e.orig, e.tgMsg, e.text, e.kind, e.action)
+		queued := false
+		if valid {
+			queued = d.queueText(e.threadID, e.orig, e.tgMsg, e.text, e.kind, e.action)
+		}
 		if queued && (e.kind == "file" || e.kind == "voice") {
 			d.clearFileRetry(e.orig)
 		}

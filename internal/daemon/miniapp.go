@@ -129,6 +129,7 @@ func (d *daemon) serveMiniApp(ctx context.Context) {
 			WithFiles(func() bool { return d.cfg.MiniApp.Files }, format.Redact).
 			WithChanges(func() bool { return d.cfg.MiniApp.Changes }, format.Redact, d.lastTurn).
 			WithControl(newControlPanel(d), d.home).
+			WithConfig(d).
 			WithLaunch(d, d.keyOK).
 			WithAnnotate(d).
 			WithTailnetOnly(d.cfg.MiniApp.TailnetOnly).
@@ -680,7 +681,7 @@ func (d *daemon) prunePages(now time.Time) {
 		switch kind {
 		case miniapp.KindDiff:
 			age = diffMaxAge
-		case miniapp.KindScreen, miniapp.KindFiles, miniapp.KindChanges, miniapp.KindControl, miniapp.KindAnnotate:
+		case miniapp.KindScreen, miniapp.KindFiles, miniapp.KindChanges, miniapp.KindControl, miniapp.KindConfig, miniapp.KindAnnotate:
 			age = livePageMaxAge // since the last use
 		}
 		if perr != nil || now.Sub(time.Unix(at, 0)) > age {
