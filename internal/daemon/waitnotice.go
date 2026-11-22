@@ -28,13 +28,13 @@ func waitNoticeKey(updateID int64) string { return fmt.Sprintf("wait_notice:%d",
 
 // postWaitNotice posts the waiting notice of a queued message (worker) and
 // reports its message number to the core.
-func (d *daemon) postWaitNotice(th store.Thread, updateID int64, text string, n int) {
+func (d *daemon) postWaitNotice(th store.Thread, updateID int64, text string, n, sendable int) {
 	if text == "" {
 		text = waitNoticeText
 	}
 	chat, thread, tid := th.ChatID, th.MessageThreadID, th.ID
 	d.spawn(func() {
-		m, err := d.sendNow(chat, thread, text, waitMarkup(updateID, n))
+		m, err := d.sendNow(chat, thread, text, waitMarkup(updateID, n, sendable))
 		if err == nil && m.MessageID != 0 {
 			d.markBelow(tid)
 			d.emit(evWaitNotice{updateID: updateID, chat: chat, msg: m.MessageID})
@@ -69,10 +69,11 @@ func (d *daemon) onWaitNotice(e evWaitNotice) {
 	}
 }
 
-// updateWaitNotice edits the topic's waiting notice when its text changed:
-// another message joined the queue, or the wait has another reason (core).
-func (d *daemon) updateWaitNotice(updateID int64, text string, n int) {
-	if d.waitTexts[updateID] == text {
+// updateWaitNotice edits the notice when its text or eligible send prefix
+// changes (core).
+func (d *daemon) updateWaitNotice(threadID, updateID int64, text string, n int) {
+	sendable := d.sendNowEligibleCount(threadID)
+	if d.waitTexts[updateID] == text && d.waitSendables[updateID] == sendable {
 		return
 	}
 	v, ok, err := d.st.Get(d.ctx, waitNoticeKey(updateID))
@@ -84,10 +85,11 @@ func (d *daemon) updateWaitNotice(updateID int64, text string, n int) {
 		return
 	}
 	d.waitTexts[updateID] = text
+	d.waitSendables[updateID] = sendable
 	d.spawn(func() {
 		_ = d.snd.Call(sender.PriorityEdit, func(ctx context.Context, tg *telegram.Client) error {
 			_, err := tg.EditMessageText(ctx, telegram.EditMessageTextParams{
-				ChatID: chat, MessageID: msg, Text: text, ReplyMarkup: waitMarkup(updateID, n)})
+				ChatID: chat, MessageID: msg, Text: text, ReplyMarkup: waitMarkup(updateID, n, sendable)})
 			return err
 		})
 	})

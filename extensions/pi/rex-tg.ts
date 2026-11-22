@@ -22,6 +22,29 @@ function liveFile(ctx: any): string | undefined {
   return id ? join(REX_TG_LIVE, id + ".json") : undefined;
 }
 
+// Export IDs only, never credentials or provider configuration. Use Pi's
+// own registry so provider availability and custom models match the session.
+function reportModels(ctx: any): void {
+  try {
+    const id = String(ctx?.sessionManager?.getSessionId?.() ?? "");
+    if (!process.env.REX_BLOCK || !REX_TG_LIVE || !/^[A-Za-z0-9_-]{1,128}$/.test(id)) return;
+    const available = ctx?.modelRegistry?.getAvailable?.();
+    if (!Array.isArray(available)) return;
+    const models = [...new Set(available
+      .filter((m: any) => typeof m?.provider === "string" && typeof m?.id === "string")
+      .map((m: any) => `${m.provider}/${m.id}`)
+      .filter((name: string) => name.length <= 80))].slice(0, 2048);
+    const dir = join(REX_TG_LIVE, "models");
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const file = join(dir, `${id}.json`);
+    const tmp = file + `.${process.pid}.tmp`;
+    writeFileSync(tmp, JSON.stringify(models), { mode: 0o600 });
+    renameSync(tmp, file);
+  } catch {
+    // Never disturb pi.
+  }
+}
+
 function flushLive(): void {
   liveTimer = undefined;
   const p = livePending;
@@ -104,14 +127,24 @@ function report(name: string, ctx: any, extra: Extra = {}): void {
 }
 
 export default function (pi: any) {
-  pi.on("session_start", (event: any, ctx: any) =>
-    report("session_start", ctx, { reason: event?.reason, previous_session_file: event?.previousSessionFile }),
-  );
+  pi.on("session_start", (event: any, ctx: any) => {
+    reportModels(ctx);
+    report("session_start", ctx, { reason: event?.reason, previous_session_file: event?.previousSessionFile });
+  });
   pi.on("session_shutdown", (event: any, ctx: any) => {
     clearLive(ctx);
+    try {
+      const id = String(ctx?.sessionManager?.getSessionId?.() ?? "");
+      if (process.env.REX_BLOCK && REX_TG_LIVE && /^[A-Za-z0-9_-]{1,128}$/.test(id)) {
+        unlinkSync(join(REX_TG_LIVE, "models", `${id}.json`));
+      }
+    } catch { /* no catalog */ }
     report("session_shutdown", ctx, { reason: event?.reason, target_session_file: event?.targetSessionFile });
   });
-  pi.on("agent_start", (_event: any, ctx: any) => report("agent_start", ctx));
+  pi.on("agent_start", (_event: any, ctx: any) => {
+    reportModels(ctx);
+    report("agent_start", ctx);
+  });
   pi.on("agent_end", (_event: any, ctx: any) => {
     clearLive(ctx);
     report("agent_end", ctx);

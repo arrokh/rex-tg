@@ -790,12 +790,18 @@ func (c *controlPanel) config(a miniapp.ControlAction) miniapp.ControlResult {
 	if err != nil || conv.ThreadID != th.ID {
 		return controlFail("This topic is in another session now. The setting was not changed.")
 	}
-	setting, ctrl, ok := d.controlOf(conv.Runtime, a.Name)
+	setting, ctrl, ok := d.configControl(conv, a.Name)
 	if !ok || setting.Name != "model" && setting.Name != "effort" {
 		return controlFail("This setting is not available for this agent.")
 	}
+	if a.Name == "model" && len(setting.Choices) == 0 {
+		return controlFail("No model list is available for this session yet.")
+	}
 	value, err := setting.CheckValue(a.Value)
 	if err != nil {
+		if a.Name == "model" {
+			return controlFail("That model is not in this session's list. Reload Config and choose an available model.")
+		}
 		return controlFail(err.Error())
 	}
 	text, err := ctrl.Command(setting.Name, value, d.currentValues(conv, ctrl))

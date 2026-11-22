@@ -264,7 +264,7 @@
     page.appendChild(wrap);
     page.appendChild(jump);
 
-    var fitOn = load("rex-tg.fit") === "1", paused = false;
+    var fitOn = load("rex-tg.fit") !== "0", paused = false;
     var term = null, pre = null, last = null, follow = true;
     var mono = "ui-monospace, SFMono-Regular, Menlo, monospace";
 
@@ -280,7 +280,7 @@
       var base = 13 * scale;
       if (!fitOn) { return base; }
       var px = (wrap.clientWidth - 18) / (cols * ratio);
-      return Math.max(4, Math.min(base * 1.6, Math.floor(px * 10) / 10));
+      return Math.max(1, Math.min(base * 1.6, Math.floor(px * 10) / 10));
     }
 
     function atBottom() { return wrap.scrollTop + wrap.clientHeight >= wrap.scrollHeight - 24; }
@@ -320,8 +320,10 @@
     function setFit(on) {
       fitOn = on;
       fit.classList.toggle("on", fitOn);
+      wrap.classList.toggle("fit-width", fitOn);
+      if (fitOn) { wrap.scrollLeft = 0; }
       fit.setAttribute("aria-pressed", String(fitOn));
-      save("rex-tg.fit", fitOn ? "1" : null);
+      save("rex-tg.fit", fitOn ? "1" : "0");
       draw();
     }
     fit.addEventListener("click", function () { setFit(!fitOn); });
@@ -3156,13 +3158,51 @@
         card.appendChild(el("h2", "config-name", item.title));
         card.appendChild(el("p", "config-current", item.value ? "Current: " + item.value : "Current value not seen yet"));
         var options = el("div", "config-options");
-        (item.choices || []).forEach(function (value) {
-          var b = button(value, "btn" + (value === item.value ? " selected" : ""));
-          b.disabled = !!pending;
-          b.addEventListener("click", function () { submit(item.name, value, false); });
-          options.appendChild(b);
-        });
-        if (item.free) {
+        if (item.name === "model") {
+          var models = item.choices || [];
+          if (!models.length) {
+            options.appendChild(el("p", "note", "No model list is available for this session yet."));
+          } else {
+            var search = el("input", "config-input");
+            search.type = "search";
+            search.placeholder = "Filter models";
+            search.setAttribute("aria-label", "Filter models");
+            search.disabled = !!pending;
+            var select = el("select", "config-input");
+            select.setAttribute("aria-label", "Model");
+            select.disabled = !!pending;
+            var apply = button("Set model", "btn primary");
+            function filter() {
+              var value = select.value || item.value;
+              var query = search.value.trim().toLowerCase();
+              select.textContent = "";
+              select.appendChild(el("option", "", "Choose a model"));
+              select.options[0].value = "";
+              models.filter(function (model) { return model.toLowerCase().includes(query); }).forEach(function (model) {
+                var option = el("option", "", model);
+                option.value = model;
+                option.selected = model === value;
+                select.appendChild(option);
+              });
+              apply.disabled = !!pending || !select.value;
+            }
+            search.addEventListener("input", filter);
+            select.addEventListener("change", function () { apply.disabled = !select.value; });
+            apply.addEventListener("click", function () { submit(item.name, select.value, false); });
+            filter();
+            options.appendChild(search);
+            options.appendChild(select);
+            options.appendChild(apply);
+          }
+        } else {
+          (item.choices || []).forEach(function (value) {
+            var b = button(value, "btn" + (value === item.value ? " selected" : ""));
+            b.disabled = !!pending;
+            b.addEventListener("click", function () { submit(item.name, value, false); });
+            options.appendChild(b);
+          });
+        }
+        if (item.free && item.name !== "model") {
           var input = el("input", "config-input");
           input.type = "text";
           input.autocomplete = "off";

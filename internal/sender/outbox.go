@@ -211,13 +211,26 @@ func isPartNotice(p store.Part) bool {
 // make them pile up.
 const partNoticeKind = "part-notice"
 
+// deliveryLabel describes the outgoing item, not how Telegram renders it.
+func (s *Sender) deliveryLabel(ctx context.Context, p store.Part) string {
+	if isPartNotice(p) {
+		return fmt.Sprintf("Notification #%d", p.OutboxID)
+	}
+	if p.Part == 0 {
+		if row, err := s.st.OutboxRow(ctx, p.OutboxID); err == nil && len(row.Parts) == 1 {
+			return fmt.Sprintf("Message #%d", p.OutboxID)
+		}
+	}
+	return fmt.Sprintf("Part %d of message #%d", p.Part+1, p.OutboxID)
+}
+
 // notice durably completes an unknown part with its "may not have arrived"
 // message. The store commits the notice and checked flag together.
 func (s *Sender) notice(ctx context.Context, p store.Part) error {
 	if isPartNotice(p) {
 		return s.st.MarkPartChecked(ctx, p.OutboxID, p.Part)
 	}
-	text := fmt.Sprintf("⚠️ Part %d of reply #%d may not have arrived.", p.Part+1, p.OutboxID)
+	text := "⚠️ " + s.deliveryLabel(ctx, p) + " may not have arrived."
 	item := partNoticeItem(p, noticeKey(p.OutboxID, p.Part), text)
 	if err := s.st.MarkPartCheckedWithNotice(ctx, p.OutboxID, p.Part, item); err != nil {
 		return err
@@ -229,7 +242,7 @@ func (s *Sender) notice(ctx context.Context, p store.Part) error {
 // failNotice enqueues the "could not be sent" message for a part that
 // Telegram refused for good, once.
 func (s *Sender) failNotice(ctx context.Context, p store.Part, reason string) {
-	text := fmt.Sprintf("⚠️ Part %d of reply #%d could not be sent: %s", p.Part+1, p.OutboxID, html.EscapeString(reason))
+	text := "⚠️ " + s.deliveryLabel(ctx, p) + " could not be sent: " + html.EscapeString(reason)
 	s.enqueuePartNotice(ctx, p, fmt.Sprintf("notice:failed:%d:%d", p.OutboxID, p.Part), text)
 }
 
@@ -482,7 +495,7 @@ func (s *Sender) checkPart(ctx context.Context, j *job, c *partCheck, outboxID i
 		}
 		return jobResult{}
 	}
-	text := fmt.Sprintf("⏳ Telegram did not confirm part %d of reply #%d. Checking whether it arrived…", p.Part+1, p.OutboxID)
+	text := "⏳ " + s.deliveryLabel(ctx, p) + " was not confirmed by Telegram. Checking whether it arrived…"
 	id, v, err := s.sendText(ctx, p.ThreadID, p.ChatID, p.MessageThreadID, text, true, true, nil)
 	switch v {
 	case vOK:
@@ -659,8 +672,18 @@ func (s *Sender) judgePart(ctx, bg context.Context, p store.Part, c *partCheck) 
 		s.Wake()
 		return jobResult{}
 	}
+	if isPartNotice(p) {
+		// As in notice(), an ambiguous notification does not get a warning
+		// or a resend button. Remove its temporary check message instead.
+		if err := s.st.MarkPartCheckedAndDeleteKey(bg, p.OutboxID, p.Part, checkNoteKey(p.OutboxID, p.Part)); err != nil {
+			s.log.Warn("notification check not saved", "outbox", p.OutboxID, "part", p.Part, "err", err)
+			return jobResult{retry: true, delay: time.Second}
+		}
+		s.deleteMessage(th, id)
+		return jobResult{}
+	}
 	s.log.Info("part may have arrived; asking before sending again", "outbox", p.OutboxID, "part", p.Part, "unseen", unseen)
-	notice := fmt.Sprintf("⚠️ Part %d of reply #%d may not have arrived.", p.Part+1, p.OutboxID)
+	notice := "⚠️ " + s.deliveryLabel(bg, p) + " may not have arrived."
 	markup := &telegram.InlineKeyboardMarkup{InlineKeyboard: [][]telegram.InlineKeyboardButton{{
 		{Text: "🔁 Send again", CallbackData: ResendButtonData(p.OutboxID)},
 	}}}

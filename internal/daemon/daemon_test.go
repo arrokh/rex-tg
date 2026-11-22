@@ -860,7 +860,7 @@ func TestRestartRecovery(t *testing.T) {
 	e.start()
 	notice := e.waitText(ft.MessageThreadID, "may not have arrived")
 	e.waitText(ft.MessageThreadID, "may be in the input box")
-	if !strings.Contains(notice.Text, fmt.Sprintf("reply #%d", outboxID)) || buttonData(notice, "Send again") != fmt.Sprintf("rs:%d", outboxID) {
+	if !strings.Contains(notice.Text, fmt.Sprintf("Message #%d", outboxID)) || buttonData(notice, "Send again") != fmt.Sprintf("rs:%d", outboxID) {
 		t.Errorf("notice = %q, buttons %+v", notice.Text, notice.Markup)
 	}
 	if e.hasText(ft.MessageThreadID, "half sent answer") {
@@ -1096,19 +1096,26 @@ func TestOneWaitNoticeForAllWaitingMessages(t *testing.T) {
 	e.say(thread, "second thing")
 	e.waitFor("the notice counts all three", func() bool {
 		m, _ := e.message(notice.ID)
-		return strings.Contains(m.Text, "3 messages wait until the agent is idle") && buttonData(m, "Send all now") != ""
+		return strings.Contains(m.Text, "3 messages wait until the agent is idle") && buttonData(m, "Send now") != ""
 	})
+	if m, _ := e.message(notice.ID); buttonData(m, "Send all now") != "" {
+		t.Fatal("offered Send all when the FIFO queue starts with an idle-only command")
+	}
+	e.say(thread, "📥 Queue")
+	queue := e.waitText(thread, "3 messages waiting")
+	if buttonData(queue, "Send now") == "" || buttonData(queue, "Send all now") != "" {
+		t.Fatalf("Queue offered an incorrect send action: %+v", queue.Markup)
+	}
 	n := 0
 	for _, m := range e.botMessages(thread) {
-		if strings.Contains(m.Text, "Waiting") || strings.Contains(m.Text, "messages wait") {
+		if strings.Contains(m.Text, "Waiting") || strings.Contains(m.Text, "messages wait until") {
 			n++
 		}
 	}
 	if n != 1 {
 		t.Fatalf("%d waiting notices, want one for both messages", n)
 	}
-	m, _ := e.message(notice.ID)
-	e.pressButton(m, buttonData(m, "Send all now"))
+	e.pressButton(queue, buttonData(queue, "Send now"))
 	e.waitFor("the first message typed", func() bool { return len(e.pastes()) == 1 })
 	if got := e.pastes(); got[0] != "first thing" {
 		t.Errorf("pasted %q, want the first message", got)
@@ -1290,7 +1297,7 @@ func TestReplyKeyboard(t *testing.T) {
 	wantKeyboard := func(m tgtest.Message) {
 		t.Helper()
 		kb := m.Keyboard
-		if kb == nil || !kb.IsPersistent || !kb.ResizeKeyboard || len(kb.Keyboard) != 2 {
+		if kb == nil || !kb.IsPersistent || !kb.ResizeKeyboard || len(kb.Keyboard) != 3 {
 			t.Fatalf("%q: keyboard = %+v", m.Text, kb)
 		}
 		var got []string
@@ -1302,7 +1309,7 @@ func TestReplyKeyboard(t *testing.T) {
 				got = append(got, b.Text)
 			}
 		}
-		if strings.Join(got, "|") != "🎛 Panel|🖥 Screen|📁 Project|⚙️ Config|✍️ Annotate|🧩 Templates" {
+		if strings.Join(got, "|") != "🎛 Panel|🖥 Screen|📁 Project|⚙️ Config|✍️ Annotate|🧩 Templates|📥 Queue" {
 			t.Errorf("buttons = %v", got)
 		}
 	}
@@ -1945,14 +1952,15 @@ func TestForceTypesAtAPromptAndMacAnswerClosesAlert(t *testing.T) {
 	e.setStatus("blocked", "permission")
 	alert := e.waitText(thread, "Permission needed")
 
-	// A plain message waits while the prompt is open, and "Send now" is
-	// refused: free text could pick an answer.
-	id := e.say(thread, "plain text at a prompt")
+	// A plain message waits while the prompt is open; no Send now action
+	// should be offered because free text could pick an answer.
+	e.say(thread, "plain text at a prompt")
 	waiting := e.waitText(thread, "Waiting until the agent is idle")
-	e.pressButton(waiting, buttonData(waiting, "Send now"))
-	e.waitFor("a refusal", func() bool { m, _ := e.message(id); return m.Reaction == "👎" })
-	e.waitFor("the waiting notice to be deleted", func() bool { m, _ := e.message(waiting.ID); return m.Deleted })
-	e.waitText(thread, "prompt")
+	if buttonData(waiting, "Send now") != "" {
+		t.Fatal("offered Send now while a permission prompt was open")
+	}
+	e.pressButton(waiting, buttonData(waiting, "Cancel"))
+	e.waitText(thread, "Cancelled")
 	if len(e.pastes()) != 0 {
 		t.Fatalf("typed at a prompt: %v", e.pastes())
 	}

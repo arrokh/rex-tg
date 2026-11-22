@@ -37,6 +37,7 @@ const (
 		"/mute, /unmute - answers without or with sound\n" +
 		"/rename &lt;name&gt; - rename this topic, its Rex pane and its tab; /rename auto names them after the session again\n" +
 		"/unlink - stop mirroring this session\n" +
+		"/queue - see waiting messages and send the eligible FIFO prefix now\n" +
 		"/attach - choose an unattached Rex agent for this topic\n" +
 		"/rekey - make a new key for the keyboard buttons; the old buttons stop working\n" +
 		"/help - this list"
@@ -396,6 +397,8 @@ func (d *daemon) topicCommand(u telegram.Update, m *telegram.Message, th store.T
 		d.setting(th, upd, "reasoning", r.Args, []string{"on", "off"})
 	case "resend":
 		d.resend(th, upd, r.Args)
+	case "queue":
+		d.queueCommand(th)
 	case "unlink":
 		d.unlink(th)
 	case "attach":
@@ -416,6 +419,26 @@ func (d *daemon) topicCommand(u telegram.Update, m *telegram.Message, th store.T
 	default:
 		d.mainCommand(r, th.ChatID, th.MessageThreadID, true)
 	}
+}
+
+func (d *daemon) queueCommand(th store.Thread) {
+	queued := d.waitingInbound(th.ID)
+	if len(queued) == 0 {
+		d.replyTopicMarkup(th, "📥 The queue is empty.", nil)
+		return
+	}
+	sendable := d.sendNowEligibleCount(th.ID)
+	text := fmt.Sprintf("📥 %d messages waiting.", len(queued))
+	if sendable > 0 {
+		text += fmt.Sprintf(" %d can be sent now in FIFO order.", sendable)
+	} else if d.paused.Load() {
+		text += " Typing is paused; use /unpause first."
+	} else if alerts, err := d.st.OpenAlerts(d.ctx, th.ID); err == nil && len(alerts) > 0 {
+		text += " Answer the open prompt first."
+	} else if !steerable(queued[0]) {
+		text += " The first message must wait until the agent is idle."
+	}
+	d.replyTopicMarkup(th, text, waitMarkup(queued[0].UpdateID, len(queued), sendable))
 }
 
 func (d *daemon) infoText(th store.Thread) string {

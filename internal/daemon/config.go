@@ -2,8 +2,14 @@ package daemon
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"io"
+	"os"
+	"path/filepath"
+	"regexp"
 	"strconv"
+	"strings"
 
 	"rex-tg/internal/agents"
 	"rex-tg/internal/miniapp"
@@ -17,6 +23,53 @@ const configActionBase = int64(1) << 59 // separate queued-row range for Config 
 func configRowID(id string) int64 {
 	n, _ := strconv.ParseInt(id[:15], 16, 64)
 	return configActionBase + n
+}
+
+var configPiID = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
+
+// configControl keeps the Mini App picker closed to values from the agent's
+// catalog. The Telegram /model command retains its existing free-text path.
+func (d *daemon) configControl(conv store.Conversation, name string) (agents.Control, agents.Controller, bool) {
+	c, ctrl, ok := d.controlOf(conv.Runtime, name)
+	if !ok || name != "model" {
+		return c, ctrl, ok
+	}
+	if conv.Runtime == agents.Pi && len(d.cfg.Input(conv.Runtime).Choices[name]) == 0 {
+		c.Choices = piConfigModels(d.cfg.LiveDir(), conv.NativeID)
+	}
+	choices := make([]string, 0, len(c.Choices))
+	seen := map[string]bool{}
+	// Check the adapter's free-value syntax even for catalog entries: an
+	// extension or local model configuration may contain unusable IDs.
+	base := c
+	base.Choices = nil
+	for _, choice := range c.Choices {
+		if v, err := base.CheckValue(choice); err == nil && !seen[strings.ToLower(v)] {
+			choices = append(choices, v)
+			seen[strings.ToLower(v)] = true
+		}
+	}
+	c.Choices, c.Free = choices, false
+	return c, ctrl, true
+}
+
+func piConfigModels(dir, id string) []string {
+	if !configPiID.MatchString(id) {
+		return nil
+	}
+	f, err := os.Open(filepath.Join(dir, "models", id+".json"))
+	if err != nil {
+		return nil
+	}
+	defer f.Close()
+	if info, err := f.Stat(); err != nil || !info.Mode().IsRegular() {
+		return nil
+	}
+	var choices []string
+	if b, err := io.ReadAll(io.LimitReader(f, 1<<20)); err != nil || json.Unmarshal(b, &choices) != nil || len(choices) > 2048 {
+		return nil
+	}
+	return choices
 }
 
 // State reads only the controls of the session named by a Config page.
@@ -40,7 +93,7 @@ func (d *daemon) State(ctx context.Context, thread, convID int64) (miniapp.Confi
 	values := d.currentValues(conv, ctrl)
 	out := miniapp.ConfigState{Controls: make([]miniapp.ConfigItem, 0)}
 	for _, name := range []string{"model", "effort"} {
-		c, _, ok := d.controlOf(conv.Runtime, name)
+		c, _, ok := d.configControl(conv, name)
 		if !ok {
 			continue
 		}

@@ -267,8 +267,16 @@ func (d *daemon) onCallback(u telegram.Update) {
 			return
 		}
 	case "s":
-		if id, ok := arg(1); ok {
-			d.sendNowButton(cb, id)
+		if id, ok := arg(1); ok && len(parts) <= 3 {
+			limit := int64(0) // legacy buttons had no advertised count
+			if len(parts) == 3 {
+				n, valid := arg(2)
+				if !valid || n <= 0 {
+					break
+				}
+				limit = n
+			}
+			d.sendNowButton(cb, id, limit)
 			return
 		}
 	case "c":
@@ -341,15 +349,28 @@ func (d *daemon) threadOfMessage(m *telegram.Message) (store.Thread, bool) {
 // command (a /model button, //compact) or shell command (!ls). That one
 // still waits until the agent is idle, and so does what came after it, so
 // the order stays; it gets the next notice.
-func (d *daemon) sendNowButton(cb *telegram.CallbackQuery, id int64) {
+func (d *daemon) sendNowButton(cb *telegram.CallbackQuery, id, limit int64) {
 	th, ok := d.threadOfMessage(cb.Message)
 	if !ok || !d.stillQueued(th.ID, id) {
 		d.answerCallback(cb.ID, "That message was already handled.", false)
 		return
 	}
+	if d.paused.Load() {
+		d.answerCallback(cb.ID, "Typing is paused; use /unpause first.", false)
+		return
+	}
+	if alerts, err := d.st.OpenAlerts(d.ctx, th.ID); err == nil && len(alerts) > 0 {
+		d.answerCallback(cb.ID, "Answer the open prompt first.", false)
+		return
+	}
+	eligible := d.sendNowEligibleCount(th.ID)
+	if eligible == 0 {
+		d.answerCallback(cb.ID, "Commands and prompt notes wait until the agent is idle.", false)
+		return
+	}
 	n := 0
 	for _, q := range d.waitingInbound(th.ID) {
-		if !steerable(q) {
+		if !steerable(q) || n >= eligible || (limit > 0 && int64(n) >= limit) {
 			break
 		}
 		d.actions[q.UpdateID] = inbound.ActSendNow
@@ -383,6 +404,31 @@ func (d *daemon) waitingInbound(threadID int64) []store.Inbound {
 		}
 	}
 	return out
+}
+
+// sendNowEligibleCount is the contiguous FIFO prefix that Send now may take.
+// Do not offer it while typing is paused or a prompt is open; the delivery
+// path checks those gates again immediately before typing.
+func (d *daemon) sendNowEligibleCount(threadID int64) int {
+	if d.paused.Load() {
+		return 0
+	}
+	th, err := d.st.Thread(d.ctx, threadID)
+	if err != nil || th.Status != store.ThreadLive {
+		return 0
+	}
+	facts, _, err := d.baseFacts(d.ctx, th)
+	if err != nil || !facts.PaneExists || facts.PromptOpen {
+		return 0
+	}
+	n := 0
+	for _, q := range d.waitingInbound(threadID) {
+		if !steerable(q) {
+			break
+		}
+		n++
+	}
+	return n
 }
 
 // waitingRows are the ids of a topic's waiting messages (waitingInbound).
