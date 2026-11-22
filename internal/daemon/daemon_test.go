@@ -860,7 +860,7 @@ func TestRestartRecovery(t *testing.T) {
 	e.start()
 	notice := e.waitText(ft.MessageThreadID, "may not have arrived")
 	e.waitText(ft.MessageThreadID, "may be in the input box")
-	if !strings.Contains(notice.Text, fmt.Sprintf("reply #%d", outboxID)) || buttonData(notice, "Send again") != fmt.Sprintf("rs:%d", outboxID) {
+	if !strings.Contains(notice.Text, fmt.Sprintf("Message #%d", outboxID)) || buttonData(notice, "Send again") != fmt.Sprintf("rs:%d", outboxID) {
 		t.Errorf("notice = %q, buttons %+v", notice.Text, notice.Markup)
 	}
 	if e.hasText(ft.MessageThreadID, "half sent answer") {

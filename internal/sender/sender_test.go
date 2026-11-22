@@ -421,7 +421,10 @@ func TestProgressEditBudgetHalvedAfter429(t *testing.T) {
 }
 
 func noticeText(id int64, part int) string {
-	return "⚠️ Part " + string(rune('0'+part+1)) + " of reply #" + string(rune('0'+id)) + " may not have arrived."
+	if part == 0 {
+		return fmt.Sprintf("⚠️ Message #%d may not have arrived.", id)
+	}
+	return fmt.Sprintf("⚠️ Part %d of message #%d may not have arrived.", part+1, id)
 }
 
 // visible returns the chat's messages that were not deleted.
@@ -1296,6 +1299,27 @@ func TestDaemonNoticeIsCheckedLikeAReply(t *testing.T) {
 	waitFor(t, "the note to go", func() bool { return len(e.visible()) == 1 })
 	if ms := e.visible(); !strings.Contains(ms[0].Text, "Sending 1 part") {
 		t.Fatalf("messages = %+v", ms)
+	}
+}
+
+// A keyboard refresh may have arrived. Do not turn its check message into
+// a resend prompt, and do not send the notification twice on a guess.
+func TestAmbiguousKeyboardRefreshHasNoResendWarning(t *testing.T) {
+	e := newEnv(t, sender.Options{})
+	th := e.topic(1)
+	id, _, err := e.st.Enqueue(ctx, store.OutboxItem{ThreadID: th.ID, Key: "keyboard:v5", Kind: "notice",
+		Parts: []store.PartContent{{Content: "New keyboard", Format: store.FormatHTML}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.srv.LoseAnswerNext("sendMessage", 1)
+	e.start()
+	waitFor(t, "checked keyboard refresh and removed check message", func() bool {
+		p, err := e.st.Part(ctx, id, 0)
+		return err == nil && p.State == store.OutboxUnknown && p.Checked && len(e.visible()) == 1
+	})
+	if msgs := e.visible(); msgs[0].Text != "New keyboard" || len(e.srv.Calls("editMessageText")) != 0 || len(e.srv.Calls("sendMessage")) != 2 {
+		t.Fatalf("expected only the original notification to remain: %+v", msgs)
 	}
 }
 

@@ -133,7 +133,9 @@
     background: #1e1e1e; border-radius: 10px; padding: 8px;
   }
   /* Short output uses only its own height; long output scrolls in the available space. */
-  .term-wrap { display: flex; flex-direction: column; }
+  .term-wrap { display: flex; flex-direction: column; min-width: 0; max-width: 100%; }
+  .term-wrap.fit-width { overflow-x: hidden; }
+  .term-wrap.fit-width > pre.screen { overflow-x: hidden; }
   .term-wrap > .xterm, .term-wrap > pre.screen { flex: none; }
   .term-wrap .xterm { padding: 0; }
   .term-wrap .xterm-viewport { overflow: hidden !important; background: transparent !important; }

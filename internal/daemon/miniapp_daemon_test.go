@@ -357,6 +357,13 @@ func TestConfigUsesTheLinkedSession(t *testing.T) {
 	e, _, thread := piTopicCfg(t, "pi-config", func(e *env) {
 		e.cfg.MiniApp.URL = "https://mac.example.ts.net:8443"
 		e.cfg.MiniApp.Listen = addr
+		dir := filepath.Join(e.cfg.LiveDir(), "models")
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "pi-config.json"), []byte(`["test/model-one","test/model-two","test/model-one","invalid model"]`), 0o600); err != nil {
+			t.Fatal(err)
+		}
 	})
 	topic, ok, err := e.peek().ThreadByTopic(context.Background(), chatID, thread)
 	if err != nil || !ok {
@@ -371,7 +378,11 @@ func TestConfigUsesTheLinkedSession(t *testing.T) {
 	if code != http.StatusOK || len(state["controls"].([]any)) != 2 {
 		t.Fatalf("Config state: %d %v", code, state)
 	}
-	body := strings.NewReader(`{"act":"0123456789abcdef0123456789abcdef","name":"effort","value":"high"}`)
+	model := state["controls"].([]any)[0].(map[string]any)
+	if model["name"] != "model" || model["free"] != nil || fmt.Sprint(model["choices"]) != "[test/model-one test/model-two]" {
+		t.Fatalf("model picker does not match the session registry: %v", model)
+	}
+	body := strings.NewReader(`{"act":"0123456789abcdef0123456789abcdef","name":"model","value":"test/model-two"}`)
 	req, _ := http.NewRequest("POST", "http://"+addr+"/api/config/do?id="+id, body)
 	req.Header.Set("X-Telegram-Init-Data", signedInit(e.tg.Token(), ownerID))
 	req.Header.Set("Tailscale-User-Login", "owner@example.com")
@@ -384,11 +395,11 @@ func TestConfigUsesTheLinkedSession(t *testing.T) {
 	_ = json.NewDecoder(res.Body).Decode(&result)
 	res.Body.Close()
 	if res.StatusCode != http.StatusOK || result["ok"] != true {
-		t.Fatalf("change effort: %d %v", res.StatusCode, result)
+		t.Fatalf("change model: %d %v", res.StatusCode, result)
 	}
 	e.waitFor("Config setting typed once", func() bool { return len(e.pastes()) == 1 })
-	if got := e.pastes()[0]; got != "/thinking high" {
-		t.Errorf("typed %q, want the agent's effort command", got)
+	if got := e.pastes()[0]; got != "/model test/model-two" {
+		t.Errorf("typed %q, want the agent's model command", got)
 	}
 
 	th, ok, err := e.peek().ThreadByTopic(context.Background(), chatID, thread)
