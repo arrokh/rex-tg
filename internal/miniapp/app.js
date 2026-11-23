@@ -2240,6 +2240,10 @@
       for (var i = 0; i < notes.length; i++) { if (notes[i].id === nid) { return notes[i]; } }
       return null;
     }
+    function noteKind(n) {
+      var value = String(n.note || "").trim().toLowerCase();
+      return value === "yes" ? "yes" : value === "no" ? "no" : "comment";
+    }
 
     // --- the text to send ---
     // cut keeps 500 characters (code points: a pair is never split).
@@ -2314,7 +2318,7 @@
     function refreshBadges() {
       Object.keys(blocks).forEach(function (k) {
         blocks[k].forEach(function (b) {
-          b.classList.remove("noted");
+          b.classList.remove("noted", "noted-yes", "noted-no", "noted-comment");
           var host = badgeHost(b);
           var old = host.querySelector(".nbadge");
           if (old && old.parentNode === host) { host.removeChild(old); }
@@ -2322,8 +2326,9 @@
       });
       sorted().forEach(function (n, i) {
         (blocks[n.id] || []).forEach(function (b) {
-          b.classList.add("noted");
-          badgeHost(b).appendChild(el("span", "nbadge", String(i + 1)));
+          var kind = noteKind(n);
+          b.classList.add("noted", "noted-" + kind);
+          badgeHost(b).appendChild(el("span", "nbadge " + kind, String(i + 1)));
         });
       });
       syncBar();
@@ -2381,12 +2386,17 @@
         box.appendChild(lab);
         var quick = el("div", "npresets");
         quick.setAttribute("role", "group");
-        quick.setAttribute("aria-label", "Fill comment");
+        quick.setAttribute("aria-label", "Quick annotation choices");
         function fillComment(text) { ta.value = text; ok(); }
-        var yes = button("Yes", "btn");
-        yes.addEventListener("click", function () { fillComment("Yes"); });
-        var no = button("No", "btn");
-        no.addEventListener("click", function () { fillComment("No"); });
+        function saveQuick(text) {
+          setNote({ id: o.id, item: o.item, at: o.at, ord: o.ord, quote: o.quote, note: text, ts: existing ? existing.ts : Date.now() });
+          hap("success");
+          close();
+        }
+        var yes = button("Yes", "btn preset-yes");
+        yes.addEventListener("click", function () { saveQuick("Yes"); });
+        var no = button("No", "btn preset-no");
+        no.addEventListener("click", function () { saveQuick("No"); });
         quick.appendChild(yes);
         quick.appendChild(no);
         var reusable = existing;
@@ -2396,7 +2406,7 @@
           });
         }
         if (reusable) {
-          var useExisting = button("Existing comment", "btn");
+          var useExisting = button("Existing comment", "btn preset-comment");
           useExisting.setAttribute("aria-label", existing ? "Restore the existing comment" : "Reuse the latest existing comment");
           useExisting.addEventListener("click", function () { fillComment(reusable.note); });
           quick.appendChild(useExisting);
@@ -2442,11 +2452,11 @@
           var all = sorted();
           if (!all.length) { listBox.appendChild(el("p", "shint", "No notes yet. Tap a paragraph in an answer to add one.")); }
           all.forEach(function (n, i) {
-            var row = el("div", "rnote");
+            var row = el("div", "rnote " + noteKind(n));
             var main = el("button", "rmainn");
             main.type = "button";
             main.setAttribute("aria-label", "Edit note " + (i + 1));
-            main.appendChild(el("span", "nbadge flat", String(i + 1)));
+            main.appendChild(el("span", "nbadge flat " + noteKind(n), String(i + 1)));
             var t = el("span", "rtext");
             t.appendChild(el("span", "rquote", n.quote));
             t.appendChild(el("span", "rbody", n.note));

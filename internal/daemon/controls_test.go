@@ -5,10 +5,13 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
+	"rex-tg/internal/agents"
+	"rex-tg/internal/agents/pi"
 	"rex-tg/internal/store"
 )
 
@@ -23,6 +26,30 @@ func TestControlStale(t *testing.T) {
 	}
 	if d.controlStale(store.Thread{CurrentConversationID: 2}, 6) {
 		t.Error("a message that is no control command counts as stale")
+	}
+}
+
+func TestCurrentValuesScansTranscriptForMissingControls(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	st, err := store.Open(filepath.Join(dir, "db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	transcript := filepath.Join(dir, "session.jsonl")
+	if err := os.WriteFile(transcript, []byte(`{"type":"model_change","provider":"anthropic","modelId":"from-file"}
+{"type":"thinking_level_change","thinkingLevel":"high"}
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	d := &daemon{
+		st: st, ctx: ctx, log: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		ctl: controlStore{vals: map[int64]map[string]string{7: {"model": "from-cache"}}},
+	}
+	got := d.currentValues(store.Conversation{ID: 7, Transcript: transcript}, pi.New().(agents.Controller))
+	if got["model"] != "from-cache" || got["effort"] != "high" {
+		t.Fatalf("current values = %v, want cached model and transcript effort", got)
 	}
 }
 
