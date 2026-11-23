@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"sort"
 	"testing"
 	"time"
@@ -11,24 +12,38 @@ import (
 
 type memoryTemplateRepo struct {
 	items   map[string]Template
+	order   []string
 	deleted map[string]bool
 	saveErr error
 }
 
 func (m *memoryTemplateRepo) List(context.Context) ([]Template, error) {
 	out := make([]Template, 0, len(m.items))
-	for _, t := range m.items {
-		out = append(out, t)
+	seen := map[string]bool{}
+	for _, id := range m.order {
+		if t, ok := m.items[id]; ok {
+			out = append(out, t)
+			seen[id] = true
+		}
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Updated > out[j].Updated })
-	return out, nil
+	var rest []Template
+	for id, t := range m.items {
+		if !seen[id] {
+			rest = append(rest, t)
+		}
+	}
+	sort.Slice(rest, func(i, j int) bool { return rest[i].Updated > rest[j].Updated })
+	return append(out, rest...), nil
 }
 func (m *memoryTemplateRepo) Save(_ context.Context, t Template) error {
 	if m.saveErr != nil {
 		return m.saveErr
 	}
-	if _, ok := m.items[t.ID]; !ok && len(m.items) >= maxTemplateCount {
-		return ErrTemplateLimit
+	if _, ok := m.items[t.ID]; !ok {
+		if len(m.items) >= maxTemplateCount {
+			return ErrTemplateLimit
+		}
+		m.order = append([]string{t.ID}, m.order...)
 	}
 	m.items[t.ID] = t
 	return nil
@@ -45,12 +60,38 @@ func (m *memoryTemplateRepo) Import(_ context.Context, items []Template) (int, [
 			continue
 		}
 		m.items[t.ID] = t
+		m.order = append(m.order, t.ID)
 		n++
 	}
 	return n, deleted, nil
 }
+func (m *memoryTemplateRepo) Reorder(ctx context.Context, expected, ids []string) error {
+	current, _ := m.List(ctx)
+	currentIDs := make([]string, len(current))
+	for i, item := range current {
+		currentIDs[i] = item.ID
+	}
+	if len(ids) != len(m.items) || !slices.Equal(currentIDs, expected) {
+		return ErrTemplateOrderChanged
+	}
+	seen := map[string]bool{}
+	for _, id := range ids {
+		if _, ok := m.items[id]; !ok || seen[id] {
+			return ErrTemplateOrderChanged
+		}
+		seen[id] = true
+	}
+	m.order = append(m.order[:0], ids...)
+	return nil
+}
 func (m *memoryTemplateRepo) Delete(_ context.Context, id string) error {
 	delete(m.items, id)
+	for i, existing := range m.order {
+		if existing == id {
+			m.order = append(m.order[:i], m.order[i+1:]...)
+			break
+		}
+	}
 	if m.deleted == nil {
 		m.deleted = map[string]bool{}
 	}
@@ -115,5 +156,58 @@ func TestTemplateStorageAPIIsOwnerOnlyAndValidatesActions(t *testing.T) {
 	oldSigned := map[string]string{"X-Telegram-Init-Data": sign(t, fakeToken, fields(42, time.Now().Add(-2*time.Hour))), "Content-Type": "application/json"}
 	if code, _ := c.do("POST", "/api/templates?id=tpl", oldSigned, body); code != http.StatusForbidden {
 		t.Errorf("stale signed write: %d", code)
+	}
+}
+
+func TestTemplateOrderAPIRequiresOwnerAndExactIDs(t *testing.T) {
+	const firstID = "0123456789abcdef0123456789abcdef"
+	const secondID = "1123456789abcdef0123456789abcdef"
+	repo := &memoryTemplateRepo{
+		items: map[string]Template{
+			firstID:  {ID: firstID, Name: "First", Text: "one", Updated: 1},
+			secondID: {ID: secondID, Name: "Second", Text: "two", Updated: 2},
+		},
+		order: []string{firstID, secondID},
+	}
+	pages := map[string]Page{"tpl": {Kind: KindTemplates, Title: "Templates"}}
+	logins := &fakeLogins{allow: map[string]bool{"me@example.com": true}}
+	s := New(fakeToken, func() int64 { return 42 }, func(id string) (Page, bool) { p, ok := pages[id]; return p, ok }, nil).
+		WithTemplates(repo).WithLaunch(&fakeLauncher{}, func(k string) bool { return k == testKey }).
+		WithTailnetOnly(true).WithLogins(logins)
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+	c := caller{t, srv.URL}
+	post := map[string]string{"X-Rex-Key": testKey, "Tailscale-User-Login": "me@example.com", "Content-Type": "application/json"}
+	body := `{"op":"reorder","expected":["` + firstID + `","` + secondID + `"],"ids":["` + secondID + `","` + firstID + `"]}`
+	code, got := c.do("POST", "/api/templates?id=tpl", post, body)
+	if code != http.StatusOK {
+		t.Fatalf("reorder: %d %v", code, got)
+	}
+	rows, ok := got["templates"].([]any)
+	if !ok || len(rows) != 2 || rows[0].(map[string]any)["id"] != secondID || rows[1].(map[string]any)["id"] != firstID {
+		t.Fatalf("returned order: %v", got["templates"])
+	}
+	for _, invalid := range []string{
+		`{"op":"reorder"}`,
+		`{"op":"reorder","expected":["` + firstID + `","` + firstID + `"],"ids":["` + firstID + `","` + secondID + `"]}`,
+		`{"op":"reorder","expected":["` + firstID + `","` + secondID + `"],"ids":["` + firstID + `","` + firstID + `"]}`,
+		`{"op":"reorder","expected":["` + firstID + `","` + secondID + `"],"ids":["bad","` + secondID + `"]}`,
+		`{"op":"reorder","expected":["` + firstID + `","` + secondID + `"],"ids":["` + firstID + `","` + secondID + `"],"thread":7}`,
+	} {
+		if code, _ := c.do("POST", "/api/templates?id=tpl", post, invalid); code != http.StatusBadRequest {
+			t.Errorf("invalid order %s: status %d", invalid, code)
+		}
+	}
+	for _, stale := range []string{
+		`{"op":"reorder","expected":["` + firstID + `","` + secondID + `"],"ids":["` + firstID + `","` + secondID + `"]}`,
+		`{"op":"reorder","expected":["` + firstID + `"],"ids":["` + secondID + `"]}`,
+	} {
+		if code, _ := c.do("POST", "/api/templates?id=tpl", post, stale); code != http.StatusConflict {
+			t.Errorf("stale order %s: status %d", stale, code)
+		}
+	}
+	stranger := map[string]string{"X-Rex-Key": testKey, "Tailscale-User-Login": "other@example.com", "Content-Type": "application/json"}
+	if code, _ := c.do("POST", "/api/templates?id=tpl", stranger, body); code != http.StatusForbidden {
+		t.Errorf("stranger reorder: %d", code)
 	}
 }

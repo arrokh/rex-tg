@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"unicode/utf8"
 )
@@ -25,9 +26,12 @@ var ErrTemplateLimit = errors.New("store: template limit reached")
 // ErrTemplateDeleted means a stale client tried to restore a deleted template.
 var ErrTemplateDeleted = errors.New("store: template was deleted")
 
-// Templates returns the saved templates, newest first.
+// ErrTemplateOrderChanged means the submitted IDs no longer match the shared list.
+var ErrTemplateOrderChanged = errors.New("store: template list changed")
+
+// Templates returns saved templates in their shared manual order.
 func (s *Store) Templates(ctx context.Context) ([]Template, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, name, text, updated_at FROM template ORDER BY updated_at DESC, id`)
+	rows, err := s.db.QueryContext(ctx, `SELECT id, name, text, updated_at FROM template ORDER BY position, updated_at DESC, id`)
 	if err != nil {
 		return nil, fmt.Errorf("store: list templates: %w", err)
 	}
@@ -71,8 +75,11 @@ func (s *Store) SaveTemplate(ctx context.Context, t Template) error {
 			if count >= MaxTemplates {
 				return ErrTemplateLimit
 			}
+			if _, err := tx.ExecContext(ctx, `UPDATE template SET position=position+1`); err != nil {
+				return err
+			}
 		}
-		_, err := tx.ExecContext(ctx, `INSERT INTO template(id, name, text, updated_at) VALUES(?, ?, ?, ?)
+		_, err := tx.ExecContext(ctx, `INSERT INTO template(id, name, text, updated_at, position) VALUES(?, ?, ?, ?, 0)
 			ON CONFLICT(id) DO UPDATE SET name=excluded.name, text=excluded.text, updated_at=excluded.updated_at`,
 			t.ID, t.Name, t.Text, t.Updated)
 		return err
@@ -94,7 +101,16 @@ func (s *Store) ImportTemplates(ctx context.Context, templates []Template) (int,
 		if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM template`).Scan(&count); err != nil {
 			return err
 		}
+		var position int64
+		if err := tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(position), -1) + 1 FROM template`).Scan(&position); err != nil {
+			return err
+		}
+		seen := make(map[string]bool, len(templates))
 		for _, t := range templates {
+			if seen[t.ID] {
+				continue
+			}
+			seen[t.ID] = true
 			var exists int
 			if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM template WHERE id=?`, t.ID).Scan(&exists); err != nil {
 				return err
@@ -112,8 +128,8 @@ func (s *Store) ImportTemplates(ctx context.Context, templates []Template) (int,
 			if count >= MaxTemplates {
 				continue
 			}
-			res, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO template(id, name, text, updated_at) VALUES(?, ?, ?, ?)`,
-				t.ID, t.Name, t.Text, t.Updated)
+			res, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO template(id, name, text, updated_at, position) VALUES(?, ?, ?, ?, ?)`,
+				t.ID, t.Name, t.Text, t.Updated, position)
 			if err != nil {
 				return err
 			}
@@ -124,6 +140,7 @@ func (s *Store) ImportTemplates(ctx context.Context, templates []Template) (int,
 			if n != 0 {
 				count++
 				imported++
+				position++
 			}
 		}
 		return nil
@@ -132,6 +149,63 @@ func (s *Store) ImportTemplates(ctx context.Context, templates []Template) (int,
 		return 0, nil, fmt.Errorf("store: import templates: %w", err)
 	}
 	return imported, deleted, nil
+}
+
+// ReorderTemplates applies an exact permutation if the expected order is current.
+func (s *Store) ReorderTemplates(ctx context.Context, expected, ids []string) error {
+	if len(expected) > MaxTemplates || len(ids) > MaxTemplates || len(expected) != len(ids) {
+		return errors.New("store: invalid template order")
+	}
+	seenExpected := make(map[string]bool, len(expected))
+	for _, id := range expected {
+		if !validTemplateID(id) || seenExpected[id] {
+			return errors.New("store: invalid template order")
+		}
+		seenExpected[id] = true
+	}
+	seen := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		if !validTemplateID(id) || seen[id] {
+			return errors.New("store: invalid template order")
+		}
+		seen[id] = true
+	}
+	return s.tx(ctx, func(tx *sql.Tx) error {
+		rows, err := tx.QueryContext(ctx, `SELECT id FROM template ORDER BY position, updated_at DESC, id`)
+		if err != nil {
+			return err
+		}
+		current := make([]string, 0, len(ids))
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				_ = rows.Close()
+				return err
+			}
+			current = append(current, id)
+		}
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		if err := rows.Close(); err != nil {
+			return err
+		}
+		if !slices.Equal(current, expected) || len(ids) != len(current) {
+			return ErrTemplateOrderChanged
+		}
+		for _, id := range ids {
+			if !seenExpected[id] {
+				return ErrTemplateOrderChanged
+			}
+		}
+		for i, id := range ids {
+			if _, err := tx.ExecContext(ctx, `UPDATE template SET position=? WHERE id=?`, i, id); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 // DeleteTemplate removes one template. Deleting a missing id is harmless.

@@ -18,11 +18,12 @@ type Template struct {
 	Updated int64  `json:"updated"`
 }
 
-// TemplateRepository stores the owner's shared templates.
+// TemplateRepository stores the owner's shared templates and their order.
 type TemplateRepository interface {
 	List(context.Context) ([]Template, error)
 	Save(context.Context, Template) error
 	Import(context.Context, []Template) (int, []string, error)
+	Reorder(ctx context.Context, expected, ids []string) error
 	Delete(context.Context, string) error
 }
 
@@ -31,6 +32,9 @@ var ErrTemplateLimit = errors.New("miniapp: template limit reached")
 
 // ErrTemplateDeleted means another device already deleted this template.
 var ErrTemplateDeleted = errors.New("miniapp: template was deleted")
+
+// ErrTemplateOrderChanged means another device changed the shared list first.
+var ErrTemplateOrderChanged = errors.New("miniapp: template list changed")
 
 // WithTemplates turns on shared template storage.
 func (s *Server) WithTemplates(templates TemplateRepository) *Server {
@@ -86,6 +90,8 @@ type templateRequest struct {
 	Name      string     `json:"name,omitempty"`
 	Text      string     `json:"text,omitempty"`
 	Templates []Template `json:"templates,omitempty"`
+	Expected  []string   `json:"expected,omitempty"`
+	IDs       []string   `json:"ids,omitempty"`
 }
 
 func (s *Server) templateAction(w http.ResponseWriter, r *http.Request) {
@@ -142,6 +148,31 @@ func (s *Server) templateAction(w http.ResponseWriter, r *http.Request) {
 			s.templateStoreError(w, err)
 			return
 		}
+	case "reorder":
+		if body.Expected == nil || body.IDs == nil || len(body.Expected) > maxTemplateCount ||
+			len(body.IDs) > maxTemplateCount || len(body.Expected) != len(body.IDs) {
+			http.Error(w, `{"error":"This template order is not valid."}`, http.StatusBadRequest)
+			return
+		}
+		seenExpected, seenIDs := make(map[string]bool, len(body.Expected)), make(map[string]bool, len(body.IDs))
+		for _, id := range body.Expected {
+			if !validTemplateID(id) || seenExpected[id] {
+				http.Error(w, `{"error":"This template order is not valid."}`, http.StatusBadRequest)
+				return
+			}
+			seenExpected[id] = true
+		}
+		for _, id := range body.IDs {
+			if !validTemplateID(id) || seenIDs[id] {
+				http.Error(w, `{"error":"This template order is not valid."}`, http.StatusBadRequest)
+				return
+			}
+			seenIDs[id] = true
+		}
+		if err := s.templates.Reorder(ctx, body.Expected, body.IDs); err != nil {
+			s.templateStoreError(w, err)
+			return
+		}
 	case "import":
 		if len(body.Templates) > maxTemplateCount {
 			http.Error(w, `{"error":"Import up to 50 templates at a time."}`, http.StatusBadRequest)
@@ -176,6 +207,10 @@ func (s *Server) templateAction(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) templateStoreError(w http.ResponseWriter, err error) {
+	if errors.Is(err, ErrTemplateOrderChanged) {
+		http.Error(w, `{"error":"The shared template list changed. Close and reopen Templates, then try again."}`, http.StatusConflict)
+		return
+	}
 	if errors.Is(err, ErrTemplateLimit) {
 		http.Error(w, `{"error":"You can save up to 50 templates."}`, http.StatusConflict)
 		return

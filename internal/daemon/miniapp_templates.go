@@ -41,6 +41,14 @@ func (m miniAppTemplates) Import(ctx context.Context, items []miniapp.Template) 
 	return m.st.ImportTemplates(ctx, stored)
 }
 
+func (m miniAppTemplates) Reorder(ctx context.Context, expected, ids []string) error {
+	err := m.st.ReorderTemplates(ctx, expected, ids)
+	if errors.Is(err, store.ErrTemplateOrderChanged) {
+		return miniapp.ErrTemplateOrderChanged
+	}
+	return err
+}
+
 func (m miniAppTemplates) Delete(ctx context.Context, id string) error {
 	return m.st.DeleteTemplate(ctx, id)
 }

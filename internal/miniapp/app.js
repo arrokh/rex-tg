@@ -2901,7 +2901,7 @@
     document.body.classList.remove("fill", "annot");
     page.className = "templates";
     page.textContent = "";
-    var intro = el("p", "template-intro", "Create reusable messages. Templates sync through rex-tg across your devices.");
+    var intro = el("p", "template-intro", "Create reusable messages. Shared templates and their order sync across your devices.");
     var add = button("＋ New template", "btn primary wide");
     var list = el("div", "template-list");
     var hint = el("p", "hint", "");
@@ -2914,7 +2914,7 @@
 
     var templatesKey = "rex-tg.templates.v1";
     var pendingKey = "rex-tg.templates.pending." + id;
-    var maxTemplates = 50, pendingTTL = 10 * 60 * 1000, sending = false, pending = null;
+    var maxTemplates = 50, pendingTTL = 10 * 60 * 1000, sending = false, reordering = false, pending = null;
     var canSend = !!(pg && pg.can_send_templates && pg.thread && pg.conv);
     var canEdit = !!(pg && pg.can_manage_templates), templatesReady = false, migrationWarning = "", migrationBlocked = false, migrationError = "";
 
@@ -2926,7 +2926,7 @@
           return t && /^[0-9a-f]{32}$/.test(t.id || "") && typeof t.name === "string" &&
             t.name.trim().length > 0 && t.name.length <= 80 && typeof t.text === "string" &&
             t.text.trim().length > 0 && utf8Length(t.text) <= 16000;
-        }).slice(0, maxTemplates);
+        }).slice(0, maxTemplates).sort(function (a, b) { return (b.updated || 0) - (a.updated || 0); });
       } catch (e) { return []; }
     }
     function readPending() {
@@ -2958,6 +2958,34 @@
       migrationWarning = legacyItems.length
         ? "Some templates saved on this device are not synced yet. They remain available here."
         : "";
+    }
+
+    function moveTemplate(index, direction) {
+      var shared = Math.max(0, items.length - legacyItems.length), target = index + direction;
+      if (!canEdit || sending || reordering || index < 0 || index >= shared || target < 0 || target >= shared) { return; }
+      var expected = items.slice(0, shared).map(function (t) { return t.id; });
+      var ids = expected.slice();
+      var moved = ids.splice(index, 1)[0];
+      ids.splice(target, 0, moved);
+      reordering = true;
+      draw();
+      api("api/templates?id=" + encodeURIComponent(id), { op: "reorder", expected: expected, ids: ids }).then(function (r) {
+        setTemplates(r.templates, r.deleted);
+        toast({ ok: true, message: "Template order saved across your devices." });
+      }).catch(function (e) {
+        if (e.status === 409) {
+          toast({ ok: false, message: "The shared list changed. Loading its latest order." });
+          return api("api/templates?id=" + encodeURIComponent(id)).then(function (r) {
+            setTemplates(r.templates, r.deleted);
+          }).catch(function () {
+            toast({ ok: false, message: "Could not refresh the shared template list. Close and reopen Templates." });
+          });
+        }
+        toast({ ok: false, message: e.message || "Could not save the template order." });
+      }).finally(function () {
+        reordering = false;
+        draw();
+      });
     }
 
     function editTemplate(existing) {
@@ -3112,11 +3140,11 @@
 
     function draw() {
       list.textContent = "";
-      items.sort(function (a, b) { return (b.updated || 0) - (a.updated || 0); });
-      add.disabled = !canEdit || sending || !templatesReady || items.length >= maxTemplates;
-      hint.textContent = migrationWarning || (!canEdit
+      var sharedCount = Math.max(0, items.length - legacyItems.length);
+      add.disabled = !canEdit || sending || reordering || !templatesReady || items.length >= maxTemplates;
+      hint.textContent = reordering ? "Saving template order…" : (migrationWarning || (!canEdit
         ? "Saving needs fresh Telegram data, or a verified owner Tailscale login for keyboard launches. Reopen Templates to refresh."
-        : (!canSend ? "Sending needs fresh Telegram data, or a verified owner Tailscale login for keyboard launches. Reopen Templates to refresh." : ""));
+        : (!canSend ? "Sending needs fresh Telegram data, or a verified owner Tailscale login for keyboard launches. Reopen Templates to refresh." : "Use the arrows to reorder shared templates.")));
       pendingBox.textContent = "";
       if (pending) {
         pendingBox.appendChild(el("p", "template-pending-text", "A previous send may still reach the agent. Retry the same send ID, or check the topic before sending again."));
@@ -3136,22 +3164,39 @@
         list.appendChild(empty);
         return;
       }
-      items.forEach(function (t) {
+      items.forEach(function (t, index) {
         var card = el("article", "template-card");
+        var heading = el("div", "template-heading");
         var title = el("h2", "template-title", t.name);
+        heading.appendChild(title);
+        if (index < sharedCount) {
+          var order = el("div", "template-order");
+          [-1, 1].forEach(function (direction) {
+            var up = direction < 0;
+            var move = button("", "btn template-move", "Move template " + (up ? "up" : "down"));
+            move.title = "Move template " + (up ? "up" : "down");
+            move.innerHTML = up
+              ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m7 14 5-5 5 5"/></svg>'
+              : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg>';
+            move.disabled = !canEdit || sending || reordering || !templatesReady || index + direction < 0 || index + direction >= sharedCount;
+            move.addEventListener("click", function () { moveTemplate(index, direction); });
+            order.appendChild(move);
+          });
+          heading.appendChild(order);
+        }
         var body = el("p", "template-body", t.text);
         var actions = el("div", "template-actions");
         var sendLabel = sending && pending && pending.text === t.text ? "Sending…" : pending && pending.text === t.text ? "Check send" : "Send to agent";
         var send = button(sendLabel, "btn primary");
-        send.disabled = !canSend || sending;
+        send.disabled = !canSend || sending || reordering;
         if (!canSend) { send.title = "Sending needs your verified Tailscale login."; }
         send.addEventListener("click", function () { sendTemplate(t); });
         var edit = button("Edit", "btn");
-        edit.disabled = !canEdit || sending;
+        edit.disabled = !canEdit || sending || reordering;
         edit.addEventListener("click", function () { editTemplate(t); });
         actions.appendChild(send);
         actions.appendChild(edit);
-        card.appendChild(title);
+        card.appendChild(heading);
         card.appendChild(body);
         card.appendChild(actions);
         list.appendChild(card);
@@ -3198,7 +3243,7 @@
     page.appendChild(hint);
     page.appendChild(content);
     var pendingKey = "rex-tg.config.pending." + id;
-    var pending = null, submitting = false, latest = null, selectedValues = {}, submittedValues = {}, selectionsReady = false;
+    var pending = null, submitting = false, refreshing = false, latest = null, selectedValues = {}, submittedValues = {}, selectionsReady = false;
     try { pending = JSON.parse(load(pendingKey) || "null"); } catch (e) { pending = null; }
     if (pending && !pending.changes && pending.name && pending.value) {
       pending.changes = [{ name: pending.name, value: pending.value }];
@@ -3251,6 +3296,10 @@
           var models = item.choices || [];
           if (!models.length) {
             options.appendChild(el("p", "note", "No model list is available for this session yet."));
+            var reload = button(refreshing ? "Refreshing…" : "Refresh model list", "btn small");
+            reload.disabled = !!pending || refreshing;
+            reload.addEventListener("click", refresh);
+            options.appendChild(reload);
           } else {
             var search = el("input", "config-input");
             search.type = "search";
@@ -3360,7 +3409,14 @@
       });
     }
     function refresh() {
-      api("api/config?id=" + encodeURIComponent(id)).then(function (state) { draw(state); }).catch(function (e) {
+      if (refreshing) { return; }
+      refreshing = true;
+      if (latest) { draw(latest); }
+      api("api/config?id=" + encodeURIComponent(id)).then(function (state) {
+        refreshing = false;
+        draw(state);
+      }).catch(function (e) {
+        refreshing = false;
         content.textContent = "";
         content.appendChild(el("p", "", e.message || "This Config page is no longer current. Open it again from the topic."));
       });
