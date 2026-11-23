@@ -22,6 +22,7 @@
     --danger: var(--tg-theme-destructive-text-color, #e5534b);
     --sect-head: var(--tg-theme-section-header-text-color, var(--hint));
     --ok: #2ea043; --warn: #d9930d;
+    --annot-yes: #167d2f; --annot-no: #c23232; --annot-comment: #6f42c1;
     font-size: calc(16px * var(--scale));
     /* iOS makes the text of wide blocks (a diff, a screen) bigger; this
        keeps every size as it is set. */
@@ -456,13 +457,17 @@
   .ans blockquote[data-bk] { padding-top: 4px; padding-bottom: 4px; }
   .ans pre { padding: 8px 0; }
   .ans .cl { display: block; width: max-content; min-width: 100%; min-height: 1.6em; padding: 0 12px; white-space: pre; }
-  .ans [data-bk].noted { background: color-mix(in srgb, var(--warn) 24%, transparent); box-shadow: inset 3px 0 0 var(--warn); }
-  .ans tr[data-bk].noted > * { background: color-mix(in srgb, var(--warn) 24%, transparent); }
+  .ans [data-bk].noted { --annot-color: var(--annot-comment); background: color-mix(in srgb, var(--annot-color) 20%, transparent); box-shadow: inset 3px 0 0 var(--annot-color); }
+  .ans [data-bk].noted-yes { --annot-color: var(--annot-yes); }
+  .ans [data-bk].noted-no { --annot-color: var(--annot-no); }
+  .ans tr[data-bk].noted > * { background: color-mix(in srgb, var(--annot-color) 20%, transparent); }
   .ans tr[data-bk] td, .ans tr[data-bk] th { position: relative; }
   .nbadge {
-    position: absolute; top: 2px; right: 2px; min-width: 20px; height: 20px; padding: 0 5px; border-radius: 10px; background: var(--warn); color: #1b1b1f;
+    position: absolute; top: 2px; right: 2px; min-width: 20px; height: 20px; padding: 0 5px; border-radius: 10px; background: var(--annot-comment); color: #fff;
     font: 700 11px/20px -apple-system, system-ui, sans-serif; text-align: center; pointer-events: none;
   }
+  .nbadge.yes { background: var(--annot-yes); }
+  .nbadge.no { background: var(--annot-no); }
   .nbadge.flat { position: static; flex: none; margin-top: 2px; }
   .ans img { max-width: 100%; height: auto; }
   .ans-skel { height: 120px; }
@@ -492,6 +497,9 @@
   .alabel { display: block; margin: 8px 2px 4px; font-size: 0.8125rem; font-weight: 600; color: var(--sect-head); }
   .npresets { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 8px; }
   .npresets .btn { flex: 1 1 auto; min-height: 40px; white-space: nowrap; }
+  .npresets .preset-yes { box-shadow: inset 0 0 0 1px var(--annot-yes); }
+  .npresets .preset-no { box-shadow: inset 0 0 0 1px var(--annot-no); }
+  .npresets .preset-comment { box-shadow: inset 0 0 0 1px var(--annot-comment); }
   .atxt {
     display: block; width: 100%; min-height: 96px; padding: 10px 12px; border: none; border-radius: 10px; background: var(--code); color: var(--fg); resize: vertical;
     font: 16px/1.4 -apple-system, system-ui, sans-serif; box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--hint) 28%, transparent);

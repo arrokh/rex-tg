@@ -117,15 +117,23 @@ func (d *daemon) scanValues(conv store.Conversation, c agents.Controller) map[st
 	return found
 }
 
-// currentValues returns the known values of a session. When none is known, it
-// scans the transcript once (call it from a worker).
+// currentValues returns the known values of a session. If any control is
+// missing, it scans the transcript to fill the gaps (call it from a worker).
+// Values already stored win, because the scan may be older.
 func (d *daemon) currentValues(conv store.Conversation, c agents.Controller) map[string]string {
 	cur := d.controlValues(conv.ID)
-	if len(cur) > 0 {
-		return cur
+	missing := false
+	for _, control := range c.Controls() {
+		if cur[control.Name] == "" {
+			missing = true
+			break
+		}
 	}
-	d.ctlMerge(conv.ID, d.scanValues(conv, c), true)
-	return d.controlValues(conv.ID)
+	if missing {
+		d.ctlMerge(conv.ID, d.scanValues(conv, c), true)
+		cur = d.controlValues(conv.ID)
+	}
+	return cur
 }
 
 // controlOf finds a control of a runtime, with the choices that the config or
