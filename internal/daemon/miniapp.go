@@ -199,8 +199,13 @@ func (d *daemon) longAnswer(th store.Thread, key, md string) ([]store.PartConten
 	if title == "" {
 		title = "Answer"
 	}
-	// The page knows its topic, so its notes can go to the agent (Annotate).
-	id, err := d.savePageOf(miniapp.Page{Kind: miniapp.KindAnswer, Title: title, Text: md, Thread: th.ID, Conv: th.CurrentConversationID})
+	// The page knows its topic and folder, so notes and file links stay bound
+	// to the answer's exact session and project.
+	var dir string
+	if conv, err := d.st.Conversation(d.ctx, th.CurrentConversationID); err == nil && conv.ThreadID == th.ID {
+		dir = conv.CWD
+	}
+	id, err := d.savePageOf(miniapp.Page{Kind: miniapp.KindAnswer, Title: title, Text: md, Thread: th.ID, Conv: th.CurrentConversationID, Dir: dir})
 	if err != nil {
 		d.log.Warn("mini app: keep the answer", "err", err)
 		return nil, false

@@ -89,6 +89,21 @@ func (l *miniLogins) Owner(login string) {
 // KeyLoginOK tells whether a request with key may come from login. The key
 // is checked again under mu: /rekey stores the new key before it forgets
 // the logins (under mu), so an old key cannot teach a login.
+// OwnerLoginOK checks the current Tailscale identity without using or learning
+// the buttons' key. External browser previews rely on this narrower check.
+func (l *miniLogins) OwnerLoginOK(login string) bool {
+	if strings.TrimSpace(login) == "" {
+		return false
+	}
+	if f := l.fixed(); len(f) > 0 {
+		return hasLogin(f, login)
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.load()
+	return hasLogin(l.known, login)
+}
+
 func (l *miniLogins) KeyLoginOK(key, login string) bool {
 	if strings.TrimSpace(login) == "" {
 		return false

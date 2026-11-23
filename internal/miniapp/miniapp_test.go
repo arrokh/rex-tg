@@ -125,6 +125,100 @@ func TestPageOnlyForTheOwner(t *testing.T) {
 	}
 }
 
+func TestExternalHTMLRequiresOwnerTailnetIdentityAndStaysSandboxed(t *testing.T) {
+	root := t.TempDir()
+	source := `<!doctype html><html><body><h1>Local preview</h1><script>document.body.innerHTML='unsafe'</script><img src="https://example.invalid/pixel"></body></html>`
+	if err := os.WriteFile(filepath.Join(root, "index.html"), []byte(source), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "notes.txt"), []byte("not HTML"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	pages := map[string]Page{
+		"files": {Kind: KindFiles, Title: "Files", Dir: root},
+		"other": {Kind: KindScreen, Title: "Screen"},
+	}
+	s := New(fakeToken, func() int64 { return 42 }, func(id string) (Page, bool) { p, ok := pages[id]; return p, ok }, nil).
+		WithFiles(func() bool { return true }, nil).
+		WithTailnetOnly(true).
+		WithLogins(&fakeLogins{allow: map[string]bool{"me@example.com": true}})
+	server := httptest.NewServer(s.Handler())
+	defer server.Close()
+	c := caller{t, server.URL}
+	owner := map[string]string{"Tailscale-User-Login": "me@example.com"}
+	signedOwner := map[string]string{
+		"Tailscale-User-Login": "me@example.com",
+		"X-Telegram-Init-Data": sign(t, fakeToken, fields(42, time.Now())),
+	}
+	stranger := map[string]string{"Tailscale-User-Login": "other@example.com"}
+	if code, page := c.do("GET", "/api/page?id=files", signedOwner, ""); code != http.StatusOK || page["can_open_external_html"] != true {
+		t.Fatalf("external preview capability: %d %v", code, page)
+	}
+
+	code, body := c.doText("GET", "/external/file?id=files&path=index.html", owner)
+	if code != http.StatusOK || !strings.Contains(body, "Local preview") || !strings.Contains(body, "document.body.innerHTML") {
+		t.Fatalf("owner preview: %d %s", code, body)
+	}
+	req, err := http.NewRequest(http.MethodGet, server.URL+"/external/file?id=files&path=index.html", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Tailscale-User-Login", "me@example.com")
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	if got := res.Header.Get("Content-Security-Policy"); !strings.Contains(got, "script-src 'none'") || !strings.Contains(got, "sandbox") || !strings.Contains(got, "connect-src 'none'") || !strings.Contains(got, "frame-ancestors 'none'") {
+		t.Errorf("unsafe external preview CSP: %q", got)
+	}
+	if res.Header.Get("Cache-Control") != "no-store" || res.Header.Get("Referrer-Policy") != "no-referrer" || res.Header.Get("X-Frame-Options") != "DENY" {
+		t.Errorf("sensitive preview headers: cache=%q referrer=%q", res.Header.Get("Cache-Control"), res.Header.Get("Referrer-Policy"))
+	}
+	for _, tc := range []struct {
+		name string
+		path string
+		head map[string]string
+	}{
+		{"stranger", "/external/file?id=files&path=index.html", stranger},
+		{"wrong type", "/external/file?id=files&path=notes.txt", owner},
+		{"wrong page kind", "/external/file?id=other&path=index.html", owner},
+		{"hidden file", "/external/file?id=files&path=.env.html", owner},
+	} {
+		if code, _ := c.doText("GET", tc.path, tc.head); code != http.StatusNotFound {
+			t.Errorf("%s: status %d, want 404", tc.name, code)
+		}
+	}
+}
+
+func TestAnswerAndAnnotatePagesCanOnlyOpenLinkedFiles(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "README.md"), []byte("# Project"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	pages := map[string]Page{
+		"answer":   {Kind: KindAnswer, Title: "Answer", Thread: 7, Conv: 8, Dir: root},
+		"annotate": {Kind: KindAnnotate, Title: "Annotate", Thread: 7, Conv: 8, Dir: root},
+		"no-root":  {Kind: KindAnswer, Title: "Answer", Thread: 7, Conv: 8},
+	}
+	s := New(fakeToken, func() int64 { return 42 }, func(id string) (Page, bool) { p, ok := pages[id]; return p, ok }, nil).WithFiles(func() bool { return true }, nil)
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+	owner := map[string]string{"X-Telegram-Init-Data": sign(t, fakeToken, fields(42, time.Now()))}
+	c := caller{t, srv.URL}
+	for _, id := range []string{"answer", "annotate"} {
+		if code, body := c.do("GET", "/api/files?id="+id+"&path=README.md", owner, ""); code != http.StatusOK || !strings.Contains(body["html"].(string), "Project") {
+			t.Errorf("%s linked file: %d %v", id, code, body)
+		}
+		if code, _ := c.do("GET", "/api/files?id="+id, owner, ""); code != http.StatusNotFound {
+			t.Errorf("%s page listed its project root: %d", id, code)
+		}
+	}
+	if code, _ := c.do("GET", "/api/files?id=no-root&path=README.md", owner, ""); code != http.StatusNotFound {
+		t.Errorf("page with no file root: %d", code)
+	}
+}
+
 func TestRenderDiff(t *testing.T) {
 	d := "diff --git a/x.go b/x.go\nindex 1..2 100644\n--- a/x.go\n+++ b/x.go\n@@ -1,2 +1,2 @@\n ctx <a>\n-old\n+new\n"
 	h := RenderDiff(d)

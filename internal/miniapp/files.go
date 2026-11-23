@@ -43,11 +43,12 @@ type Entry struct {
 
 // View is a folder's listing or a file's content.
 type View struct {
-	Path    string  `json:"path"` // relative to the root, with "/"; "" is the root
-	Dir     bool    `json:"dir"`
-	Entries []Entry `json:"entries,omitempty"`
-	HTML    string  `json:"html,omitempty"` // a file's content, rendered and escaped
-	Note    string  `json:"note,omitempty"` // such as "Binary file, 2.1 MB."
+	Path         string  `json:"path"` // relative to the root, with "/"; "" is the root
+	Dir          bool    `json:"dir"`
+	Entries      []Entry `json:"entries,omitempty"`
+	HTML         string  `json:"html,omitempty"` // a file's content, rendered and escaped
+	Note         string  `json:"note,omitempty"` // such as "Binary file, 2.1 MB."
+	externalHTML string  // redacted HTML source, only for the owner-authenticated external preview
 }
 
 // ErrNoFile is a path that is not there, hidden, or outside the root.
@@ -292,6 +293,11 @@ func showFile(real, rel string, redact func(string) string) (View, error) {
 	switch ext {
 	case ".md", ".markdown":
 		v.HTML = `<div class="markdown">` + RenderAnswer(text) + `</div>`
+	case ".html", ".htm":
+		policy := `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'none'; connect-src 'none'; img-src data:; style-src 'unsafe-inline'; font-src data:; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'; navigate-to 'none">`
+		doc := `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">` + policy + `</head><body>` + text + `</body></html>`
+		v.HTML = `<iframe class="html-viewer" sandbox="" title="` + html.EscapeString(filepath.Base(rel)) + `" srcdoc="` + html.EscapeString(doc) + `"></iframe>`
+		v.externalHTML = text
 	default:
 		v.HTML = `<pre class="code">` + html.EscapeString(text) + `</pre>`
 	}

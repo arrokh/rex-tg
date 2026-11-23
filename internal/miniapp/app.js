@@ -85,6 +85,7 @@
   setTheme(load("rex-tg.theme"));
   var params = new URLSearchParams(location.search);
   var id = params.get("p") || "";
+  var canOpenExternalHTML = false;
   var goView = params.get("go") || "";
   var initData = tg ? tg.initData : "";
   // The keyboard's buttons open this page with a key (k): it authorizes reads
@@ -479,6 +480,123 @@
     return b;
   }
 
+  var fileExtensions = /\.(?:md|markdown|html?|go|js|jsx|ts|tsx|css|scss|json|ya?ml|toml|txt|py|sh|rs|swift|kt|java|rb|php|sql|xml|csv|svg|png|jpe?g|gif|webp|pdf)$/i;
+  function fileTarget(raw, markdownPath) {
+    if (typeof raw !== "string") { return ""; }
+    try { raw = decodeURIComponent(raw); } catch (e) { return ""; }
+    raw = raw.trim().split(/[?#]/)[0];
+    if (!raw || raw.indexOf("\\") >= 0 || raw.charAt(0) === "~" || /^[a-z][a-z0-9+.-]*:/i.test(raw) || raw.slice(0, 2) === "//" || !fileExtensions.test(raw)) { return ""; }
+    var parts = raw.charAt(0) === "/" ? [] : (markdownPath ? markdownPath.split("/").slice(0, -1) : []);
+    var escaped = false;
+    raw.replace(/^\//, "").split("/").forEach(function (part) {
+      if (!part || part === ".") { return; }
+      if (part === "..") { if (parts.length) { parts.pop(); } else { escaped = true; } return; }
+      parts.push(part);
+    });
+    return escaped ? "" : parts.join("/");
+  }
+  function fileAnchor(text, target) {
+    var a = el("a", "file-mention", text);
+    a.href = "#";
+    a.setAttribute("data-file-path", target);
+    a.setAttribute("aria-label", "Open file " + target);
+    return a;
+  }
+  function wireFileMentions(root, markdownPath, openFile) {
+    if (!root || root._fileMentionsWired) { return; }
+    root._fileMentionsWired = true;
+    openFile = openFile || openMentionFile;
+    root.querySelectorAll("a[href]").forEach(function (a) {
+      var raw = a.getAttribute("href") || "";
+      if (!raw || raw.charAt(0) === "#") { return; }
+      var target = fileTarget(raw, markdownPath);
+      if (target) { a.setAttribute("data-file-path", target); a.classList.add("file-mention"); }
+    });
+    root.querySelectorAll("code").forEach(function (code) {
+      if (code.closest("pre")) { return; }
+      var raw = code.textContent.trim();
+      if (!fileExtensions.test(raw)) { return; }
+      var target = fileTarget(raw, markdownPath);
+      if (target) { code.replaceWith(fileAnchor(raw, target)); }
+    });
+    var walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT), nodes = [], node;
+    while ((node = walker.nextNode())) {
+      var parent = node.parentElement;
+      if (parent && parent.closest("a, code, pre, button, script, style")) { continue; }
+      if (fileExtensions.test(node.nodeValue)) { nodes.push(node); }
+    }
+    nodes.forEach(function (textNode) {
+      var value = textNode.nodeValue, re = /(?:\.{1,2}\/)?[\w@.-]+(?:\/[\w@.-]+)*\.(?:md|markdown|html?|go|js|jsx|ts|tsx|css|scss|json|ya?ml|toml|txt|py|sh|rs|swift|kt|java|rb|php|sql|xml|csv|svg|png|jpe?g|gif|webp|pdf)\b/gi;
+      var fragment = document.createDocumentFragment(), at = 0, match, changed = false;
+      while ((match = re.exec(value))) {
+        var target = fileTarget(match[0], markdownPath);
+        if (!target) { continue; }
+        fragment.appendChild(document.createTextNode(value.slice(at, match.index)));
+        fragment.appendChild(fileAnchor(match[0], target));
+        at = match.index + match[0].length;
+        changed = true;
+      }
+      if (changed) {
+        fragment.appendChild(document.createTextNode(value.slice(at)));
+        textNode.parentNode.replaceChild(fragment, textNode);
+      }
+    });
+    root.addEventListener("click", function (ev) {
+      var a = ev.target.closest && ev.target.closest("a[data-file-path]");
+      if (!a || !root.contains(a)) { return; }
+      ev.preventDefault();
+      ev.stopPropagation();
+      openFile(a.getAttribute("data-file-path"));
+    });
+  }
+  function isHTMLFile(path) { return /\.html?$/i.test(path); }
+  function externalFileURL(path) {
+    return new URL("/external/file?id=" + encodeURIComponent(id) + "&path=" + encodeURIComponent(path), window.location.href).href;
+  }
+  function openExternalFile(path) {
+    var url = externalFileURL(path);
+    if (tg && typeof tg.openLink === "function") { tg.openLink(url); }
+    else { window.open(url, "_blank", "noopener,noreferrer"); }
+  }
+  function addExternalFileButton(box, path) {
+    if (!canOpenExternalHTML || !isHTMLFile(path)) { return; }
+    var open = button("Open in browser", "btn small");
+    open.addEventListener("click", function () { openExternalFile(path); });
+    box.appendChild(open);
+  }
+
+  function openMentionFile(path) {
+    var current = "", history = [];
+    sheetUI("File preview", function (box, close) {
+      var nav = el("div", "file-preview-nav"), back = button("‹ Back", "btn small"), pathLabel = el("code", "path", ""), dismiss = button("Close", "btn small");
+      var body = el("div", "file-preview");
+      back.disabled = true;
+      back.addEventListener("click", function () { if (history.length) { showFile(history.pop(), false); } });
+      dismiss.addEventListener("click", close);
+      nav.appendChild(back); nav.appendChild(pathLabel); nav.appendChild(dismiss);
+      box.appendChild(nav); box.appendChild(body);
+      function showFile(next, push) {
+        if (push && current) { history.push(current); }
+        current = next; pathLabel.textContent = next; back.disabled = history.length === 0;
+        body.textContent = "";
+        body.appendChild(el("p", "note", "Loading…"));
+        api("api/files?id=" + encodeURIComponent(id) + "&path=" + encodeURIComponent(next)).then(function (d) {
+          body.textContent = "";
+          if (d.note) { body.appendChild(el("p", "note", d.note)); }
+          addExternalFileButton(body, next);
+          if (d.html) {
+            var content = el("div", "content"); content.innerHTML = d.html; scrollTables(content);
+            wireFileMentions(content, next, function (target) { showFile(target, true); });
+            body.appendChild(content);
+          }
+        }).catch(function (e) {
+          body.textContent = ""; body.appendChild(el("p", "note", e.message || "This file could not be loaded."));
+        });
+      }
+      showFile(path, false);
+    });
+  }
+
   // --- the file explorer ---
 
   function fileBrowser(rootTitle, mount, initialFile) {
@@ -561,10 +679,12 @@
         .then(function (d) {
           body.textContent = "";
           if (d.note) { body.appendChild(el("p", "note", d.note)); }
+          addExternalFileButton(body, p);
           if (d.html) {
             var c = el("div", "");
             c.innerHTML = d.html; // rendered and escaped by rex-tg
             scrollTables(c);
+            wireFileMentions(c, p);
             body.appendChild(c);
           }
         })
@@ -850,7 +970,7 @@
 
   // --- the combined project view ---
 
-  function projectView(rootTitle) {
+  function projectView(pg) {
     page.className = "";
     page.textContent = "";
     var tabs = el("div", "tabs"), content = el("div", "project-content");
@@ -869,11 +989,13 @@
         pane.hidden = which !== active;
         mounted[which] = pane;
         content.appendChild(pane);
-        if (which === "files") { fileBrowser(rootTitle, pane); } else { changesView(pane); }
+        if (which === "files") { fileBrowser(pg.title || "Project", pane); }
+        else if (which === "changes") { changesView(pane); }
+        else { configPage(pane); }
       }
       setBack(viewBack.get(mounted[which]));
     }
-    [{key:"files",label:"Files"},{key:"changes",label:"Changes"}].forEach(function (v) {
+    [{key:"files",label:"Files"},{key:"changes",label:"Changes"},{key:"config",label:"Config"}].forEach(function (v) {
       var b = el("button", "", v.label);
       b.type = "button";
       b.setAttribute("role", "tab");
@@ -2760,6 +2882,7 @@
       var body = el("div", "ans content");
       body.innerHTML = it.html; // rendered and escaped by rex-tg
       scrollTables(body);
+      wireFileMentions(body, "");
       markBlocks(body, it);
       c.appendChild(body);
       wire(body, it);
@@ -2886,6 +3009,7 @@
       items[one.id] = one;
       page.className = "ans";
       clearRepeatedPageTitle(pg && pg.title, page.textContent, true);
+      wireFileMentions(page, "");
       markBlocks(page, one);
       wire(page, one);
       refreshBadges();
@@ -2901,13 +3025,17 @@
     document.body.classList.remove("fill", "annot");
     page.className = "templates";
     page.textContent = "";
+    var toolbar = el("div", "template-toolbar");
     var intro = el("p", "template-intro", "Create reusable messages. Shared templates and their order sync across your devices.");
-    var add = button("＋ New template", "btn primary wide");
+    var add = button("", "btn primary template-add", "New template");
+    add.title = "New template";
+    add.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>';
+    toolbar.appendChild(intro);
+    toolbar.appendChild(add);
     var list = el("div", "template-list");
     var hint = el("p", "hint", "");
     var pendingBox = el("div", "template-pending");
-    page.appendChild(intro);
-    page.appendChild(add);
+    page.appendChild(toolbar);
     page.appendChild(hint);
     page.appendChild(pendingBox);
     page.appendChild(list);
@@ -3234,14 +3362,20 @@
 
   // --- session-scoped agent settings ---
 
-  function configPage() {
-    document.body.classList.remove("fill", "annot");
-    page.className = "config-page";
-    page.textContent = "";
+  function configPage(container) {
+    var host = container || page;
+    if (!container) {
+      document.body.classList.remove("fill", "annot");
+      page.className = "config-page";
+      page.textContent = "";
+    } else {
+      host.classList.add("config-page");
+      host.textContent = "";
+    }
     var hint = el("p", "config-hint", "Choose a value and tap Save to apply it. Changes apply only to this topic's current agent session.");
     var content = el("div", "config-list");
-    page.appendChild(hint);
-    page.appendChild(content);
+    host.appendChild(hint);
+    host.appendChild(content);
     var pendingKey = "rex-tg.config.pending." + id;
     var pending = null, submitting = false, refreshing = false, latest = null, selectedValues = {}, submittedValues = {}, selectionsReady = false;
     try { pending = JSON.parse(load(pendingKey) || "null"); } catch (e) { pending = null; }
@@ -3434,6 +3568,7 @@
   api("api/page?id=" + encodeURIComponent(id))
     .then(function (p) {
       setTitle(p.title);
+      canOpenExternalHTML = p.can_open_external_html === true;
       var from = params.get("from");
       if (p.kind !== "control" && from === "panel") {
         rootBack = backToPanel;
@@ -3455,7 +3590,7 @@
       if (p.kind === "screen") { liveScreen(); return; }
       if (p.kind === "files") { fileBrowser(p.title || "Files", null, p.initial_file); return; }
       if (p.kind === "changes") { changesView(); return; }
-      if (p.kind === "project") { projectView(p.title || "Project"); return; }
+      if (p.kind === "project") { projectView(p); return; }
       if (p.kind === "config") { configPage(); return; }
       if (p.kind === "control") { controlPanel(); return; }
       if (p.kind === "annotate") { annotatePage(p, false); return; }

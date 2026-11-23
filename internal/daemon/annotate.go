@@ -131,7 +131,7 @@ func (d *daemon) Launch(ctx context.Context, view string, thread int64) miniapp.
 			return fail("This topic has no agent session yet.")
 		}
 		title := "✍️ " + topicShownName(th) + " · " + sessionLabel(conv)
-		id, err := d.livePageOf(miniapp.Page{Kind: miniapp.KindAnnotate, Title: title, Thread: th.ID, Conv: conv.ID}, fmt.Sprintf("conv:%d", conv.ID))
+		id, err := d.livePageOf(miniapp.Page{Kind: miniapp.KindAnnotate, Title: title, Thread: th.ID, Conv: conv.ID, Dir: conv.CWD}, fmt.Sprintf("conv:%d", conv.ID))
 		if err != nil {
 			return fail("Could not open Annotate.")
 		}
@@ -162,7 +162,7 @@ func (d *daemon) Launch(ctx context.Context, view string, thread int64) miniapp.
 		if top, ok := d.repoTop(gctx, root); ok {
 			root = top
 		}
-		id, err = d.projectPage(th, root)
+		id, err = d.projectPage(th, root, conv.ID)
 	} else {
 		top, ok := d.repoTop(gctx, conv.CWD)
 		if !ok {

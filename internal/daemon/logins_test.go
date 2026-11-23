@@ -44,6 +44,9 @@ func TestMiniLogins(t *testing.T) {
 	if !l.KeyLoginOK(k, "phone@example.com") {
 		t.Fatal("the first use of the key was refused")
 	}
+	if !l.OwnerLoginOK("PHONE@example.com") || l.OwnerLoginOK("coworker@example.com") {
+		t.Fatal("external preview identity did not use the learned owner login")
+	}
 	if l.KeyLoginOK(k, "coworker@example.com") || l.KeyLoginOK(k, "") || l.KeyLoginOK(k, "  ") {
 		t.Fatal("another login was let in")
 	}
@@ -65,6 +68,9 @@ func TestMiniLogins(t *testing.T) {
 	fixed.Owner("other@example.com")
 	if !fixed.KeyLoginOK(k, "me@example.com") || fixed.KeyLoginOK(k, "other@example.com") || fixed.KeyLoginOK(k, "new@example.com") || fixed.KeyLoginOK("x"+k[1:], "me@example.com") {
 		t.Error("tailnet_users is not the whole list")
+	}
+	if !fixed.OwnerLoginOK("me@example.com") || fixed.OwnerLoginOK("other@example.com") {
+		t.Error("external preview did not use tailnet_users")
 	}
 }
 
