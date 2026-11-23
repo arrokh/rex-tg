@@ -5,9 +5,11 @@
 // daemon keeps the pages and reads the screens; this package checks who
 // asks and renders them.
 //
-// Requests carry either Telegram-signed init data or the current keyboard
-// key. Keyboard-key Annotate sends additionally require the owner's verified
-// Tailscale login. The page shell itself holds no data.
+// Mini App API requests carry either Telegram-signed init data or the current
+// keyboard key. The external HTML preview instead checks the owner's Tailscale
+// login and never accepts the Mini App key in its URL. Keyboard-key Annotate
+// sends additionally require the owner's verified Tailscale login. The page
+// shell itself holds no data.
 package miniapp
 
 import (
@@ -23,6 +25,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"path"
 	"sort"
 	"strconv"
 	"strings"
@@ -36,14 +39,13 @@ import (
 // Page is what the Mini App shows.
 type Page struct {
 	InitialFile string `json:"initial_file,omitempty"` // a path relative to the Files browser root
-	Kind        string `json:"kind"`                   // answer, diff, screen, files, changes, project, control, annotate, or templates
+	Kind        string `json:"kind"`                   // answer, diff, screen, files, changes, project, control, config, annotate, or templates
 	Title       string `json:"title"`                  // a short title
 	Text        string `json:"text"`                   // Markdown (an answer) or a unified diff
-	Thread      int64  `json:"thread,omitempty"`       // the topic of a screen, files, changes, annotate or answer page (0 on answer pages made before Annotate)
-	Dir         string `json:"dir,omitempty"`          // the folder of a files or changes page
-	// Conv is the agent's session (conversation) of an Annotate or answer
-	// page: the page shows only that session's answers, and its notes go
-	// to the agent only while the topic is still in that session.
+	Thread      int64  `json:"thread,omitempty"`       // the topic of a topic-bound page
+	Dir         string `json:"dir,omitempty"`          // the folder of a files, changes, project, answer, or Annotate page
+	// Conv is the agent session (conversation) bound to a Config, Project,
+	// Annotate, Templates, or answer page. Reads and actions stay on that session.
 	Conv int64     `json:"conv,omitempty"`
 	At   time.Time `json:"at"`
 }
@@ -94,7 +96,7 @@ type Server struct {
 	config    Configurator         // topic/session settings (nil: off)
 	templates TemplateRepository   // shared message templates (nil: off)
 	tailnet   bool                 // refuse a request that did not come from the tailnet
-	logins    Logins               // whose tailnet devices may use the key (nil: any)
+	logins    Logins               // allowed Tailscale logins (nil: no identity checks)
 	reads     reads                // folder and file reads that may wait for macOS (slowread.go)
 	wait      time.Duration        // how long a request waits for such a read
 	now       func() time.Time
@@ -165,7 +167,8 @@ func (s *Server) WithTailnetOnly(on bool) *Server {
 
 // Logins decides which Tailscale logins may open pages with the buttons'
 // key, so that in a shared tailnet another person's device cannot use a key
-// that leaked (the daemon keeps them). Used with WithTailnetOnly.
+// that leaked (the daemon keeps them). It also authorizes external HTML
+// previews without putting the key in the URL. Used with WithTailnetOnly.
 type Logins interface {
 	// Owner notes a login whose request carried the owner's own Telegram
 	// signature: that login is the owner's.
@@ -174,9 +177,13 @@ type Logins interface {
 	// checks the key again, together with the logins, so a /rekey between
 	// the two checks cannot let an old key teach a login.
 	KeyLoginOK(key, login string) bool
+	// OwnerLoginOK checks a Tailscale identity learned by normal Mini App
+	// authentication or explicitly configured. It never learns a login here.
+	OwnerLoginOK(login string) bool
 }
 
-// WithLogins limits the key to the owner's Tailscale logins.
+// WithLogins checks owner Tailscale identities for button-key requests and
+// external HTML previews.
 func (s *Server) WithLogins(l Logins) *Server {
 	s.logins = l
 	return s
@@ -265,9 +272,9 @@ var (
 )
 
 // Handler serves /app (the page shell), /app.js, the terminal library,
-// /api/page?id=…,
-// /api/screen?id=…, /api/files?id=…&path=… and
-// /api/changes?id=…&base=…[&path=…&new=1], and the control panel's
+// /api/page?id=…, /api/screen?id=…, /api/files?id=…&path=…,
+// /external/file?id=…&path=… (owner-authenticated HTML only),
+// /api/changes?id=…&base=…[&path=…][&new=1], and the control panel's
 // /api/control?id=…, /api/control/folders?id=…&path=…[&hidden=1],
 // POST /api/control/do?id=…, /api/templates?id=…, and /api/templates/send?id=…
 func (s *Server) Handler() http.Handler {
@@ -294,6 +301,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/page", s.page)
 	mux.HandleFunc("GET /api/screen", s.liveScreen)
 	mux.HandleFunc("GET /api/files", s.fileView)
+	mux.HandleFunc("GET /external/file", s.externalFile)
 	mux.HandleFunc("GET /api/changes", s.changesView)
 	mux.HandleFunc("GET /api/control", s.controlState)
 	mux.HandleFunc("GET /api/control/folders", s.controlFolders)
@@ -451,6 +459,8 @@ func (s *Server) page(w http.ResponseWriter, r *http.Request) {
 	if s.annot != nil && (p.Kind == KindAnswer || p.Kind == KindAnnotate) {
 		out["bot"] = s.annot.BotName() // for t.me links (Annotate's "Put in message box")
 	}
+	out["can_open_external_html"] = s.externalHTMLAvailable(p)
+
 	if s.annot != nil && s.control != nil && (p.Kind == KindAnnotate || p.Kind == KindAnswer) && p.Thread > 0 && p.Conv > 0 {
 		out["can_send_notes"] = s.canSendBoundMessage(r)
 	}
@@ -486,27 +496,27 @@ func filesKey(dir, rel string) string {
 	return "files\x00" + dir + "\x00" + rel
 }
 
-// fileView answers a folder or file of a files page. The read may wait for
-// macOS (slowread.go).
+// fileView answers a folder or file of a files page, or a file link from a
+// page-bound answer or Annotate page. The read may wait for macOS (slowread.go).
 func (s *Server) fileView(w http.ResponseWriter, r *http.Request) {
 	if !s.allowed(w, r) {
 		return
 	}
-	p, ok := s.loadKind(w, r, KindFiles, KindProject)
+	p, ok := s.loadKind(w, r, KindFiles, KindProject, KindAnswer, KindAnnotate)
 	if !ok {
 		return
 	}
-	if s.files == nil || !s.files() {
+	if p.Dir == "" || s.files == nil || !s.files() {
 		http.Error(w, `{"error":"The file browser is off."}`, http.StatusNotFound)
 		return
 	}
 	rel := r.URL.Query().Get("path")
-	// The read may wait for macOS (slowread.go), so it does not stop when
-	// this request ends: a later request for the same path joins it.
-	ctx := context.WithoutCancel(r.Context())
-	got, err := s.reads.do(filesKey(p.Dir, rel), s.wait, func() (any, error) {
-		return Browse(ctx, p.Dir, rel, s.redact)
-	})
+	linkedPage := p.Kind == KindAnswer || p.Kind == KindAnnotate
+	if linkedPage && strings.TrimSpace(rel) == "" {
+		http.Error(w, `{"error":"This file link is not valid."}`, http.StatusNotFound)
+		return
+	}
+	v, err := s.readFile(r, p.Dir, rel)
 	if errors.Is(err, errSlowRead) {
 		http.Error(w, slowReadText("this file or folder"), http.StatusServiceUnavailable)
 		return
@@ -515,12 +525,81 @@ func (s *Server) fileView(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, readLimitText("file or folder"), http.StatusServiceUnavailable)
 		return
 	}
-	v, _ := got.(View)
-	if err != nil {
+	if err != nil || (linkedPage && v.Dir) {
 		http.Error(w, `{"error":"This file is not there, or it is hidden."}`, http.StatusNotFound)
 		return
 	}
 	_ = json.NewEncoder(w).Encode(v)
+}
+
+// readFile uses the same bounded, deduplicated Browse read for the Mini App
+// JSON view and the owner-authenticated external HTML preview.
+func (s *Server) readFile(r *http.Request, root, rel string) (View, error) {
+	ctx := context.WithoutCancel(r.Context())
+	got, err := s.reads.do(filesKey(root, rel), s.wait, func() (any, error) {
+		return Browse(ctx, root, rel, s.redact)
+	})
+	if err != nil {
+		return View{}, err
+	}
+	v, ok := got.(View)
+	if !ok {
+		return View{}, ErrNoFile
+	}
+	return v, nil
+}
+
+func (s *Server) externalHTMLAvailable(p Page) bool {
+	if !s.tailnet || s.logins == nil || s.files == nil || !s.files() || p.Dir == "" {
+		return false
+	}
+	return p.Kind == KindFiles || p.Kind == KindProject || p.Kind == KindAnswer || p.Kind == KindAnnotate
+}
+
+// externalFile opens one HTML file as a standalone page for an authenticated
+// owner device. It deliberately does not accept the Mini App key or Telegram
+// init data in the URL; Tailscale Serve supplies the login identity.
+func (s *Server) externalFile(w http.ResponseWriter, r *http.Request) {
+	externalHTMLHeaders(w)
+	login := tailnetLogin(r)
+	if !s.tailnet || !fromTailnet(r) || s.logins == nil || !s.logins.OwnerLoginOK(login) {
+		s.noteRefusal("external file preview from an unverified Tailscale login")
+		http.NotFound(w, r)
+		return
+	}
+	p, ok := s.load(r.URL.Query().Get("id"))
+	if !ok || !s.externalHTMLAvailable(p) {
+		http.NotFound(w, r)
+		return
+	}
+	rel := r.URL.Query().Get("path")
+	if strings.TrimSpace(rel) == "" || (strings.ToLower(path.Ext(rel)) != ".html" && strings.ToLower(path.Ext(rel)) != ".htm") {
+		http.NotFound(w, r)
+		return
+	}
+	v, err := s.readFile(r, p.Dir, rel)
+	if errors.Is(err, errSlowRead) || errors.Is(err, errReadLimit) {
+		http.Error(w, "The file could not be loaded right now. Return to the Mini App and try again.", http.StatusServiceUnavailable)
+		return
+	}
+	if err != nil || v.Dir || !strings.HasPrefix(v.HTML, `<iframe class="html-viewer"`) {
+		http.NotFound(w, r)
+		return
+	}
+	_, _ = w.Write([]byte(v.externalHTML))
+}
+
+func externalHTMLHeaders(w http.ResponseWriter) {
+	h := w.Header()
+	h.Set("Content-Type", "text/html; charset=utf-8")
+	h.Set("Cache-Control", "no-store")
+	h.Set("X-Content-Type-Options", "nosniff")
+	h.Set("Referrer-Policy", "no-referrer")
+	h.Set("X-Frame-Options", "DENY")
+	// The sandbox directive applies to the top-level document too. This keeps
+	// the raw source useful as a rendered page without granting scripts,
+	// network access, forms, frames, or top-level navigation.
+	h.Set("Content-Security-Policy", "default-src 'none'; script-src 'none'; connect-src 'none'; img-src data:; style-src 'unsafe-inline'; font-src data:; object-src 'none'; frame-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'; navigate-to 'none'; sandbox")
 }
 
 // changesView answers the list of a changes page (base: BaseHead,

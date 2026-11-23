@@ -73,6 +73,27 @@ type caller struct {
 	url string
 }
 
+func (c caller) doText(method, path string, hdr map[string]string) (int, string) {
+	c.t.Helper()
+	req, err := http.NewRequest(method, c.url+path, nil)
+	if err != nil {
+		c.t.Fatal(err)
+	}
+	for k, v := range hdr {
+		req.Header.Set(k, v)
+	}
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		c.t.Fatal(err)
+	}
+	defer res.Body.Close()
+	b, err := io.ReadAll(res.Body)
+	if err != nil {
+		c.t.Fatal(err)
+	}
+	return res.StatusCode, string(b)
+}
+
 func (c caller) do(method, path string, hdr map[string]string, body string) (int, map[string]any) {
 	c.t.Helper()
 	req, _ := http.NewRequest(method, c.url+path, bytes.NewBufferString(body))
@@ -327,6 +348,7 @@ type fakeLogins struct {
 
 func (f *fakeLogins) Owner(login string)                { f.owners = append(f.owners, login) }
 func (f *fakeLogins) KeyLoginOK(key, login string) bool { return key == testKey && f.allow[login] }
+func (f *fakeLogins) OwnerLoginOK(login string) bool    { return f.allow[login] }
 
 // With tailnet_only, the key works only from the owner's Tailscale logins; a
 // signed request teaches the owner's login; a device outside the tailnet

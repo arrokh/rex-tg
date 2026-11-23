@@ -57,6 +57,9 @@ func (d *daemon) livePageOf(np miniapp.Page, key string) (string, error) {
 	if id, ok, _ := d.st.Get(d.ctx, name); ok && id != "" {
 		if p, ok := loadPage(d.st, id); ok && p.Kind == kind {
 			p.Title = title // the topic may have a new name
+			if kind == miniapp.KindProject {
+				p.Conv = np.Conv // Project's Config tab must follow the session that opened it.
+			}
 			if v, err := json.Marshal(p); err == nil {
 				_ = d.st.Set(d.ctx, pageKey(id), string(v))
 			}
@@ -266,8 +269,8 @@ func (d *daemon) changesPage(th store.Thread, top string) (string, error) {
 }
 
 // projectPage returns the combined files and changes page for a folder.
-func (d *daemon) projectPage(th store.Thread, root string) (string, error) {
-	return d.livePage(miniapp.KindProject, th.ID, root, "📁 "+filepath.Base(root), root)
+func (d *daemon) projectPage(th store.Thread, root string, conv int64) (string, error) {
+	return d.livePageOf(miniapp.Page{Kind: miniapp.KindProject, Thread: th.ID, Conv: conv, Title: "📁 " + filepath.Base(root), Dir: root}, root)
 }
 
 // filesCommand answers /files with a button that opens the agent's folder

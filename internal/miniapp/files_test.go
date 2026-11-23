@@ -132,6 +132,23 @@ func TestBrowseShowsFiles(t *testing.T) {
 	}
 }
 
+func TestBrowseRendersHTMLInSandbox(t *testing.T) {
+	root, _ := newRepo(t)
+	write(t, filepath.Join(root, "index.html"), `<h1>Hello</h1><script>parent.location='https://bad.invalid'</script><img src="https://bad.invalid/pixel">`)
+	v, err := Browse(context.Background(), root, "index.html", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`<iframe class="html-viewer" sandbox=""`, `srcdoc="`, `default-src &#39;none&#39;`, `&lt;script&gt;`, `https://bad.invalid/pixel`} {
+		if !strings.Contains(v.HTML, want) {
+			t.Errorf("HTML viewer lacks %q: %s", want, v.HTML)
+		}
+	}
+	if strings.Contains(v.HTML, `<script>`) || strings.Contains(v.HTML, `src="https://bad.invalid`) {
+		t.Errorf("HTML escaped into the outer page: %s", v.HTML)
+	}
+}
+
 // A long text file shows its start, cut at a line.
 func TestBrowseCutsLongFiles(t *testing.T) {
 	root, _ := newRepo(t)

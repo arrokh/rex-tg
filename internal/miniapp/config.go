@@ -51,7 +51,7 @@ func (s *Server) configState(w http.ResponseWriter, r *http.Request) {
 	if !s.allowed(w, r) {
 		return
 	}
-	p, ok := s.loadKind(w, r, KindConfig)
+	p, ok := s.loadKind(w, r, KindConfig, KindProject)
 	if !ok {
 		return
 	}
@@ -80,7 +80,7 @@ func (s *Server) configDo(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"Changing settings requires your verified Tailscale login."}`, http.StatusForbidden)
 		return
 	}
-	p, ok := s.loadKind(w, r, KindConfig)
+	p, ok := s.loadKind(w, r, KindConfig, KindProject)
 	if !ok {
 		return
 	}

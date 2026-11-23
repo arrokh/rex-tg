@@ -21,8 +21,9 @@ func (f *fakeConfigurator) State(_ context.Context, thread, conv int64) (ConfigS
 
 func TestConfigPageBindsReadAndWriteToItsSession(t *testing.T) {
 	pages := map[string]Page{
-		"cfg":    {Kind: KindConfig, Title: "Config", Thread: 71, Conv: 82},
-		"answer": {Kind: KindAnswer, Title: "Answer", Thread: 71, Conv: 82},
+		"cfg":     {Kind: KindConfig, Title: "Config", Thread: 71, Conv: 82},
+		"project": {Kind: KindProject, Title: "Project", Thread: 73, Conv: 84, Dir: "/repo"},
+		"answer":  {Kind: KindAnswer, Title: "Answer", Thread: 71, Conv: 82},
 	}
 	fc, ctl := &fakeConfigurator{}, &fakeControl{}
 	s := New(fakeToken, func() int64 { return 42 }, func(id string) (Page, bool) { p, ok := pages[id]; return p, ok }, nil).
@@ -80,5 +81,14 @@ func TestConfigPageBindsReadAndWriteToItsSession(t *testing.T) {
 	changes := ctl.did[1].Changes
 	if len(changes) != 2 || changes[0].Name != "model" || changes[1].Name != "effort" {
 		t.Errorf("combined changes not bound to page: %+v", ctl.did[1])
+	}
+	if code, got := call("GET", "/api/config?id=project", owner, nil); code != http.StatusOK || fc.thread != 73 || fc.conv != 84 {
+		t.Fatalf("project Config state: %d %v, bound to %d/%d", code, got, fc.thread, fc.conv)
+	}
+	if code, got := call("POST", "/api/config/do?id=project", owner, body); code != http.StatusOK || len(ctl.did) != 3 {
+		t.Fatalf("project Config action: %d %v; actions %v", code, got, ctl.did)
+	}
+	if got := ctl.did[2]; got.Thread != 73 || got.Conv != 84 {
+		t.Errorf("project Config action not bound to its session: %+v", got)
 	}
 }
