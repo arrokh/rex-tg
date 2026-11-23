@@ -149,6 +149,19 @@ CREATE TABLE template_deleted (
 ) STRICT;
 `
 
+// schemaV6 adds a stable collection order for shared templates. Existing rows
+// keep their prior newest-first order.
+const schemaV6 = `
+ALTER TABLE template ADD COLUMN position INTEGER NOT NULL DEFAULT 0 CHECK (position >= 0);
+UPDATE template SET position = (
+  SELECT COUNT(*) FROM template AS before
+  WHERE before.updated_at > template.updated_at
+     OR (before.updated_at = template.updated_at AND before.id < template.id)
+);
+DROP INDEX template_updated;
+CREATE INDEX template_order ON template (position, updated_at DESC, id);
+`
+
 // migrations is the numbered list of schema steps. Append only.
 var migrations = []migration{
 	{version: 1, sql: schemaV1},
@@ -156,6 +169,7 @@ var migrations = []migration{
 	{version: 3, sql: schemaV3},
 	{version: 4, sql: schemaV4},
 	{version: 5, sql: schemaV5},
+	{version: 6, sql: schemaV6},
 }
 
 // Store is an open database.

@@ -46,20 +46,47 @@ func TestClaudeConfigModelsUseConfiguredAllowlist(t *testing.T) {
 	cwd := filepath.Join(root, "repo")
 	managed := filepath.Join(root, "managed-settings.json")
 	conv := store.Conversation{CWD: cwd, Transcript: filepath.Join(profile, "projects", "cwd", "run.jsonl")}
-	if got := claudeConfigModels(conv, managed); len(got) != 0 {
-		t.Fatalf("unconfigured aliases must not be guessed: %v", got)
+	defaults := []string{"opus", "sonnet", "haiku", "fable"}
+	if got := claudeModelChoices(conv, managed, defaults); !slices.Equal(got, defaults) {
+		t.Fatalf("built-in aliases: %v", got)
 	}
 	writeCatalogFixture(t, filepath.Join(profile, "settings.json"), `{"availableModels":["sonnet"]}`)
 	writeCatalogFixture(t, filepath.Join(cwd, ".claude", "settings.local.json"), `{"availableModels":["haiku"]}`)
-	if got := claudeConfigModels(conv, managed); !slices.Equal(got, []string{"sonnet", "haiku"}) {
+	if got := claudeModelChoices(conv, managed, defaults); !slices.Equal(got, []string{"sonnet", "haiku"}) {
 		t.Fatalf("user and project scopes: %v", got)
 	}
 	writeCatalogFixture(t, managed, `{"availableModels":["opus"]}`)
-	if got := claudeConfigModels(conv, managed); !slices.Equal(got, []string{"opus"}) {
+	if got := claudeModelChoices(conv, managed, defaults); !slices.Equal(got, []string{"opus"}) {
 		t.Fatalf("managed allowlist: %v", got)
 	}
 	writeCatalogFixture(t, managed, `{"availableModels":[]}`)
-	if got := claudeConfigModels(conv, managed); len(got) != 0 {
+	if got := claudeModelChoices(conv, managed, defaults); len(got) != 0 {
 		t.Fatalf("empty managed allowlist must not fall back: %v", got)
+	}
+}
+
+func TestClaudeModelPickerControlsConfigChoices(t *testing.T) {
+	root := t.TempDir()
+	profile := filepath.Join(root, "claude-profile")
+	conv := store.Conversation{Transcript: filepath.Join(profile, "projects", "cwd", "run.jsonl")}
+	managed := filepath.Join(root, "managed-settings.json")
+	defaults := []string{"opus", "sonnet", "haiku", "fable"}
+	settings := filepath.Join(profile, "settings.json")
+	writeCatalogFixture(t, settings, `{"modelPicker":{"options":[{"model":"custom-model"}]}}`)
+	if got, want := claudeModelChoices(conv, managed, defaults), []string{"opus", "sonnet", "haiku", "fable", "custom-model"}; !slices.Equal(got, want) {
+		t.Fatalf("additive modelPicker: %v, want %v", got, want)
+	}
+	writeCatalogFixture(t, settings, `{"modelPicker":{"options":[{"model":"custom-model"}],"replaceBuiltInOptions":true}}`)
+	if got := claudeModelChoices(conv, managed, defaults); !slices.Equal(got, []string{"custom-model"}) {
+		t.Fatalf("replacement modelPicker: %v", got)
+	}
+	writeCatalogFixture(t, managed, `{"modelPicker":{"options":[{"model":"managed-model"}],"replaceBuiltInOptions":true}}`)
+	if got := claudeModelChoices(conv, managed, defaults); !slices.Equal(got, []string{"managed-model"}) {
+		t.Fatalf("managed modelPicker: %v", got)
+	}
+	writeCatalogFixture(t, settings, `{"modelPicker":{"options":[{"model":"custom-model"},{"model":"not-allowed"}],"replaceBuiltInOptions":true}}`)
+	writeCatalogFixture(t, managed, `{"availableModels":["custom-model"]}`)
+	if got := claudeModelChoices(conv, managed, defaults); !slices.Equal(got, []string{"custom-model"}) {
+		t.Fatalf("managed allowlist must filter picker options: %v", got)
 	}
 }

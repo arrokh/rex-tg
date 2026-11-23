@@ -42,7 +42,7 @@ func (d *daemon) configControl(conv store.Conversation, name string) (agents.Con
 		case agents.Codex:
 			c.Choices = codexConfigModels(conv)
 		case agents.Claude:
-			c.Choices = claudeConfigModels(conv, "/Library/Application Support/ClaudeCode/managed-settings.json")
+			c.Choices = claudeModelChoices(conv, "/Library/Application Support/ClaudeCode/managed-settings.json", c.Choices)
 		}
 	}
 	choices := make([]string, 0, len(c.Choices))

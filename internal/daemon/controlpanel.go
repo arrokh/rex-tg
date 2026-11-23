@@ -870,7 +870,9 @@ func (c *controlPanel) config(a miniapp.ControlAction) miniapp.ControlResult {
 			queuedCount++
 			continue
 		}
-		orig := base + int64(i)
+		// queueText stores -orig as update_id and orders ties by that id;
+		// decrement orig so same-millisecond commands keep the user's order.
+		orig := base - int64(i)
 		if !d.keepPending(-orig, ctlSet{conv: conv.ID, values: command.values}) {
 			return controlFail("Could not queue every setting change. Check the topic queue before trying again.")
 		}
