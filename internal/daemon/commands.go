@@ -428,7 +428,7 @@ func (d *daemon) queueCommand(th store.Thread) {
 		return
 	}
 	sendable := d.sendNowEligibleCount(th.ID)
-	text := fmt.Sprintf("📥 %d messages waiting.", len(queued))
+	text := fmt.Sprintf("📥 %d messages waiting.%s", len(queued), queuedPreviews(queued))
 	if sendable > 0 {
 		text += fmt.Sprintf(" %d can be sent now in FIFO order.", sendable)
 	} else if d.paused.Load() {

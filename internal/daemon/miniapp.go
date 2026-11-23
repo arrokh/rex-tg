@@ -130,6 +130,7 @@ func (d *daemon) serveMiniApp(ctx context.Context) {
 			WithChanges(func() bool { return d.cfg.MiniApp.Changes }, format.Redact, d.lastTurn).
 			WithControl(newControlPanel(d), d.home).
 			WithConfig(d).
+			WithTemplates(miniAppTemplates{st: d.st}).
 			WithLaunch(d, d.keyOK).
 			WithAnnotate(d).
 			WithTailnetOnly(d.cfg.MiniApp.TailnetOnly).

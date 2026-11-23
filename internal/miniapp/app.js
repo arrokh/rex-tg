@@ -2901,7 +2901,7 @@
     document.body.classList.remove("fill", "annot");
     page.className = "templates";
     page.textContent = "";
-    var intro = el("p", "template-intro", "Create reusable messages for this topic. Templates stay on this device.");
+    var intro = el("p", "template-intro", "Create reusable messages. Templates sync through rex-tg across your devices.");
     var add = button("＋ New template", "btn primary wide");
     var list = el("div", "template-list");
     var hint = el("p", "hint", "");
@@ -2916,6 +2916,7 @@
     var pendingKey = "rex-tg.templates.pending." + id;
     var maxTemplates = 50, pendingTTL = 10 * 60 * 1000, sending = false, pending = null;
     var canSend = !!(pg && pg.can_send_templates && pg.thread && pg.conv);
+    var canEdit = !!(pg && pg.can_manage_templates), templatesReady = false, migrationWarning = "", migrationBlocked = false, migrationError = "";
 
     function readTemplates() {
       try {
@@ -2927,10 +2928,6 @@
             t.text.trim().length > 0 && utf8Length(t.text) <= 16000;
         }).slice(0, maxTemplates);
       } catch (e) { return []; }
-    }
-    function writeTemplates(next) {
-      try { localStorage.setItem(templatesKey, JSON.stringify(next)); return true; }
-      catch (e) { return false; }
     }
     function readPending() {
       try {
@@ -2946,8 +2943,22 @@
         return true;
       } catch (e) { return false; }
     }
-    var items = readTemplates();
+    var items = [], legacyItems = readTemplates();
     pending = readPending();
+
+    function setTemplates(remote, deleted) {
+      var saved = remote || [], ids = {};
+      (deleted || []).forEach(function (id) {
+        legacyItems = legacyItems.filter(function (t) { return t.id !== id; });
+      });
+      saved.forEach(function (t) { ids[t.id] = true; });
+      legacyItems = legacyItems.filter(function (t) { return !ids[t.id]; });
+      save(templatesKey, legacyItems.length ? JSON.stringify(legacyItems) : null);
+      items = saved.concat(legacyItems);
+      migrationWarning = legacyItems.length
+        ? "Some templates saved on this device are not synced yet. They remain available here."
+        : "";
+    }
 
     function editTemplate(existing) {
       hap("light");
@@ -2983,20 +2994,26 @@
           var remove = button("Delete template", "btn danger wide");
           box.appendChild(remove);
           remove.addEventListener("click", function () {
-            confirmAsk({ title: "Delete this template?", message: "This only removes it from this device.", ok: "Delete", danger: true }, function () {
-              var next = items.filter(function (t) { return t.id !== existing.id; });
-              if (!writeTemplates(next)) { message.textContent = "Could not save the change on this device."; return; }
-              items = next;
-              close();
-              draw();
-              toast({ ok: true, message: "Template deleted." });
+            confirmAsk({ title: "Delete this template?", message: "This removes it from all your devices.", ok: "Delete", danger: true }, function () {
+              remove.disabled = true;
+              api("api/templates?id=" + encodeURIComponent(id), { op: "delete", id: existing.id }).then(function (r) {
+                legacyItems = legacyItems.filter(function (t) { return t.id !== existing.id; });
+                setTemplates(r.templates);
+                close();
+                draw();
+                toast({ ok: true, message: "Template deleted from your devices." });
+              }).catch(function (e) {
+                remove.disabled = false;
+                message.textContent = e.message || "Could not delete the template. Try again.";
+              });
             });
           });
         }
+        var saving = false, templateID = existing ? existing.id : act();
         function syncSave() {
           var n = name.value.trim(), body = text.value;
           var tooLong = utf8Length(body) > 16000;
-          saveButton.disabled = !n || n.length > 80 || !body.trim() || tooLong;
+          saveButton.disabled = !canEdit || saving || !n || n.length > 80 || !body.trim() || tooLong;
           message.textContent = tooLong ? "This message is over 16,000 bytes. Shorten it before saving." : "This exact text is sent to the agent. Maximum 16,000 bytes.";
         }
         name.addEventListener("input", syncSave);
@@ -3005,13 +3022,20 @@
           var n = name.value.trim(), body = text.value;
           if (!n || !body.trim() || utf8Length(body) > 16000) { syncSave(); return; }
           if (!existing && items.length >= maxTemplates) { message.textContent = "You can save up to 50 templates."; return; }
-          var saved = { id: existing ? existing.id : act(), name: n, text: body, updated: Date.now() };
-          var next = existing ? items.map(function (t) { return t.id === existing.id ? saved : t; }) : [saved].concat(items);
-          if (!writeTemplates(next)) { message.textContent = "Could not save on this device. Check its available storage and try again."; return; }
-          items = next;
-          close();
-          draw();
-          toast({ ok: true, message: "Template saved on this device." });
+          saving = true;
+          syncSave();
+          api("api/templates?id=" + encodeURIComponent(id), {
+            op: "save", id: templateID, name: n, text: body
+          }).then(function (r) {
+            setTemplates(r.templates);
+            close();
+            draw();
+            toast({ ok: true, message: "Template saved and synced." });
+          }).catch(function (e) {
+            saving = false;
+            syncSave();
+            message.textContent = e.message || "Could not save the template. Try again.";
+          });
         });
         cancel.addEventListener("click", function () { close(); });
         syncSave();
@@ -3088,10 +3112,11 @@
 
     function draw() {
       list.textContent = "";
-      items = readTemplates();
       items.sort(function (a, b) { return (b.updated || 0) - (a.updated || 0); });
-      add.disabled = sending;
-      hint.textContent = canSend ? "" : "Sending needs a fresh page and your verified Tailscale login. Reopen Templates from the topic with Tailscale on.";
+      add.disabled = !canEdit || sending || !templatesReady || items.length >= maxTemplates;
+      hint.textContent = migrationWarning || (!canEdit
+        ? "Saving needs fresh Telegram data, or a verified owner Tailscale login for keyboard launches. Reopen Templates to refresh."
+        : (!canSend ? "Sending needs fresh Telegram data, or a verified owner Tailscale login for keyboard launches. Reopen Templates to refresh." : ""));
       pendingBox.textContent = "";
       if (pending) {
         pendingBox.appendChild(el("p", "template-pending-text", "A previous send may still reach the agent. Retry the same send ID, or check the topic before sending again."));
@@ -3099,6 +3124,10 @@
         retry.disabled = !canSend || sending;
         retry.addEventListener("click", function () { sendTemplate({ text: pending.text }); });
         pendingBox.appendChild(retry);
+      }
+      if (!templatesReady) {
+        list.appendChild(el("div", "empty", "Loading shared templates…"));
+        return;
       }
       if (!items.length) {
         var empty = el("div", "empty");
@@ -3118,7 +3147,7 @@
         if (!canSend) { send.title = "Sending needs your verified Tailscale login."; }
         send.addEventListener("click", function () { sendTemplate(t); });
         var edit = button("Edit", "btn");
-        edit.disabled = sending;
+        edit.disabled = !canEdit || sending;
         edit.addEventListener("click", function () { editTemplate(t); });
         actions.appendChild(send);
         actions.appendChild(edit);
@@ -3131,6 +3160,31 @@
 
     add.addEventListener("click", function () { editTemplate(null); });
     draw();
+    api("api/templates?id=" + encodeURIComponent(id)).then(function (r) {
+      if (!legacyItems.length) { return r; }
+      if (!canEdit) {
+        migrationBlocked = true;
+        return r;
+      }
+      return api("api/templates?id=" + encodeURIComponent(id), { op: "import", templates: legacyItems }).then(function (r) {
+        setTemplates(r.templates, r.deleted);
+        return r;
+      }).catch(function (e) {
+        migrationError = e.message || "Could not sync templates saved on this device.";
+        return r;
+      });
+    }).then(function (r) {
+      setTemplates(r.templates);
+      if (migrationError) { migrationWarning = migrationError; }
+      else if (migrationBlocked && legacyItems.length) { migrationWarning = "Templates saved on this device need fresh Telegram data, or a verified owner Tailscale login for keyboard launches, to sync."; }
+      templatesReady = true;
+      draw();
+    }).catch(function (e) {
+      items = legacyItems.slice();
+      migrationWarning = (e.message || "Could not load shared templates.") + " Any templates saved on this device are shown below.";
+      templatesReady = true;
+      draw();
+    });
   }
 
   // --- session-scoped agent settings ---
@@ -3139,27 +3193,51 @@
     document.body.classList.remove("fill", "annot");
     page.className = "config-page";
     page.textContent = "";
-    var hint = el("p", "config-hint", "Changes apply only to this topic's current agent session.");
+    var hint = el("p", "config-hint", "Choose a value and tap Save to apply it. Changes apply only to this topic's current agent session.");
     var content = el("div", "config-list");
     page.appendChild(hint);
     page.appendChild(content);
     var pendingKey = "rex-tg.config.pending." + id;
-    var pending = null, submitting = false, latest = null;
+    var pending = null, submitting = false, latest = null, selectedValues = {}, submittedValues = {}, selectionsReady = false;
     try { pending = JSON.parse(load(pendingKey) || "null"); } catch (e) { pending = null; }
+    if (pending && !pending.changes && pending.name && pending.value) {
+      pending.changes = [{ name: pending.name, value: pending.value }];
+      delete pending.name;
+      delete pending.value;
+    }
 
     function clearPending() {
       pending = null;
       save(pendingKey, null);
     }
+    function dirtyChanges(state) {
+      return (state && state.controls || []).filter(function (item) {
+        return selectedValues[item.name] && selectedValues[item.name] !== (item.value || "") && selectedValues[item.name] !== submittedValues[item.name];
+      }).map(function (item) { return { name: item.name, value: selectedValues[item.name] }; });
+    }
+    function syncSaveButton() {
+      if (saveButton) { saveButton.disabled = !!pending || dirtyChanges(latest).length === 0; }
+    }
+    var saveButton = null;
     function draw(state) {
       latest = state;
+      (state.controls || []).forEach(function (item) {
+        if (submittedValues[item.name] && item.value === submittedValues[item.name]) { delete submittedValues[item.name]; }
+      });
+      if (!selectionsReady) {
+        selectedValues = {};
+        (state.controls || []).forEach(function (item) { selectedValues[item.name] = item.value || ""; });
+        if (pending && pending.changes) { pending.changes.forEach(function (change) { selectedValues[change.name] = change.value; }); }
+        selectionsReady = true;
+      }
       content.textContent = "";
+      saveButton = null;
       if (pending) {
         var alert = el("div", "config-pending");
         alert.appendChild(el("p", "", "A setting change may still be queued. Check its status before choosing another value."));
         var retry = button(submitting ? "Checking…" : "Check the same change", "btn");
         retry.disabled = submitting;
-        retry.addEventListener("click", function () { submit(pending.name, pending.value, true); });
+        retry.addEventListener("click", function () { submit(true); });
         alert.appendChild(retry);
         content.appendChild(alert);
       }
@@ -3168,6 +3246,7 @@
         card.appendChild(el("h2", "config-name", item.title));
         card.appendChild(el("p", "config-current", item.value ? "Current: " + item.value : "Current value not seen yet"));
         var options = el("div", "config-options");
+        var selected = selectedValues[item.name] || "";
         if (item.name === "model") {
           var models = item.choices || [];
           if (!models.length) {
@@ -3181,34 +3260,49 @@
             var select = el("select", "config-input");
             select.setAttribute("aria-label", "Model");
             select.disabled = !!pending;
-            var apply = button("Set model", "btn primary");
             function filter() {
-              var value = select.value || item.value;
               var query = search.value.trim().toLowerCase();
               select.textContent = "";
               select.appendChild(el("option", "", "Choose a model"));
               select.options[0].value = "";
-              models.filter(function (model) { return model.toLowerCase().includes(query); }).forEach(function (model) {
+              var visible = models.filter(function (model) { return model.toLowerCase().includes(query); });
+              visible.forEach(function (model) {
                 var option = el("option", "", model);
                 option.value = model;
-                option.selected = model === value;
+                option.selected = model === selected;
                 select.appendChild(option);
               });
-              apply.disabled = !!pending || !select.value;
+              select.value = visible.indexOf(selected) < 0 ? "" : selected;
             }
             search.addEventListener("input", filter);
-            select.addEventListener("change", function () { apply.disabled = !select.value; });
-            apply.addEventListener("click", function () { submit(item.name, select.value, false); });
+            select.addEventListener("change", function () {
+              selected = select.value;
+              selectedValues[item.name] = selected;
+              syncSaveButton();
+            });
             filter();
             options.appendChild(search);
             options.appendChild(select);
-            options.appendChild(apply);
           }
         } else {
+          var choiceButtons = [];
           (item.choices || []).forEach(function (value) {
-            var b = button(value, "btn" + (value === item.value ? " selected" : ""));
+            var b = button(value, "btn" + (value === selected ? " selected" : ""));
+            b.setAttribute("aria-pressed", value === selected ? "true" : "false");
             b.disabled = !!pending;
-            b.addEventListener("click", function () { submit(item.name, value, false); });
+            b.addEventListener("click", function () {
+              if (pending) { return; }
+              selected = value;
+              selectedValues[item.name] = selected;
+              choiceButtons.forEach(function (choice) {
+                var active = choice.value === selected;
+                choice.classList.toggle("selected", active);
+                choice.setAttribute("aria-pressed", active ? "true" : "false");
+              });
+              syncSaveButton();
+            });
+            b.value = value;
+            choiceButtons.push(b);
             options.appendChild(b);
           });
         }
@@ -3217,24 +3311,32 @@
           input.type = "text";
           input.autocomplete = "off";
           input.placeholder = "Enter a value";
-          input.value = item.value || "";
+          input.value = selected;
           input.disabled = !!pending;
-          var set = button("Set", "btn primary");
-          set.disabled = !!pending;
-          set.addEventListener("click", function () { submit(item.name, input.value, false); });
-          input.addEventListener("keydown", function (ev) { if (ev.key === "Enter") { ev.preventDefault(); submit(item.name, input.value, false); } });
+          input.addEventListener("input", function () {
+            selectedValues[item.name] = input.value.trim();
+            syncSaveButton();
+          });
           options.appendChild(input);
-          options.appendChild(set);
         }
         card.appendChild(options);
         content.appendChild(card);
       });
-      if (!state.controls || !state.controls.length) { content.appendChild(el("p", "", "This agent has no model or effort settings.")); }
+      if (!state.controls || !state.controls.length) {
+        content.appendChild(el("p", "", "This agent has no model or effort settings."));
+      } else {
+        saveButton = button("Save", "btn primary wide");
+        saveButton.disabled = !!pending || dirtyChanges(state).length === 0;
+        saveButton.addEventListener("click", function () { submit(false); });
+        content.appendChild(saveButton);
+      }
     }
-    function submit(name, value, retry) {
-      if (submitting || (pending && !retry) || !value.trim()) { return; }
+    function submit(retry) {
+      if (submitting || (pending && !retry)) { return; }
+      var changes = retry ? pending.changes : dirtyChanges(latest);
+      if (!changes || !changes.length) { return; }
       if (!pending) {
-        pending = { act: act(), name: name, value: value };
+        pending = { act: act(), changes: changes };
         save(pendingKey, JSON.stringify(pending));
       }
       submitting = true;
@@ -3244,8 +3346,11 @@
           hint.textContent = r.message || "The change is still being checked. Retry the same action to check again.";
           return;
         }
+        if (r.ok) {
+          pending.changes.forEach(function (change) { submittedValues[change.name] = change.value; });
+        }
         clearPending();
-        hint.textContent = r.message || (r.ok ? "Setting queued." : "The setting was not changed.");
+        hint.textContent = r.message || (r.ok ? "Settings queued." : "The settings were not changed.");
       }).catch(function (e) {
         hint.textContent = e.message || "Could not check this change. Retry the same action.";
       }).finally(function () {

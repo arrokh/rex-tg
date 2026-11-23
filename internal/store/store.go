@@ -134,12 +134,28 @@ type migration struct {
 	sql     string
 }
 
+// schemaV5 stores reusable message templates shared by the owner's devices.
+const schemaV5 = `
+CREATE TABLE template (
+  id         TEXT PRIMARY KEY CHECK (length(id) = 32 AND id NOT GLOB '*[^0-9a-f]*'),
+  name       TEXT NOT NULL,
+  text       TEXT NOT NULL,
+  updated_at INTEGER NOT NULL
+) STRICT;
+CREATE INDEX template_updated ON template (updated_at DESC, id);
+CREATE TABLE template_deleted (
+  id         TEXT PRIMARY KEY CHECK (length(id) = 32 AND id NOT GLOB '*[^0-9a-f]*'),
+  deleted_at INTEGER NOT NULL
+) STRICT;
+`
+
 // migrations is the numbered list of schema steps. Append only.
 var migrations = []migration{
 	{version: 1, sql: schemaV1},
 	{version: 2, sql: schemaV2},
 	{version: 3, sql: schemaV3},
 	{version: 4, sql: schemaV4},
+	{version: 5, sql: schemaV5},
 }
 
 // Store is an open database.

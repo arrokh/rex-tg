@@ -71,6 +71,14 @@ func TestConfigPageBindsReadAndWriteToItsSession(t *testing.T) {
 	}
 	a := ctl.did[0]
 	if a.Op != OpConfig || a.Thread != 71 || a.Conv != 82 || a.Name != "model" || a.Value != "provider/model" {
-		t.Errorf("action not bound to page: %+v", a)
+		t.Errorf("legacy action not bound to page: %+v", a)
+	}
+	batch := []byte(`{"act":"1123456789abcdef","changes":[{"name":"model","value":"provider/model"},{"name":"effort","value":"high"}]}`)
+	if code, got := call("POST", "/api/config/do?id=cfg", owner, batch); code != http.StatusOK || got["ok"] != true || len(ctl.did) != 2 {
+		t.Fatalf("combined config action: %d %v; actions %v", code, got, ctl.did)
+	}
+	changes := ctl.did[1].Changes
+	if len(changes) != 2 || changes[0].Name != "model" || changes[1].Name != "effort" {
+		t.Errorf("combined changes not bound to page: %+v", ctl.did[1])
 	}
 }

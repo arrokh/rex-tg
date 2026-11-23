@@ -36,7 +36,7 @@ This guide is the contract between the packages of rex-tg. [design.md](design.md
 | `internal/inbound` | Safety checks, waiting queue policy, echo matching | `agents` |
 | `internal/sender` | The only writer to Telegram: outbox, parts, rate limits, progress messages | `format`, `store`, `telegram` |
 | `internal/keychain` | The bot token in the macOS Keychain, through `security` | stdlib |
-| `internal/miniapp` | Mini App server: page signature check, the buttons' key (reads and validated panel actions), Tailscale-owner check for page-bound sends, page rendering, live screen, read-only file browser, changes view, control panel (`Control`, `ControlAction.Check`, `ListFolders`), keyboard pages (`Launcher`, `/api/launch`), Annotate, and Templates (`/api/templates/send`) | goldmark |
+| `internal/miniapp` | Mini App server: page signature check, the buttons' key (reads and validated panel actions), Tailscale-owner check for page-bound sends, page rendering, live screen, read-only file browser, changes view, control panel (`Control`, `ControlAction.Check`, `ListFolders`), keyboard pages (`Launcher`, `/api/launch`), Annotate, and shared Templates (`TemplateRepository`, `/api/templates`, `/api/templates/send`) | goldmark |
 | `internal/termimg` | The `/screen` picture (PNG), from terminal lines | `golang.org/x/image` |
 | `internal/daemon` | Wiring: core loop, sender, router, alerts, housekeeping | everything |
 | `cmd/rex-tg` | CLI: `daemon`, `hook`, `login`, `new`, `install`, `uninstall`, `status`, `doctor` | everything |
@@ -124,7 +124,7 @@ func Classify(err error) Class
 ```
 
 - The reply keyboard's buttons are `inbound.Buttons` (label and command: Panel `rt`, Screen `screen`, Files `files`, Changes `changes`, Annotate `annotate`, Templates `templates`). `inbound.RouteText` reads an exact label, without emoji variation selectors, as `/<command>` before it routes the text. With the Mini App ready, the daemon sends them as `web_app` buttons (`KeyboardButton.WebApp`) whose address carries the buttons' key and the topic; a tap then sends no message.
-- `Message.WebAppData` (`Data`, `ButtonText`) is the service message that older Annotate pages made with `WebApp.sendData`; the daemon still reads their `{"v":1,"a":"annotate","d":"<draft id>"}` data from the owner. Current keyboard pages send through `/api/annotate/send` or `/api/templates/send` with the key and verified Tailscale login. Templates are localStorage-only; the endpoint binds the send to its page's topic/session and uses a durable action claim plus stable queued row id for retries.
+- `Message.WebAppData` (`Data`, `ButtonText`) is the service message that older Annotate pages made with `WebApp.sendData`; the daemon still reads their `{"v":1,"a":"annotate","d":"<draft id>"}` data from the owner. Current keyboard pages send through `/api/annotate/send` or `/api/templates/send` with the key and verified Tailscale login. Templates are shared in the SQLite database; legacy localStorage copies import without overwriting shared items, and deletion tombstones prevent restoration. The send endpoint binds the message to its page's topic/session and uses a durable action claim plus stable queued row id for retries.
 - Mini App server options: `WithLaunch(l Launcher, keyOK func(string) bool)` (the keyboard pages; `keyOK` checks `X-Rex-Key`), `WithAnnotate(a Annotations)`, `WithTailnetOnly(on bool)` (`[miniapp] tailnet_only`). `Launcher.Launch(ctx, view, thread) LaunchResult` returns `{page}`, `{pick}` or `{error}`; it sends nothing. `Annotations` has `Answers(ctx, thread, conv, before, n)` (one session, newest first, `AnswerItem{ID, At, Markdown, Plain}`; `store.AnswersBefore(..., session)` filters by the event key prefix), `SaveDraft(ctx, thread, conv, text)` and `BotName()`. `POST /api/annotate/send` turns signed notes, or notes from a key request with a verified owner Tailscale login, into `ControlAction{Op: OpNotes, Act, Thread, Conv: <the page's>, Text}` for `Control.Do`. `WithLogins(Logins)` limits the key to the owner's Tailscale logins (`Owner(login)` from signed requests, `KeyLoginOK(login)`). `config.Config.MiniAppProblem()` keeps the Mini App off with an unsafe `listen`.
 - `SendMessageParams`: `ChatID`, `MessageThreadID`, `Text`, `ParseMode` (`"HTML"` or `""`), `DisableNotification`, `ReplyMarkup *InlineKeyboardMarkup`, `Keyboard *ReplyKeyboardMarkup` (a reply keyboard, sent as `reply_markup` only when `ReplyMarkup` is nil), `ReplyToMessageID`; link previews are always off (`link_preview_options.is_disabled`).
 - Errors: an `*APIError{Method, Code, Description, RetryAfter, Held, Local}` when Telegram answers `ok: false`, or when the client refuses a call during a hold (then `Local` is set, and no request is made). Network errors, timeouts, and 5xx answers come back as `*UnknownOutcomeError`, because the request may have taken effect.
@@ -180,6 +180,12 @@ API (every method takes `ctx` first; times are `time.Time`, stored as Unix milli
 func Open(path string) (*Store, error)
 func OpenReadOnly(path string) (*Store, error)
 func (s *Store) Close() error
+
+// Shared Mini App templates (schema version 5)
+Templates(ctx context.Context) ([]Template, error)
+SaveTemplate(ctx context.Context, t Template) error
+ImportTemplates(ctx context.Context, templates []Template) (imported int, deletedIDs []string, err error)
+DeleteTemplate(ctx context.Context, id string) error
 
 // Sessions
 UpsertConversation(c Conversation) (Conversation, error)        // by (runtime, native_id)

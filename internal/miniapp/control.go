@@ -143,19 +143,26 @@ const (
 	PageChanges = "changes"
 )
 
+// ConfigChange is one model or effort selection submitted by Config.
+type ConfigChange struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
+}
+
 // ControlAction is one action of the control panel.
 type ControlAction struct {
-	Op     string `json:"op"`
-	Act    string `json:"act"` // a random id that the page makes for each tap: an action runs at most once
-	Pane   int64  `json:"pane,omitempty"`
-	Thread int64  `json:"thread,omitempty"`
-	Name   string `json:"name,omitempty"`
-	Agent  string `json:"agent,omitempty"`
-	Path   string `json:"path,omitempty"`
-	Kind   string `json:"kind,omitempty"`  // OpPage: PageScreen, PageFiles, or PageChanges
-	Text   string `json:"text,omitempty"`  // OpNotes/OpTemplateMessage: text to send as a chat message
-	Conv   int64  `json:"conv,omitempty"`  // page-bound action: the page's current agent session
-	Value  string `json:"value,omitempty"` // OpConfig: setting value
+	Op      string         `json:"op"`
+	Act     string         `json:"act"` // a random id that the page makes for each tap: an action runs at most once
+	Pane    int64          `json:"pane,omitempty"`
+	Thread  int64          `json:"thread,omitempty"`
+	Name    string         `json:"name,omitempty"`
+	Agent   string         `json:"agent,omitempty"`
+	Path    string         `json:"path,omitempty"`
+	Kind    string         `json:"kind,omitempty"`    // OpPage: PageScreen, PageFiles, or PageChanges
+	Text    string         `json:"text,omitempty"`    // OpNotes/OpTemplateMessage: text to send as a chat message
+	Conv    int64          `json:"conv,omitempty"`    // page-bound action: the page's current agent session
+	Value   string         `json:"value,omitempty"`   // OpConfig legacy single setting value
+	Changes []ConfigChange `json:"changes,omitempty"` // OpConfig: one Save may update model and effort
 }
 
 // ControlResult is the outcome of an action, shown on the page.
@@ -232,8 +239,24 @@ func (a ControlAction) Check() error {
 			return errors.New("no topic")
 		}
 	case OpConfig:
-		if a.Thread <= 0 || a.Conv <= 0 || strings.TrimSpace(a.Name) == "" || strings.TrimSpace(a.Value) == "" {
+		if a.Thread <= 0 || a.Conv <= 0 {
 			return errors.New("choose a setting and value")
+		}
+		changes := a.Changes
+		if len(changes) == 0 {
+			changes = []ConfigChange{{Name: a.Name, Value: a.Value}}
+		} else if a.Name != "" || a.Value != "" {
+			return errors.New("choose a setting and value")
+		}
+		if len(changes) < 1 || len(changes) > 2 {
+			return errors.New("choose one or two settings")
+		}
+		seen := map[string]bool{}
+		for _, change := range changes {
+			if (change.Name != "model" && change.Name != "effort") || strings.TrimSpace(change.Value) == "" || seen[change.Name] {
+				return errors.New("choose a valid model or effort value")
+			}
+			seen[change.Name] = true
 		}
 	case OpNotes, OpTemplateMessage:
 		switch {
