@@ -111,7 +111,7 @@ func (d *daemon) updateWaitNotice(threadID, updateID int64, text string, n int) 
 	d.spawn(func() {
 		_ = d.snd.Call(sender.PriorityEdit, func(ctx context.Context, tg *telegram.Client) error {
 			_, err := tg.EditMessageText(ctx, telegram.EditMessageTextParams{
-				ChatID: chat, MessageID: msg, Text: text, ReplyMarkup: waitMarkup(updateID, n, sendable)})
+				ChatID: chat, MessageID: msg, Text: text, ParseMode: "HTML", ReplyMarkup: waitMarkup(updateID, n, sendable)})
 			return err
 		})
 	})

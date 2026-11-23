@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"rex-tg/internal/agents"
 	"rex-tg/internal/format"
 	"rex-tg/internal/inbound"
 	"rex-tg/internal/miniapp"
@@ -790,37 +791,96 @@ func (c *controlPanel) config(a miniapp.ControlAction) miniapp.ControlResult {
 	if err != nil || conv.ThreadID != th.ID {
 		return controlFail("This topic is in another session now. The setting was not changed.")
 	}
-	setting, ctrl, ok := d.configControl(conv, a.Name)
-	if !ok || setting.Name != "model" && setting.Name != "effort" {
-		return controlFail("This setting is not available for this agent.")
+	changes := a.Changes
+	if len(changes) == 0 {
+		changes = []miniapp.ConfigChange{{Name: a.Name, Value: a.Value}}
 	}
-	if a.Name == "model" && len(setting.Choices) == 0 {
-		return controlFail("No model list is available for this session yet.")
+	adapter, ok := d.adapters[conv.Runtime].(agents.Controller)
+	if !ok {
+		return controlFail("This agent has no configurable settings.")
 	}
-	value, err := setting.CheckValue(a.Value)
-	if err != nil {
-		if a.Name == "model" {
-			return controlFail("That model is not in this session's list. Reload Config and choose an available model.")
+	ctrlValues := d.currentValues(conv, adapter)
+	proposed := make(map[string]string, len(ctrlValues)+len(changes))
+	for name, value := range ctrlValues {
+		proposed[name] = value
+	}
+	validated := make([]miniapp.ConfigChange, 0, len(changes))
+	for _, change := range changes {
+		setting, _, ok := d.configControl(conv, change.Name)
+		if !ok || setting.Name != "model" && setting.Name != "effort" {
+			return controlFail("This setting is not available for this agent.")
 		}
-		return controlFail(err.Error())
+		if change.Name == "model" && len(setting.Choices) == 0 {
+			return controlFail("No model list is available for this session yet.")
+		}
+		value, err := setting.CheckValue(change.Value)
+		if err != nil {
+			if change.Name == "model" {
+				return controlFail("That model is not in this session's list. Reload Config and choose an available model.")
+			}
+			return controlFail(err.Error())
+		}
+		if proposed[change.Name] == value {
+			continue
+		}
+		proposed[change.Name] = value
+		validated = append(validated, miniapp.ConfigChange{Name: change.Name, Value: value})
 	}
-	text, err := ctrl.Command(setting.Name, value, d.currentValues(conv, ctrl))
-	if err != nil {
-		return controlFail(err.Error())
+	if len(validated) == 0 {
+		return controlFail("Choose a new model or effort value before saving.")
 	}
-	if queued, err := d.st.QueuedInbound(d.ctx, th.ID); err == nil {
-		for _, q := range queued {
-			if q.Body == text {
-				return controlFail("That command is already waiting for the agent.")
+	type queuedChange struct {
+		text   string
+		values map[string]string
+	}
+	commands := make([]queuedChange, 0, len(validated))
+	for _, change := range validated {
+		text, err := adapter.Command(change.Name, change.Value, proposed)
+		if err != nil {
+			return controlFail(err.Error())
+		}
+		found := -1
+		for i := range commands {
+			if commands[i].text == text {
+				found = i
+				break
 			}
 		}
+		if found < 0 {
+			commands = append(commands, queuedChange{text: text, values: map[string]string{change.Name: change.Value}})
+		} else {
+			commands[found].values[change.Name] = change.Value
+		}
 	}
-	orig := configRowID(a.Act)
-	if !d.keepPending(-orig, ctlSet{conv: conv.ID, name: setting.Name, value: value}) ||
-		!d.queueText(th.ID, orig, 0, text, kindControl, inbound.ActText) {
-		return controlFail("Could not queue this setting change.")
+	queued, err := d.st.QueuedInbound(d.ctx, th.ID)
+	if err != nil {
+		return controlFail("Could not check the topic queue. Try again.")
 	}
-	return miniapp.ControlResult{OK: true, Message: "Queued for the agent. It will be applied when the agent is idle."}
+	base := configRowID(a.Act)
+	queuedCount := 0
+	for i, command := range commands {
+		alreadyQueued := false
+		for _, q := range queued {
+			if q.Body == command.text {
+				alreadyQueued = true
+				break
+			}
+		}
+		if alreadyQueued {
+			queuedCount++
+			continue
+		}
+		orig := base + int64(i)
+		if !d.keepPending(-orig, ctlSet{conv: conv.ID, values: command.values}) {
+			return controlFail("Could not queue every setting change. Check the topic queue before trying again.")
+		}
+		if !d.queueText(th.ID, orig, 0, command.text, kindControl, inbound.ActText) {
+			d.controlTyped(-orig, false)
+			return controlFail("Could not queue every setting change. Check the topic queue before trying again.")
+		}
+		queuedCount++
+	}
+	return miniapp.ControlResult{OK: true, Message: fmt.Sprintf("%d setting command(s) are queued or already waiting. They will be applied when the agent is idle.", queuedCount)}
 }
 
 // notes sends the notes of an Annotate or answer page to the topic's agent,

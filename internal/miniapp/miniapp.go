@@ -78,26 +78,27 @@ const MaxAge = 24 * time.Hour
 
 // Server serves the Mini App.
 type Server struct {
-	secret  []byte       // HMAC key from the bot token
-	owner   func() int64 // the paired owner's user id (0: none)
-	load    func(id string) (Page, bool)
-	screen  func(Page) Screen    // nil: no live screen
-	files   func() bool          // whether the file browser is on (nil: off)
-	changes func() bool          // whether the changes view is on (nil: off)
-	turn    func(Page) TurnRange // the last turn of a changes page's topic (nil: none)
-	redact  func(string) string  // cleans a file's text before it is shown
-	control Control              // the control panel (nil: off)
-	home    string               // where the control panel's folder explorer starts
-	launch  Launcher             // the keyboard buttons' pages (nil: off)
-	keyOK   func(string) bool    // checks the keyboard's key (nil: no key works)
-	annot   Annotations          // the Annotate page (nil: off)
-	config  Configurator         // topic/session settings (nil: off)
-	tailnet bool                 // refuse a request that did not come from the tailnet
-	logins  Logins               // whose tailnet devices may use the key (nil: any)
-	reads   reads                // folder and file reads that may wait for macOS (slowread.go)
-	wait    time.Duration        // how long a request waits for such a read
-	now     func() time.Time
-	log     *slog.Logger
+	secret    []byte       // HMAC key from the bot token
+	owner     func() int64 // the paired owner's user id (0: none)
+	load      func(id string) (Page, bool)
+	screen    func(Page) Screen    // nil: no live screen
+	files     func() bool          // whether the file browser is on (nil: off)
+	changes   func() bool          // whether the changes view is on (nil: off)
+	turn      func(Page) TurnRange // the last turn of a changes page's topic (nil: none)
+	redact    func(string) string  // cleans a file's text before it is shown
+	control   Control              // the control panel (nil: off)
+	home      string               // where the control panel's folder explorer starts
+	launch    Launcher             // the keyboard buttons' pages (nil: off)
+	keyOK     func(string) bool    // checks the keyboard's key (nil: no key works)
+	annot     Annotations          // the Annotate page (nil: off)
+	config    Configurator         // topic/session settings (nil: off)
+	templates TemplateRepository   // shared message templates (nil: off)
+	tailnet   bool                 // refuse a request that did not come from the tailnet
+	logins    Logins               // whose tailnet devices may use the key (nil: any)
+	reads     reads                // folder and file reads that may wait for macOS (slowread.go)
+	wait      time.Duration        // how long a request waits for such a read
+	now       func() time.Time
+	log       *slog.Logger
 	// refusedAt is when a refusal was last logged: the address is public,
 	// so refusals are logged at most once a minute.
 	refusedAt atomic.Int64
@@ -267,8 +268,8 @@ var (
 // /api/page?id=…,
 // /api/screen?id=…, /api/files?id=…&path=… and
 // /api/changes?id=…&base=…[&path=…&new=1], and the control panel's
-// /api/control?id=…, /api/control/folders?id=…&path=…[&hidden=1] and
-// POST /api/control/do?id=… and /api/templates/send?id=…
+// /api/control?id=…, /api/control/folders?id=…&path=…[&hidden=1],
+// POST /api/control/do?id=…, /api/templates?id=…, and /api/templates/send?id=…
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /app", func(w http.ResponseWriter, r *http.Request) {
@@ -303,6 +304,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/annotate", s.annotateList)
 	mux.HandleFunc("POST /api/annotate/draft", s.annotateDraft)
 	mux.HandleFunc("POST /api/annotate/send", s.annotateSend)
+	mux.HandleFunc("GET /api/templates", s.templateList)
+	mux.HandleFunc("POST /api/templates", s.templateAction)
 	mux.HandleFunc("POST /api/templates/send", s.templateSend)
 	if !s.tailnet {
 		return mux
@@ -451,8 +454,13 @@ func (s *Server) page(w http.ResponseWriter, r *http.Request) {
 	if s.annot != nil && s.control != nil && (p.Kind == KindAnnotate || p.Kind == KindAnswer) && p.Thread > 0 && p.Conv > 0 {
 		out["can_send_notes"] = s.canSendBoundMessage(r)
 	}
-	if s.control != nil && p.Kind == KindTemplates && p.Thread > 0 && p.Conv > 0 {
-		out["can_send_templates"] = s.canSendBoundMessage(r)
+	if p.Kind == KindTemplates {
+		if s.templates != nil {
+			out["can_manage_templates"] = s.canSendBoundMessage(r)
+		}
+		if s.control != nil && p.Thread > 0 && p.Conv > 0 {
+			out["can_send_templates"] = s.canSendBoundMessage(r)
+		}
 	}
 	_ = json.NewEncoder(w).Encode(out)
 }

@@ -176,7 +176,7 @@ var latestVersion = migrations[len(migrations)-1].version
 
 func TestFreshDatabaseIsTheLatestVersion(t *testing.T) {
 	s := newStore(t)
-	if v := must(s.version(ctx)); v != latestVersion || v != 4 {
+	if v := must(s.version(ctx)); v != latestVersion || v != 5 {
 		t.Fatalf("version = %d", v)
 	}
 }

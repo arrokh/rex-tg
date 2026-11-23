@@ -1093,8 +1093,14 @@ func TestOneWaitNoticeForAllWaitingMessages(t *testing.T) {
 	if two.ID <= command || two.ID <= notice.ID {
 		t.Fatal("waiting notice did not move below the newer message")
 	}
+	if !strings.Contains(two.Text, "- Message 1: first thing") || !strings.Contains(two.Text, "- Message 2: /compact") {
+		t.Fatalf("waiting notice is missing queued previews: %q", two.Text)
+	}
 	latest := e.say(thread, "second thing")
 	queue := e.waitText(thread, "3 messages wait until the agent is idle")
+	if !strings.Contains(queue.Text, "- Message 3: second thing") {
+		t.Fatalf("waiting notice is missing the newest preview: %q", queue.Text)
+	}
 	if queue.ID <= latest || buttonData(queue, "Send now") == "" || buttonData(queue, "Send all now") != "" {
 		t.Fatalf("wrong notice position or action: %+v", queue)
 	}

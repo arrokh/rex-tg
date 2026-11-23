@@ -34,9 +34,10 @@ type Configurator interface {
 
 // ConfigAction is a page-bound change to a model or effort setting.
 type ConfigAction struct {
-	Act   string `json:"act"`
-	Name  string `json:"name"`
-	Value string `json:"value"`
+	Act     string         `json:"act"`
+	Changes []ConfigChange `json:"changes,omitempty"`
+	Name    string         `json:"name,omitempty"`  // legacy single-setting action
+	Value   string         `json:"value,omitempty"` // legacy single-setting action
 }
 
 // WithConfig turns on topic/session-bound configuration pages.
@@ -104,11 +105,12 @@ func (s *Server) configDo(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"This setting change is not valid."}`, http.StatusBadRequest)
 		return
 	}
-	if !actID.MatchString(body.Act) || strings.TrimSpace(body.Name) == "" || strings.TrimSpace(body.Value) == "" {
+	if !actID.MatchString(body.Act) {
 		http.Error(w, `{"error":"Choose a setting and value, then try again."}`, http.StatusBadRequest)
 		return
 	}
-	a := ControlAction{Op: OpConfig, Act: body.Act, Thread: p.Thread, Conv: p.Conv, Name: body.Name, Value: body.Value}
+	a := ControlAction{Op: OpConfig, Act: body.Act, Thread: p.Thread, Conv: p.Conv,
+		Name: body.Name, Value: body.Value, Changes: body.Changes}
 	if err := a.Check(); err != nil {
 		http.Error(w, `{"error":"This setting change is not valid."}`, http.StatusBadRequest)
 		return

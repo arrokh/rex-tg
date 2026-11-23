@@ -91,15 +91,40 @@ func waitNotice(reason string, canSteer bool) string {
 }
 
 // waitNoticeFor is the text of the topic's one waiting notice: what the
-// oldest message waits for, and how many messages wait.
-func waitNoticeFor(what string, n int) string {
+// oldest message waits for, how many messages wait, and a short preview of each.
+func waitNoticeFor(what string, queued []store.Inbound) string {
 	if what == "" {
 		what = waitIdle
 	}
+	n := len(queued)
 	if n > 1 {
-		return fmt.Sprintf("⏳ %d messages wait %s", n, what)
+		what = fmt.Sprintf("⏳ %d messages wait %s", n, what)
+	} else {
+		what = "⏳ Waiting " + what
 	}
-	return "⏳ Waiting " + what
+	return what + queuedPreviews(queued)
+}
+
+func queuedPreviews(queued []store.Inbound) string {
+	var b strings.Builder
+	for i, in := range queued {
+		fmt.Fprintf(&b, "\n- Message %d: %s", i+1, queuedPreview(in.Body))
+	}
+	return b.String()
+}
+
+// queuedPreview collapses whitespace and shows at most 25 runes plus an
+// ellipsis. Escape it because waiting notices are sent as Telegram HTML.
+func queuedPreview(body string) string {
+	preview := strings.Join(strings.Fields(body), " ")
+	if preview == "" {
+		preview = "(empty message)"
+	}
+	runes := []rune(preview)
+	if len(runes) > 25 {
+		preview = string(runes[:25]) + "…"
+	}
+	return format.Escape(preview)
 }
 
 // reasonPromptShown: an alert is open while the agent's state still says
@@ -380,8 +405,9 @@ func (d *daemon) onPrepared(e evPrepared) {
 		// flash one.
 		// One notice for the topic: the oldest waiting message has it, and
 		// it counts the messages behind it.
-		n := d.waitingCount(tid)
-		text := waitNoticeFor(e.res.notice, n)
+		queued := d.waitingInbound(tid)
+		n := max(len(queued), 1)
+		text := waitNoticeFor(e.res.notice, queued)
 		if d.waitNoticed[e.in.UpdateID] || e.in.Reason == reasonWaitNoticed {
 			d.updateWaitNotice(tid, e.in.UpdateID, text, n)
 		}
@@ -433,22 +459,6 @@ func waitMarkup(updateID int64, total, sendable int) *telegram.InlineKeyboardMar
 	}
 	row = append(row, telegram.InlineKeyboardButton{Text: cancel, CallbackData: fmt.Sprintf("c:%d", updateID)})
 	return &telegram.InlineKeyboardMarkup{InlineKeyboard: [][]telegram.InlineKeyboardButton{row}}
-}
-
-// waitingCount is the number of messages that wait in a topic's queue, not
-// counting the parts that are being joined (core).
-func (d *daemon) waitingCount(threadID int64) int {
-	qs, err := d.st.QueuedInbound(d.ctx, threadID)
-	if err != nil {
-		return 1
-	}
-	n := 0
-	for _, q := range qs {
-		if _, joining := d.joining[q.UpdateID]; !joining {
-			n++
-		}
-	}
-	return max(n, 1)
 }
 
 // forget drops what the core keeps for a message that reached a final state,

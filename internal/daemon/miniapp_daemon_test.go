@@ -351,7 +351,7 @@ func pageID(u string) string {
 }
 
 // TestConfigUsesTheLinkedSession opens Config for a linked topic, reads its
-// settings, and queues one validated setting change through the normal input path.
+// settings, and queues one combined model/effort change through the input path.
 func TestConfigUsesTheLinkedSession(t *testing.T) {
 	addr := freeAddr(t)
 	e, _, thread := piTopicCfg(t, "pi-config", func(e *env) {
@@ -405,12 +405,13 @@ func TestConfigUsesTheLinkedSession(t *testing.T) {
 	if code, result := post(`{"act":"2123456789abcdef0123456789abcdef","name":"model","value":"test/not-available"}`); code != http.StatusOK || result["ok"] != false || !strings.Contains(fmt.Sprint(result["message"]), "not in this session") {
 		t.Fatalf("unlisted model: %d %v", code, result)
 	}
-	if code, result := post(`{"act":"0123456789abcdef0123456789abcdef","name":"model","value":"test/model-two"}`); code != http.StatusOK || result["ok"] != true {
-		t.Fatalf("change model: %d %v", code, result)
+	if code, result := post(`{"act":"0123456789abcdef0123456789abcdef","changes":[{"name":"model","value":"test/model-two"},{"name":"effort","value":"high"}]}`); code != http.StatusOK || result["ok"] != true {
+		t.Fatalf("combined model and effort change: %d %v", code, result)
 	}
-	e.waitFor("Config setting typed once", func() bool { return len(e.pastes()) == 1 })
-	if got := e.pastes()[0]; got != "/model test/model-two" {
-		t.Errorf("typed %q, want the agent's model command", got)
+	e.waitFor("both Config commands typed", func() bool { return len(e.pastes()) == 2 })
+	got := e.pastes()
+	if got[0] != "/model test/model-two" || got[1] != "/thinking high" {
+		t.Errorf("typed commands %q, want model then thinking", got)
 	}
 
 	th, ok, err := e.peek().ThreadByTopic(context.Background(), chatID, thread)
@@ -430,8 +431,8 @@ func TestConfigUsesTheLinkedSession(t *testing.T) {
 	if code, result := post(`{"act":"1123456789abcdef0123456789abcdef","name":"effort","value":"medium"}`); code != http.StatusOK || result["ok"] != false {
 		t.Errorf("stale Config action: %d %v", code, result)
 	}
-	if got := len(e.pastes()); got != 1 {
-		t.Errorf("stale action typed a second command: %v", e.pastes())
+	if got := len(e.pastes()); got != 2 {
+		t.Errorf("stale action typed another command: %v", e.pastes())
 	}
 }
 

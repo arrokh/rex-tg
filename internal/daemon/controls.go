@@ -254,7 +254,8 @@ func (d *daemon) applyControl(th store.Thread, conv store.Conversation, c agents
 // command is typed (core: daemon.ctlPending, by row id).
 type ctlSet struct {
 	conv        int64
-	name, value string
+	name, value string // legacy single value
+	values      map[string]string
 }
 
 // controlTyped keeps the value of a control command that was typed (core),
@@ -270,7 +271,11 @@ func (d *daemon) controlTyped(row int64, typed bool) bool {
 		d.log.Warn("control: forget the pending command", "err", err)
 	}
 	if typed {
-		d.ctlMerge(p.conv, map[string]string{p.name: p.value}, false)
+		values := p.values
+		if len(values) == 0 && p.name != "" {
+			values = map[string]string{p.name: p.value}
+		}
+		d.ctlMerge(p.conv, values, false)
 	}
 	return true
 }
@@ -282,10 +287,11 @@ func ctlPendingKey(row int64) string { return fmt.Sprintf("ctl_pending:%d", row)
 // keepPending records a queued control command (core).
 func (d *daemon) keepPending(row int64, p ctlSet) bool {
 	b, err := json.Marshal(struct {
-		Conv  int64  `json:"conv"`
-		Name  string `json:"name"`
-		Value string `json:"value"`
-	}{p.conv, p.name, p.value})
+		Conv   int64             `json:"conv"`
+		Name   string            `json:"name,omitempty"`
+		Value  string            `json:"value,omitempty"`
+		Values map[string]string `json:"values,omitempty"`
+	}{p.conv, p.name, p.value, p.values})
 	if err == nil {
 		err = d.st.Set(d.ctx, ctlPendingKey(row), string(b))
 	}
@@ -313,9 +319,10 @@ func (d *daemon) loadPending(ctx context.Context) {
 		in, found, err := d.st.InboundByID(ctx, row)
 		v, ok, gerr := d.st.Get(ctx, k)
 		var p struct {
-			Conv  int64  `json:"conv"`
-			Name  string `json:"name"`
-			Value string `json:"value"`
+			Conv   int64             `json:"conv"`
+			Name   string            `json:"name"`
+			Value  string            `json:"value"`
+			Values map[string]string `json:"values"`
 		}
 		// Only rows that still wait: a row that was being typed at the stop
 		// becomes unknown (RecoverTyping), and its value is not counted.
@@ -323,7 +330,7 @@ func (d *daemon) loadPending(ctx context.Context) {
 			_ = d.st.Delete(ctx, k)
 			continue
 		}
-		d.ctlPending[row] = ctlSet{conv: p.Conv, name: p.Name, value: p.Value}
+		d.ctlPending[row] = ctlSet{conv: p.Conv, name: p.Name, value: p.Value, values: p.Values}
 	}
 }
 
