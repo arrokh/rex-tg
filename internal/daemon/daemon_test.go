@@ -2899,10 +2899,10 @@ func TestLostReplyIsSentAgainWithOneTap(t *testing.T) {
 // /resend without an id sends the newest reply that may not have arrived, and
 // the id of a notice stands for the reply that it is about. Here the check
 // cannot post its note three times, so the reply gets a notice of its own.
-// The answer goes out as a rich message, so only the notes fail.
+// The answer goes out as one HTML message, so only the notes fail.
 func TestResendWithoutIDOrWithANoticeID(t *testing.T) {
-	e, p, thread := piTopicCfg(t, "pi-resend-ids", func(e *env) { e.cfg.Display.RichMessages = true })
-	e.tg.LoseAnswerNext("sendRichMessage", 1)              // the answer may have arrived
+	e, p, thread := piTopic(t, "pi-resend-ids")
+	e.tg.LoseAnswerNext("sendMessage", 1)                  // the answer may have arrived
 	e.tg.FailNext("sendMessage", 3, 502, "Bad Gateway", 0) // the three check notes
 	p.Final("first lost answer")
 	var answerID, noticeID int64

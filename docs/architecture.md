@@ -408,7 +408,7 @@ For deeper behavior use [design.md](design.md); for exported APIs use [implement
 | Completion summary | A short successful turn leaves its answer; longer turns, failures, and stopped turns can retain a summary. |
 | Verbose / reasoning | Per-topic tool calls/output and stored reasoning can be shown. Reasoning is available only when the agent records it. |
 | Live draft text | Optional `[display] stream`; off by default. Drafts are previews, not durable delivered answers. |
-| Rich / long answers | Telegram-rich messages where supported; safe HTML/document fallback after a definite rejection. Optional Mini App whole-answer pages. |
+| Answers | Markdown rendered through the shared Telegram HTML formatter; long answers use documents or Mini App whole-answer pages. Previously queued rich-message parts remain supported. |
 | Receipts and reply context | Reactions reflect delivery/acknowledgment. Replies and selected quotes carry context; compatible long input parts are joined. Commands do not receive appended quotes. |
 | Work on the Mac | Mac-originated turns can stay on the Mac behind one notice. Send a Telegram message to return to Telegram; the notice can offer the latest answer. |
 | Quick replies | Configurable one-tap answer buttons; off until `[display] quick_replies` is set. |
@@ -427,7 +427,7 @@ Requires `[miniapp] url` and HTTPS via Tailscale Serve. Keep the listener on loo
 | Control panel | Agents, Topics, and New agent tabs; search, state filters, grouping, open topics, rename, unlink, and clean up stopped topics. |
 | Folder explorer | Starts in your home folder; shows folders, optional hidden entries, pinned/recent folders, and repository badges. Forget one/all recent folders without deleting files. |
 | Live screen | Read-only terminal colors, refresh while visible, pause, fit width, and scroll-to-bottom controls. It sends no input. |
-| File browser | Read-only folder tree; redacted text/Markdown and supported image previews. Path containment, ignored-file filtering, and credential-name filtering apply. |
+| File browser | Read-only folder tree; redacted text/Markdown, supported image and video previews. HTML/video browser links require the owner's Tailscale identity. Path containment, ignored-file filtering, and credential-name filtering apply. |
 | Changes | Uncommitted, branch, and last-turn views; file tree, diffs, wrapping, next/previous files, and supported image previews. |
 | Whole answer | Large answer page with formatted text, tables, and code. Older pages without a session binding may be copy-only. |
 | Annotate | Select text or paragraphs, add notes, and send them to the page's bound agent session; copy or prefill chat as alternatives. Keyboard launches need the verified owner Tailscale login; signed launches need fresh Telegram init data. |

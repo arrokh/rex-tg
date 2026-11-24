@@ -123,9 +123,8 @@ type Config struct {
 		// its answer only when the turn took at least this long; a shorter
 		// turn leaves just its answer. "0s" keeps every summary. Default 2m.
 		SummaryAfter Duration `toml:"summary_after"`
-		// RichMessages sends final answers with Telegram's sendRichMessage
-		// (Bot API 10.1) instead of HTML parts, so Telegram renders tables
-		// and code itself. On by default.
+		// RichMessages is retained so older config files still load. All
+		// Markdown now uses the same HTML renderer; this setting is ignored.
 		RichMessages bool `toml:"rich_messages"`
 		// SendImages sends the image files that a final answer names to the
 		// topic, right after the answer. On by default.
@@ -274,7 +273,7 @@ func Default(home string) Config {
 	c.Display.ProgressEditInterval = secs(5)
 	c.Display.ProgressAnimation = secs(0)
 	c.Display.SummaryAfter = secs(120)
-	c.Display.RichMessages = true
+	c.Display.RichMessages = false
 
 	c.InputSettings.QueueExpiry = Duration{30 * time.Minute}
 	c.InputSettings.JoinWindow = Duration{300 * time.Millisecond}

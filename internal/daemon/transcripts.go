@@ -24,7 +24,6 @@ const (
 	// maxChatMessages is the most messages of message_length for one text;
 	// a longer one uses messages of up to partLimit.
 	maxChatMessages = 6
-	maxRichRunes    = 32768
 )
 
 // tailer follows the transcript of one session that belongs to a topic.
@@ -183,7 +182,7 @@ func (d *daemon) onTailScan(e evTailScan) {
 		for _, f := range e.finals {
 			it := store.OutboxItem{
 				ThreadID: e.thread, Key: "backfill:" + f.Key, Kind: "backfill", Silent: true,
-				Parts: d.markdownParts(f.Text, "backfill", false),
+				Parts: d.markdownParts(f.Text, "backfill"),
 			}
 			if len(it.Parts) > 0 {
 				items = append(items, it)
@@ -333,20 +332,20 @@ func (d *daemon) saveSnapshot(threadID int64, t *turn.Tracker) {
 
 // markdownParts turns Markdown into outbox parts: redacted and split like
 // chat messages (format.Messages: about [display] message_length characters
-// each, at paragraphs and headings, no "(1/2)" counters), one document when
-// the text is longer than four full messages, or one rich part for a final
-// answer when rich messages are on.
-func (d *daemon) markdownParts(md, kind string, allowRich bool) []store.PartContent {
+// each, at paragraphs and headings, no "(1/2)" counters), or one document
+// when the text is longer than four full messages. All Markdown uses the same
+// Telegram HTML renderer, including final answers.
+func (d *daemon) markdownParts(md, kind string) []store.PartContent {
 	md = format.Redact(md)
 	// A code block with lines too wide for a phone goes as a file after the
 	// message, which keeps a short preview of it.
 	short, code := format.SplitWideCode(md)
-	parts := d.textParts(short, kind, allowRich)
+	parts := d.textParts(short, kind)
 	if len(parts) == 0 {
 		return nil
 	}
 	if len(parts) == 1 && parts[0].Format == store.FormatDocument {
-		return d.textParts(md, kind, allowRich) // too long for messages: one file holds it all
+		return d.textParts(md, kind) // too long for messages: one file holds it all
 	}
 	for _, f := range code {
 		parts = append(parts, store.PartContent{Content: f.Content, Format: store.FormatDocument, Filename: f.Name})
@@ -355,10 +354,7 @@ func (d *daemon) markdownParts(md, kind string, allowRich bool) []store.PartCont
 }
 
 // textParts is the message, or messages, of markdown (markdownParts).
-func (d *daemon) textParts(md, kind string, allowRich bool) []store.PartContent {
-	if allowRich && d.cfg.Display.RichMessages && format.UTF16Len(md) <= maxRichRunes && md != "" {
-		return []store.PartContent{{Content: md, Format: store.FormatRich}}
-	}
+func (d *daemon) textParts(md, kind string) []store.PartContent {
 	parts := d.messageParts(md)
 	total := 0
 	for _, p := range parts {
@@ -423,7 +419,7 @@ func (d *daemon) work(th store.Thread, acts []turn.Action) []store.OutboxItem {
 			} else if long, ok := d.longAnswerIf(a.Kind == "answer", th, a.Key, a.Markdown); ok {
 				parts = long // its start; the whole answer is a Mini App page
 			} else {
-				parts = d.markdownParts(a.Markdown, a.Kind, a.Kind == "answer")
+				parts = d.markdownParts(a.Markdown, a.Kind)
 			}
 			if len(parts) == 0 {
 				continue

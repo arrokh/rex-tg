@@ -246,10 +246,9 @@ func TestLongAnswerOpensInTheMiniApp(t *testing.T) {
 	}
 }
 
-func TestSplitAnswerUsesWholePageWhenRichMessagesAreOff(t *testing.T) {
+func TestSplitAnswerUsesWholePageWhenHTMLWouldSplit(t *testing.T) {
 	e, p, thread := piTopicCfg(t, "pi-split-answer-app", func(e *env) {
 		e.cfg.MiniApp.URL = "https://mac.example.ts.net:8443"
-		e.cfg.Display.RichMessages = false
 		e.cfg.Display.MessageLength = 4000
 	})
 	para := "A long paragraph. " + strings.Repeat("😀", 600)
@@ -274,10 +273,9 @@ func TestSplitAnswerUsesWholePageWhenRichMessagesAreOff(t *testing.T) {
 	}
 }
 
-func TestSingleParagraphStaysInOneMessageWhenRichMessagesAreOff(t *testing.T) {
+func TestSingleParagraphStaysInOneHTMLMessage(t *testing.T) {
 	e, p, thread := piTopicCfg(t, "pi-single-paragraph-app", func(e *env) {
 		e.cfg.MiniApp.URL = "https://mac.example.ts.net:8443"
-		e.cfg.Display.RichMessages = false
 	})
 	answerText := "A single paragraph. " + strings.Repeat("x", 1600)
 	p.User("write one long paragraph")

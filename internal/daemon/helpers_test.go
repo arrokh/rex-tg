@@ -72,12 +72,10 @@ func newEnvSerial(t *testing.T) *env {
 	cfg.Rex.ScanInterval = config.Duration{Duration: 200 * time.Millisecond}
 	cfg.Display.ProgressDelay = config.Duration{Duration: 150 * time.Millisecond}
 	cfg.Display.ProgressEditInterval = config.Duration{Duration: 100 * time.Millisecond}
-	// The tests count edits and check answers as HTML: no animation, and no
-	// rich messages unless a test turns them on.
+	// The tests count edits and check answers as HTML, with no animation.
 	cfg.Display.ProgressAnimation = config.Duration{}
 	cfg.Display.SummaryAfter = config.Duration{} // tests check the summaries
 	cfg.MiniApp.Listen = "127.0.0.1:0"           // tests run side by side: any free port
-	cfg.Display.RichMessages = false
 	cfg.InputSettings.JoinWindow = config.Duration{Duration: 50 * time.Millisecond}
 	cfg.InputSettings.JoinWindowLong = config.Duration{Duration: 100 * time.Millisecond}
 	cfg.InputSettings.BusyAfterTyping = config.Duration{Duration: 400 * time.Millisecond}

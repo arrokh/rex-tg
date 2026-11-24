@@ -75,11 +75,9 @@ func TestReplyQuotesTheAnsweredMessage(t *testing.T) {
 	}
 }
 
-// An answer sent as a rich message (the default) reaches the bot without
-// text when the user replies to it (seen live). The quote then comes from
-// what rex-tg sent, as plain text.
-func TestReplyToARichAnswerQuotesIt(t *testing.T) {
-	e, p, thread := piTopicCfg(t, "pi-reply-rich", func(e *env) { e.cfg.Display.RichMessages = true })
+// A reply to a formatted answer quotes the plain text rex-tg sent.
+func TestReplyToAFormattedAnswerQuotesIt(t *testing.T) {
+	e, p, thread := piTopic(t, "pi-reply-formatted")
 	p.User("plan it")
 	time.Sleep(10 * time.Millisecond) // the answer comes after the prompt: the pane is idle then
 	p.Final("My plan: **three PRs**, then a retest.")

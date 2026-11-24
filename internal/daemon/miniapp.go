@@ -186,7 +186,7 @@ func (d *daemon) longAnswer(th store.Thread, key, md string) ([]store.PartConten
 	}
 	threshold := max(d.cfg.MiniApp.AnswerPreview, 2*answerPreviewChars)
 	needsPage := len([]rune(md)) > threshold
-	if !needsPage && !d.cfg.Display.RichMessages {
+	if !needsPage {
 		// Match the chat formatter so only answers that would become multiple
 		// text messages use a page; a long paragraph that fits one message stays.
 		short, _ := format.SplitWideCode(md)

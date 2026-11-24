@@ -109,6 +109,27 @@ func TestBrowseRefusesHiddenAndOutsidePaths(t *testing.T) {
 	}
 }
 
+func TestOpenExternalVideoHonorsIgnoredFileOffer(t *testing.T) {
+	root, _ := newRepo(t)
+	write(t, filepath.Join(root, ".gitignore"), "node_modules/\nbuild.log\nprivate.mp4\n")
+	write(t, filepath.Join(root, "private.mp4"), "synthetic media")
+
+	if f, _, err := openExternalVideo(context.Background(), root, "private.mp4", ""); err != ErrNoFile {
+		if f != nil {
+			f.Close()
+		}
+		t.Fatalf("unoffered ignored video: file=%v err=%v; want ErrNoFile", f, err)
+	}
+	f, info, err := openExternalVideo(context.Background(), root, "private.mp4", "private.mp4")
+	if err != nil {
+		t.Fatalf("offered ignored video: %v", err)
+	}
+	defer f.Close()
+	if info.Size() != int64(len("synthetic media")) {
+		t.Fatalf("video size = %d", info.Size())
+	}
+}
+
 func TestBrowseCanExplicitlyReadOneIgnoredRegularFile(t *testing.T) {
 	root, _ := newRepo(t)
 	write(t, filepath.Join(root, ".gitignore"), "node_modules/\nbuild.log\nresults/\n")

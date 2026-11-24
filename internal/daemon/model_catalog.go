@@ -78,8 +78,9 @@ type claudeModelPicker struct {
 }
 
 type claudeModelSettings struct {
-	AvailableModels *[]string          `json:"availableModels"`
-	ModelPicker     *claudeModelPicker `json:"modelPicker"`
+	AvailableModels      *[]string          `json:"availableModels"`
+	AvailableModelsMatch string             `json:"availableModelsMatch"`
+	ModelPicker          *claudeModelPicker `json:"modelPicker"`
 }
 
 // claudeModelChoices returns explicit Claude settings when available, and the
@@ -113,6 +114,7 @@ func claudeConfigModels(conv store.Conversation, managed string, defaults []stri
 
 	var allowed []string
 	allowedFound := false
+	matchMode := managedCfg.AvailableModelsMatch
 	if managedCfg.AvailableModels != nil {
 		allowed = append(allowed, (*managedCfg.AvailableModels)...)
 		allowedFound = true
@@ -162,7 +164,7 @@ func claudeConfigModels(conv store.Conversation, managed string, defaults []stri
 	if picker != nil {
 		choices := claudePickerChoices(*picker, defaults)
 		if allowedFound {
-			choices = filterClaudeAllowed(choices, allowed)
+			choices = filterClaudeAllowed(choices, allowed, matchMode == "exact")
 		}
 		return choices, true
 	}
@@ -197,7 +199,7 @@ func cleanModelNames(models []string) []string {
 	return out
 }
 
-func filterClaudeAllowed(choices, allowed []string) []string {
+func filterClaudeAllowed(choices, allowed []string, exact bool) []string {
 	set := make(map[string]bool, len(allowed))
 	for _, model := range allowed {
 		if model = strings.TrimSpace(model); model != "" {
@@ -206,8 +208,19 @@ func filterClaudeAllowed(choices, allowed []string) []string {
 	}
 	out := make([]string, 0, len(choices))
 	for _, model := range choices {
-		if set[strings.ToLower(model)] {
+		key := strings.ToLower(model)
+		if set[key] {
 			out = append(out, model)
+			continue
+		}
+		if exact {
+			continue
+		}
+		for prefix := range set {
+			if strings.HasPrefix(key, prefix+"-") {
+				out = append(out, model)
+				break
+			}
 		}
 	}
 	return out
