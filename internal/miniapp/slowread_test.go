@@ -242,7 +242,7 @@ func TestFilesThatWaitForMacOS(t *testing.T) {
 	defer srv.Close()
 	release := make(chan struct{})
 	defer close(release)
-	_, _ = s.reads.do(filesKey(root, ""), 0, func() (any, error) {
+	_, _ = s.reads.do(filesKey(root, "", false), 0, func() (any, error) {
 		<-release
 		return View{}, nil
 	})

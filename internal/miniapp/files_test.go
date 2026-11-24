@@ -109,6 +109,29 @@ func TestBrowseRefusesHiddenAndOutsidePaths(t *testing.T) {
 	}
 }
 
+func TestBrowseCanExplicitlyReadOneIgnoredRegularFile(t *testing.T) {
+	root, _ := newRepo(t)
+	write(t, filepath.Join(root, ".gitignore"), "node_modules/\nbuild.log\nresults/\n")
+	write(t, filepath.Join(root, "results", "summary.md"), "# Explicit result\n")
+	write(t, filepath.Join(root, "results", "other.md"), "# Other result\n")
+	if err := os.Symlink(filepath.Join(root, "results", "other.md"), filepath.Join(root, "results", "link.md")); err != nil {
+		t.Fatal(err)
+	}
+
+	v, err := browse(context.Background(), root, "results/summary.md", nil, "results/summary.md")
+	if err != nil || !strings.Contains(v.HTML, "Explicit result") {
+		t.Fatalf("explicit ignored file: %+v, %v", v, err)
+	}
+	for _, rel := range []string{"results/other.md", "results/link.md", "results", ".env"} {
+		if v, err := browse(context.Background(), root, rel, nil, "results/summary.md"); err != ErrNoFile {
+			t.Errorf("explicit ignored read %q: %+v, %v; want ErrNoFile", rel, v, err)
+		}
+	}
+	if v, err := Browse(context.Background(), root, "results/summary.md", nil); err != ErrNoFile {
+		t.Errorf("normal browse exposed ignored file: %+v, %v", v, err)
+	}
+}
+
 // A file's content is escaped, or rendered when it is Markdown; it is
 // redacted first; a binary file shows only its size.
 func TestBrowseShowsFiles(t *testing.T) {

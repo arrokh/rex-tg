@@ -24,7 +24,8 @@ import (
 // of it is refused. It hides what is likely secret or noise: .git, files
 // that git ignores (such as .env and node_modules), names of keys and
 // credentials, and, outside a git repository, every name that starts with a
-// dot.
+// dot. An exact regular file explicitly offered by an answer may still be
+// previewed when git ignores it; the exception never lists its folder.
 
 // Limits of the file browser.
 const (
@@ -107,7 +108,14 @@ func relSlash(base, p string) string {
 // Browse shows rel inside root: a folder's entries or a file's content.
 // redact cleans a text file's content before it is shown (nil: as it is).
 func Browse(ctx context.Context, root, rel string, redact func(string) string) (View, error) {
-	rel = strings.Trim(path.Clean("/"+filepath.ToSlash(rel)), "/")
+	return browse(ctx, root, rel, redact, "")
+}
+
+// browse may include one explicitly offered ignored file. The caller binds
+// this exception to the exact regular file saved on the page.
+func browse(ctx context.Context, root, rel string, redact func(string) string, offeredFile string) (View, error) {
+	rel = cleanFilePath(rel)
+	offeredFile = cleanFilePath(offeredFile)
 	base, err := filepath.EvalSymlinks(root)
 	if err != nil {
 		return View{}, ErrNoFile
@@ -135,8 +143,9 @@ func Browse(ctx context.Context, root, rel string, redact func(string) string) (
 			check = append(check, path.Join(relSlash(base, parent), path.Base(rel)))
 		}
 		ign := ignored(ctx, base, check)
+		allowIgnored := offeredFile != "" && rel == offeredFile && strings.EqualFold(realRel, rel) && regularNoSymlinkFile(base, rel)
 		for _, c := range check {
-			if c != "" && ign[c] {
+			if c != "" && ign[c] && !allowIgnored {
 				return View{}, ErrNoFile
 			}
 		}
@@ -149,6 +158,36 @@ func Browse(ctx context.Context, root, rel string, redact func(string) string) (
 		return listDir(ctx, base, rel, realRel, real, repo)
 	}
 	return showFile(real, rel, redact)
+}
+
+// cleanFilePath keeps a browser path relative to its page root.
+func cleanFilePath(rel string) string {
+	return strings.Trim(path.Clean("/"+filepath.ToSlash(rel)), "/")
+}
+
+// regularNoSymlinkFile tells whether rel names a regular file whose path
+// components contain no symlinks. This keeps the explicit ignored-file
+// exception from following a path that changed after the offer was created.
+func regularNoSymlinkFile(root, rel string) bool {
+	if rel == "" {
+		return false
+	}
+	current := root
+	parts := strings.Split(filepath.ToSlash(rel), "/")
+	for i, part := range parts {
+		current = filepath.Join(current, filepath.FromSlash(part))
+		fi, err := os.Lstat(current)
+		if err != nil || fi.Mode()&os.ModeSymlink != 0 {
+			return false
+		}
+		if i < len(parts)-1 && !fi.IsDir() {
+			return false
+		}
+		if i == len(parts)-1 && !fi.Mode().IsRegular() {
+			return false
+		}
+	}
+	return true
 }
 
 // within tells whether p is root or inside it.

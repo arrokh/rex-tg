@@ -492,8 +492,19 @@ func (s *Server) liveScreen(w http.ResponseWriter, r *http.Request) {
 }
 
 // filesKey is the key of a file browser read in Server.reads.
-func filesKey(dir, rel string) string {
-	return "files\x00" + dir + "\x00" + rel
+func filesKey(dir, rel string, allowIgnored bool) string {
+	key := "files\x00" + dir + "\x00" + rel
+	if allowIgnored {
+		key += "\x00offered"
+	}
+	return key
+}
+
+func offeredFileForPage(p Page, rel string) string {
+	if p.Kind == KindFiles && p.InitialFile != "" && cleanFilePath(rel) == cleanFilePath(p.InitialFile) {
+		return p.InitialFile
+	}
+	return ""
 }
 
 // fileView answers a folder or file of a files page, or a file link from a
@@ -516,7 +527,7 @@ func (s *Server) fileView(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"This file link is not valid."}`, http.StatusNotFound)
 		return
 	}
-	v, err := s.readFile(r, p.Dir, rel)
+	v, err := s.readFile(r, p.Dir, rel, offeredFileForPage(p, rel))
 	if errors.Is(err, errSlowRead) {
 		http.Error(w, slowReadText("this file or folder"), http.StatusServiceUnavailable)
 		return
@@ -534,10 +545,11 @@ func (s *Server) fileView(w http.ResponseWriter, r *http.Request) {
 
 // readFile uses the same bounded, deduplicated Browse read for the Mini App
 // JSON view and the owner-authenticated external HTML preview.
-func (s *Server) readFile(r *http.Request, root, rel string) (View, error) {
+func (s *Server) readFile(r *http.Request, root, rel, offeredFile string) (View, error) {
 	ctx := context.WithoutCancel(r.Context())
-	got, err := s.reads.do(filesKey(root, rel), s.wait, func() (any, error) {
-		return Browse(ctx, root, rel, s.redact)
+	allowIgnored := offeredFile != "" && cleanFilePath(rel) == cleanFilePath(offeredFile)
+	got, err := s.reads.do(filesKey(root, rel, allowIgnored), s.wait, func() (any, error) {
+		return browse(ctx, root, rel, s.redact, offeredFile)
 	})
 	if err != nil {
 		return View{}, err
@@ -577,7 +589,7 @@ func (s *Server) externalFile(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	v, err := s.readFile(r, p.Dir, rel)
+	v, err := s.readFile(r, p.Dir, rel, offeredFileForPage(p, rel))
 	if errors.Is(err, errSlowRead) || errors.Is(err, errReadLimit) {
 		http.Error(w, "The file could not be loaded right now. Return to the Mini App and try again.", http.StatusServiceUnavailable)
 		return
