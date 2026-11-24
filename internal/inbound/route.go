@@ -54,16 +54,16 @@ var Buttons = []Button{
 	{"🎛 Panel", "rt"},
 	{"🖥 Screen", "screen"},
 	{"📁 Project", "project"},
-	{"⚙️ Config", "config"},
 	{"✍️ Annotate", "annotate"},
 	{"🧩 Templates", "templates"},
 }
 
 // buttonCommands maps a label, without emoji variation selectors, to its
-// command. The first keyboard's labels were the commands themselves
-// ("/screen"), so a keyboard that an app still shows keeps working.
+// command. It also keeps the Config label from an older keyboard working.
+// The first keyboard's labels were the commands themselves ("/screen"), so a
+// keyboard that an app still shows keeps working.
 var buttonCommands = func() map[string]string {
-	m := map[string]string{"📂 Files": "files", "📝 Changes": "changes", "📥 Queue": "queue"}
+	m := map[string]string{"📂 Files": "files", "📝 Changes": "changes", "📥 Queue": "queue", noVariation("⚙️ Config"): "config"}
 	for _, b := range Buttons {
 		m[noVariation(b.Label)] = b.Command
 	}

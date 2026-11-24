@@ -3378,6 +3378,7 @@
     host.appendChild(content);
     var pendingKey = "rex-tg.config.pending." + id;
     var pending = null, submitting = false, refreshing = false, latest = null, selectedValues = {}, submittedValues = {}, selectionsReady = false;
+    var modelRetryTimer = null, modelRetryCount = 0, modelRetryDelays = [1000, 2000, 4000];
     try { pending = JSON.parse(load(pendingKey) || "null"); } catch (e) { pending = null; }
     if (pending && !pending.changes && pending.name && pending.value) {
       pending.changes = [{ name: pending.name, value: pending.value }];
@@ -3388,6 +3389,26 @@
     function clearPending() {
       pending = null;
       save(pendingKey, null);
+    }
+    function clearModelRetry() {
+      if (modelRetryTimer) { clearTimeout(modelRetryTimer); }
+      modelRetryTimer = null;
+      modelRetryCount = 0;
+    }
+    function scheduleModelRetry(state) {
+      var model = null;
+      (state.controls || []).some(function (item) {
+        if (item.name === "model") { model = item; return true; }
+        return false;
+      });
+      if (!model || (model.choices || []).length) { clearModelRetry(); return; }
+      if (modelRetryTimer || modelRetryCount >= modelRetryDelays.length) { return; }
+      modelRetryTimer = setTimeout(function () {
+        modelRetryTimer = null;
+        if (document.visibilityState === "hidden") { return; }
+        modelRetryCount++;
+        refresh();
+      }, modelRetryDelays[modelRetryCount]);
     }
     function dirtyChanges(state) {
       return (state && state.controls || []).filter(function (item) {
@@ -3432,7 +3453,7 @@
             options.appendChild(el("p", "note", "No model list is available for this session yet."));
             var reload = button(refreshing ? "Refreshing…" : "Refresh model list", "btn small");
             reload.disabled = !!pending || refreshing;
-            reload.addEventListener("click", refresh);
+            reload.addEventListener("click", function () { clearModelRetry(); refresh(); });
             options.appendChild(reload);
           } else {
             var search = el("input", "config-input");
@@ -3549,8 +3570,10 @@
       api("api/config?id=" + encodeURIComponent(id)).then(function (state) {
         refreshing = false;
         draw(state);
+        scheduleModelRetry(state);
       }).catch(function (e) {
         refreshing = false;
+        clearModelRetry();
         content.textContent = "";
         content.appendChild(el("p", "", e.message || "This Config page is no longer current. Open it again from the topic."));
       });

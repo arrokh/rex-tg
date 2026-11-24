@@ -90,6 +90,9 @@ func TestRouteTextButtons(t *testing.T) {
 	if r := inbound.RouteText("🖥 Screen please", true, "bot"); r.Kind != inbound.RouteAgentText {
 		t.Errorf("text that starts like a label: %+v", r)
 	}
+	if r := inbound.RouteText("⚙️ Config", true, "bot"); r.Kind != inbound.RouteCommand || r.Command != "config" {
+		t.Errorf("stale Config button: %+v, want the legacy config action", r)
+	}
 }
 
 func TestRouteTextAllCommands(t *testing.T) {

@@ -37,7 +37,7 @@ import (
 // keyboardVersion names the buttons. A new value posts the keyboard note to
 // the main chat and every open topic once more, after an update that changes
 // the buttons.
-const keyboardVersion = "7" // waiting controls stay in the chat, not in the keyboard
+const keyboardVersion = "8" // Config is now inside Project, not a separate keyboard button
 
 const (
 	keyboardKey = "reply_keyboard" // kv: the version, key generation, and Mini App address that the chats have
@@ -45,7 +45,7 @@ const (
 	kbGenKV     = "kb_gen"         // kv: how often the key was made new (/rekey)
 )
 
-const keyboardTopicNote = "⌨️ Buttons under the message box: 🎛 Panel (/rt), 🖥 Screen, 📁 Project, ⚙️ Config, ✍️ Annotate, and 🧩 Templates. " +
+const keyboardTopicNote = "⌨️ Buttons under the message box: 🎛 Panel (/rt), 🖥 Screen, 📁 Project (Config), ✍️ Annotate, and 🧩 Templates. " +
 	"With the Mini App on, the page buttons open directly. Tap ⊞ in the message box to show or hide them."
 
 const keyboardNote = keyboardTopicNote + " /help brings them back."
