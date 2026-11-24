@@ -125,6 +125,41 @@ func TestPageOnlyForTheOwner(t *testing.T) {
 	}
 }
 
+func TestExplicitFileOfferCanPreviewGitIgnoredFile(t *testing.T) {
+	root, _ := newRepo(t)
+	write(t, filepath.Join(root, ".gitignore"), "node_modules/\nbuild.log\nresults/\n")
+	rel := "results/copilot-pi-native-engine/2026-11-24/cpu-cap/summary.md"
+	write(t, filepath.Join(root, filepath.FromSlash(rel)), "# CPU cap summary\n")
+	write(t, filepath.Join(root, "results", "other.md"), "# Not offered\n")
+	if filesKey(root, rel, true) == filesKey(root, rel, false) {
+		t.Fatal("offered and ordinary reads share a cache key")
+	}
+	pages := map[string]Page{"offer": {Kind: KindFiles, Title: "Files", Dir: root, InitialFile: rel}}
+	s := New(fakeToken, func() int64 { return 42 }, func(id string) (Page, bool) { p, ok := pages[id]; return p, ok }, nil).
+		WithFiles(func() bool { return true }, nil)
+	server := httptest.NewServer(s.Handler())
+	defer server.Close()
+	c := caller{t, server.URL}
+	owner := map[string]string{"X-Telegram-Init-Data": sign(t, fakeToken, fields(42, time.Now()))}
+
+	code, body := c.do("GET", "/api/files?id=offer&path="+url.QueryEscape(rel), owner, "")
+	if code != http.StatusOK || !strings.Contains(body["html"].(string), "CPU cap summary") {
+		t.Fatalf("explicit file offer preview: %d %v", code, body)
+	}
+	if code, _ := c.do("GET", "/api/files?id=offer&path="+url.QueryEscape("results/other.md"), owner, ""); code != http.StatusNotFound {
+		t.Errorf("another ignored file was exposed: %d", code)
+	}
+	if code, listing := c.do("GET", "/api/files?id=offer", owner, ""); code != http.StatusOK {
+		t.Fatalf("root listing: %d %v", code, listing)
+	} else {
+		for _, raw := range listing["entries"].([]any) {
+			if raw.(map[string]any)["name"] == "results" {
+				t.Error("normal listing exposed ignored results")
+			}
+		}
+	}
+}
+
 func TestExternalHTMLRequiresOwnerTailnetIdentityAndStaysSandboxed(t *testing.T) {
 	root := t.TempDir()
 	source := `<!doctype html><html><body><h1>Local preview</h1><script>document.body.innerHTML='unsafe'</script><img src="https://example.invalid/pixel"></body></html>`

@@ -101,7 +101,14 @@ func TestFileOfferIncludesMiniAppPreviewAndAttachmentFallback(t *testing.T) {
 		e.cfg.MiniApp.Files = true
 		e.cfg.Display.SendFiles = []string{"md"}
 	})
-	path := filepath.Join(repo, "preview.md")
+	if err := os.WriteFile(filepath.Join(repo, ".gitignore"), []byte("results/\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	rel := filepath.Join("results", "copilot-pi-native-engine", "2026-11-24", "cpu-cap", "summary.md")
+	path := filepath.Join(repo, rel)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(path, []byte("preview content"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -122,7 +129,7 @@ func TestFileOfferIncludesMiniAppPreviewAndAttachmentFallback(t *testing.T) {
 				}
 				pageID = u.Query().Get("p")
 			}
-			if button.CallbackData != "" && strings.Contains(button.Text, "Attach preview.md") {
+			if button.CallbackData != "" && strings.Contains(button.Text, "Attach summary.md") {
 				attach = true
 			}
 		}
@@ -132,7 +139,7 @@ func TestFileOfferIncludesMiniAppPreviewAndAttachmentFallback(t *testing.T) {
 	}
 	raw, ok, err := e.peek().Get(context.Background(), "page:"+pageID)
 	var pg miniapp.Page
-	if err != nil || !ok || json.Unmarshal([]byte(raw), &pg) != nil || pg.Dir != repo || pg.InitialFile != "preview.md" {
+	if err != nil || !ok || json.Unmarshal([]byte(raw), &pg) != nil || pg.Dir != repo || pg.InitialFile != filepath.ToSlash(rel) {
 		t.Fatalf("preview is not bound to the project and file: %+v (found %v, err %v)", pg, ok, err)
 	}
 }
