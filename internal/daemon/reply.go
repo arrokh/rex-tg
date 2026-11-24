@@ -33,9 +33,8 @@ func (d *daemon) replyQuote(m *telegram.Message, th store.Thread) string {
 		return ""
 	}
 	// One of rex-tg's own messages: the store knows its kind and its text.
-	// A rich message (an answer, by default) reaches the bot without text
-	// in a reply, and maybe without a sender (seen live), so the store's
-	// copy is the quote then.
+	// A legacy rich message may reach the bot without text in a reply, and
+	// maybe without a sender (seen live), so the store's copy is the quote.
 	kind, sent, err := d.st.SentKind(d.ctx, th.ID, rm.MessageID)
 	if err != nil {
 		d.log.Warn("reply: sent kind", "thread", th.ID, "err", err)

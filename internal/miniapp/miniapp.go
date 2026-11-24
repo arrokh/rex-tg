@@ -6,8 +6,9 @@
 // asks and renders them.
 //
 // Mini App API requests carry either Telegram-signed init data or the current
-// keyboard key. The external HTML preview instead checks the owner's Tailscale
-// login and never accepts the Mini App key in its URL. Keyboard-key Annotate
+// keyboard key. External HTML and video previews instead check the owner's
+// Tailscale login and never accept the Mini App key in their URLs. Keyboard-key
+// Annotate
 // sends additionally require the owner's verified Tailscale login. The page
 // shell itself holds no data.
 package miniapp
@@ -23,9 +24,11 @@ import (
 	"errors"
 	"html"
 	"log/slog"
+	"mime"
 	"net/http"
 	"net/url"
 	"path"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -273,7 +276,7 @@ var (
 
 // Handler serves /app (the page shell), /app.js, the terminal library,
 // /api/page?id=…, /api/screen?id=…, /api/files?id=…&path=…,
-// /external/file?id=…&path=… (owner-authenticated HTML only),
+// /external/file?id=…&path=… (owner-authenticated HTML or video),
 // /api/changes?id=…&base=…[&path=…][&new=1], and the control panel's
 // /api/control?id=…, /api/control/folders?id=…&path=…[&hidden=1],
 // POST /api/control/do?id=…, /api/templates?id=…, and /api/templates/send?id=…
@@ -350,7 +353,7 @@ func (s *Server) headers(w http.ResponseWriter, ctype string) {
 	h.Set("Cache-Control", "no-store")
 	h.Set("X-Content-Type-Options", "nosniff")
 	h.Set("Referrer-Policy", "no-referrer")
-	h.Set("Content-Security-Policy", "default-src 'none'; script-src 'self' https://telegram.org; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'")
+	h.Set("Content-Security-Policy", "default-src 'none'; script-src 'self' https://telegram.org; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; media-src 'self'; base-uri 'none'; form-action 'none'")
 }
 
 // allowed checks that a request is the owner's: signed by Telegram, or
@@ -459,7 +462,8 @@ func (s *Server) page(w http.ResponseWriter, r *http.Request) {
 	if s.annot != nil && (p.Kind == KindAnswer || p.Kind == KindAnnotate) {
 		out["bot"] = s.annot.BotName() // for t.me links (Annotate's "Put in message box")
 	}
-	out["can_open_external_html"] = s.externalHTMLAvailable(p)
+	out["can_open_external_html"] = s.externalFileAvailable(p)
+	out["can_open_external_video"] = s.externalFileAvailable(p)
 
 	if s.annot != nil && s.control != nil && (p.Kind == KindAnnotate || p.Kind == KindAnswer) && p.Thread > 0 && p.Conv > 0 {
 		out["can_send_notes"] = s.canSendBoundMessage(r)
@@ -561,16 +565,16 @@ func (s *Server) readFile(r *http.Request, root, rel, offeredFile string) (View,
 	return v, nil
 }
 
-func (s *Server) externalHTMLAvailable(p Page) bool {
+func (s *Server) externalFileAvailable(p Page) bool {
 	if !s.tailnet || s.logins == nil || s.files == nil || !s.files() || p.Dir == "" {
 		return false
 	}
 	return p.Kind == KindFiles || p.Kind == KindProject || p.Kind == KindAnswer || p.Kind == KindAnnotate
 }
 
-// externalFile opens one HTML file as a standalone page for an authenticated
-// owner device. It deliberately does not accept the Mini App key or Telegram
-// init data in the URL; Tailscale Serve supplies the login identity.
+// externalFile opens one HTML or video file for an authenticated owner
+// device. It deliberately does not accept the Mini App key or Telegram init
+// data in the URL; Tailscale Serve supplies the login identity.
 func (s *Server) externalFile(w http.ResponseWriter, r *http.Request) {
 	externalHTMLHeaders(w)
 	login := tailnetLogin(r)
@@ -580,12 +584,45 @@ func (s *Server) externalFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p, ok := s.load(r.URL.Query().Get("id"))
-	if !ok || !s.externalHTMLAvailable(p) {
+	if !ok || !s.externalFileAvailable(p) {
 		http.NotFound(w, r)
 		return
 	}
 	rel := r.URL.Query().Get("path")
-	if strings.TrimSpace(rel) == "" || (strings.ToLower(path.Ext(rel)) != ".html" && strings.ToLower(path.Ext(rel)) != ".htm") {
+	ext := strings.ToLower(path.Ext(rel))
+	if strings.TrimSpace(rel) == "" {
+		http.NotFound(w, r)
+		return
+	}
+	if ext == ".html" || ext == ".htm" {
+		s.externalHTMLFile(w, r, p, rel)
+		return
+	}
+	if _, ok := videoTypes[ext]; !ok {
+		http.NotFound(w, r)
+		return
+	}
+	f, info, err := openExternalVideo(r.Context(), p.Dir, rel, offeredFileForPage(p, rel))
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	defer f.Close()
+	h := w.Header()
+	h.Set("Content-Type", videoTypes[ext])
+	h.Set("Content-Disposition", mime.FormatMediaType("inline", map[string]string{"filename": filepath.Base(rel)}))
+	h.Set("Accept-Ranges", "bytes")
+	h.Set("Cache-Control", "no-store")
+	h.Set("X-Content-Type-Options", "nosniff")
+	h.Set("Referrer-Policy", "no-referrer")
+	h.Set("X-Frame-Options", "DENY")
+	h.Set("Content-Security-Policy", "default-src 'none'; media-src 'self'; frame-ancestors 'none'; sandbox")
+	http.ServeContent(w, r, filepath.Base(rel), info.ModTime(), f)
+}
+
+func (s *Server) externalHTMLFile(w http.ResponseWriter, r *http.Request, p Page, rel string) {
+	ext := strings.ToLower(path.Ext(rel))
+	if ext != ".html" && ext != ".htm" {
 		http.NotFound(w, r)
 		return
 	}

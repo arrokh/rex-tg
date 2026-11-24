@@ -46,7 +46,7 @@ const (
 	FormatHTML     = "html"
 	FormatPlain    = "plain"
 	FormatDocument = "document"
-	// FormatRich is Markdown sent with sendRichMessage (Phase 6, opt-in).
+	// FormatRich is a legacy Markdown part sent with sendRichMessage.
 	// Schema version 2 adds it to the CHECK constraint.
 	FormatRich = "rich"
 	// FormatImage is an image file sent from the Mac. Content is the absolute

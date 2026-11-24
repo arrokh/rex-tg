@@ -282,6 +282,92 @@ var imageTypes = map[string]string{
 	".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp",
 }
 
+// videoTypes are browser-previewable formats served with byte-range support.
+var videoTypes = map[string]string{
+	".mp4": "video/mp4", ".m4v": "video/x-m4v", ".mov": "video/quicktime",
+	".webm": "video/webm", ".ogv": "video/ogg", ".mpeg": "video/mpeg", ".mpg": "video/mpeg",
+	".3gp": "video/3gpp",
+}
+
+// openExternalVideo opens a visible regular video under root. Unlike the
+// ordinary browser preview, this rejects symlink components so a later stream
+// request cannot use a link to redirect the file after validation.
+func openExternalVideo(ctx context.Context, root, rel, offeredFile string) (*os.File, os.FileInfo, error) {
+	rel = cleanFilePath(rel)
+	if rel == "" {
+		return nil, nil, ErrNoFile
+	}
+	base, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return nil, nil, ErrNoFile
+	}
+	repo := inRepo(ctx, base)
+	if hiddenPath(rel, repo) {
+		return nil, nil, ErrNoFile
+	}
+	if repo {
+		if ignored(ctx, base, []string{rel})[rel] && (offeredFile == "" || cleanFilePath(offeredFile) != rel) {
+			return nil, nil, ErrNoFile
+		}
+	}
+	f, info, err := openRegularNoSymlink(base, rel)
+	if err != nil {
+		return nil, nil, ErrNoFile
+	}
+	return f, info, nil
+}
+
+// openRegularNoSymlink opens rel beneath root without following any symlink
+// component. Each directory is opened relative to an anchored os.Root, then
+// compared with the entry seen by Lstat to detect replacement during the
+// check. The final file is opened with O_NOFOLLOW and checked the same way.
+func openRegularNoSymlink(root, rel string) (*os.File, os.FileInfo, error) {
+	parts := strings.Split(filepath.ToSlash(rel), "/")
+	if rel == "" || len(parts) == 0 {
+		return nil, nil, ErrNoFile
+	}
+	current, err := os.OpenRoot(root)
+	if err != nil {
+		return nil, nil, ErrNoFile
+	}
+	for _, part := range parts[:len(parts)-1] {
+		info, err := current.Lstat(filepath.FromSlash(part))
+		if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+			current.Close()
+			return nil, nil, ErrNoFile
+		}
+		next, err := current.OpenRoot(filepath.FromSlash(part))
+		if err != nil {
+			current.Close()
+			return nil, nil, ErrNoFile
+		}
+		opened, err := next.Stat(".")
+		if err != nil || !os.SameFile(info, opened) {
+			next.Close()
+			current.Close()
+			return nil, nil, ErrNoFile
+		}
+		current.Close()
+		current = next
+	}
+	defer current.Close()
+	name := filepath.FromSlash(parts[len(parts)-1])
+	before, err := current.Lstat(name)
+	if err != nil || before.Mode()&os.ModeSymlink != 0 || !before.Mode().IsRegular() {
+		return nil, nil, ErrNoFile
+	}
+	f, err := current.OpenFile(name, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, nil, ErrNoFile
+	}
+	info, err := f.Stat()
+	if err != nil || !info.Mode().IsRegular() || !os.SameFile(before, info) {
+		f.Close()
+		return nil, nil, ErrNoFile
+	}
+	return f, info, nil
+}
+
 // showFile shows the file real. It opens the file without following a
 // link and without waiting (a FIFO put there since the checks does not
 // block), and shows it only when what it opened is a regular file.

@@ -85,7 +85,7 @@
   setTheme(load("rex-tg.theme"));
   var params = new URLSearchParams(location.search);
   var id = params.get("p") || "";
-  var canOpenExternalHTML = false;
+  var canOpenExternalHTML = false, canOpenExternalVideo = false;
   var goView = params.get("go") || "";
   var initData = tg ? tg.initData : "";
   // The keyboard's buttons open this page with a key (k): it authorizes reads
@@ -550,6 +550,7 @@
     });
   }
   function isHTMLFile(path) { return /\.html?$/i.test(path); }
+  function isVideoFile(path) { return /\.(?:mp4|m4v|mov|webm|ogv|mpeg|mpg|3gp)$/i.test(path); }
   function externalFileURL(path) {
     return new URL("/external/file?id=" + encodeURIComponent(id) + "&path=" + encodeURIComponent(path), window.location.href).href;
   }
@@ -559,10 +560,23 @@
     else { window.open(url, "_blank", "noopener,noreferrer"); }
   }
   function addExternalFileButton(box, path) {
-    if (!canOpenExternalHTML || !isHTMLFile(path)) { return; }
+    if (!(canOpenExternalHTML && isHTMLFile(path)) && !(canOpenExternalVideo && isVideoFile(path))) { return; }
     var open = button("Open in browser", "btn small");
     open.addEventListener("click", function () { openExternalFile(path); });
     box.appendChild(open);
+  }
+  function addVideoPreview(box, path) {
+    if (!canOpenExternalVideo || !isVideoFile(path)) { return; }
+    var video = el("video", "video-preview");
+    video.controls = true;
+    video.playsInline = true;
+    video.preload = "metadata";
+    video.setAttribute("aria-label", "Video preview: " + path.split("/").pop());
+    video.addEventListener("error", function () {
+      if (video.parentNode) { video.parentNode.replaceChild(el("p", "note", "Video preview is unavailable."), video); }
+    });
+    video.src = externalFileURL(path);
+    box.appendChild(video);
   }
 
   function openMentionFile(path) {
@@ -573,7 +587,7 @@
       back.disabled = true;
       back.addEventListener("click", function () { if (history.length) { showFile(history.pop(), false); } });
       dismiss.addEventListener("click", close);
-      nav.appendChild(back); nav.appendChild(pathLabel); nav.appendChild(dismiss);
+      nav.appendChild(back); addExternalFileButton(nav, path); nav.appendChild(pathLabel); nav.appendChild(dismiss);
       box.appendChild(nav); box.appendChild(body);
       function showFile(next, push) {
         if (push && current) { history.push(current); }
@@ -582,8 +596,8 @@
         body.appendChild(el("p", "note", "Loading…"));
         api("api/files?id=" + encodeURIComponent(id) + "&path=" + encodeURIComponent(next)).then(function (d) {
           body.textContent = "";
-          if (d.note) { body.appendChild(el("p", "note", d.note)); }
-          addExternalFileButton(body, next);
+          if (d.note && !(canOpenExternalVideo && isVideoFile(next))) { body.appendChild(el("p", "note", d.note)); }
+          addVideoPreview(body, next);
           if (d.html) {
             var content = el("div", "content"); content.innerHTML = d.html; scrollTables(content);
             wireFileMentions(content, next, function (target) { showFile(target, true); });
@@ -670,6 +684,7 @@
       var back = chip("‹ Files");
       back.addEventListener("click", v.showList);
       head.appendChild(back);
+      addExternalFileButton(head, p);
       head.appendChild(el("code", "path", p));
       v.item.appendChild(head);
       var body = el("div", "content", "");
@@ -678,8 +693,8 @@
       api("api/files?id=" + encodeURIComponent(id) + "&path=" + encodeURIComponent(p))
         .then(function (d) {
           body.textContent = "";
-          if (d.note) { body.appendChild(el("p", "note", d.note)); }
-          addExternalFileButton(body, p);
+          if (d.note && !(canOpenExternalVideo && isVideoFile(p))) { body.appendChild(el("p", "note", d.note)); }
+          addVideoPreview(body, p);
           if (d.html) {
             var c = el("div", "");
             c.innerHTML = d.html; // rendered and escaped by rex-tg
@@ -3445,7 +3460,7 @@
         var card = el("section", "config-item");
         card.appendChild(el("h2", "config-name", item.title));
         card.appendChild(el("p", "config-current", item.value ? "Current: " + item.value : "Current value not seen yet"));
-        var options = el("div", "config-options");
+        var options = el("div", item.name === "model" ? "config-options config-model-options" : "config-options");
         var selected = selectedValues[item.name] || "";
         if (item.name === "model") {
           var models = item.choices || [];
@@ -3555,6 +3570,7 @@
         }
         clearPending();
         hint.textContent = r.message || (r.ok ? "Settings queued." : "The settings were not changed.");
+        if (r.ok && tg && tg.close) { setTimeout(function () { tg.close(); }, 60); }
       }).catch(function (e) {
         hint.textContent = e.message || "Could not check this change. Retry the same action.";
       }).finally(function () {
@@ -3592,6 +3608,7 @@
     .then(function (p) {
       setTitle(p.title);
       canOpenExternalHTML = p.can_open_external_html === true;
+      canOpenExternalVideo = p.can_open_external_video === true;
       var from = params.get("from");
       if (p.kind !== "control" && from === "panel") {
         rootBack = backToPanel;

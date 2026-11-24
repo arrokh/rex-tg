@@ -89,4 +89,19 @@ func TestClaudeModelPickerControlsConfigChoices(t *testing.T) {
 	if got := claudeModelChoices(conv, managed, defaults); !slices.Equal(got, []string{"custom-model"}) {
 		t.Fatalf("managed allowlist must filter picker options: %v", got)
 	}
+
+	writeCatalogFixture(t, settings, `{"modelPicker":{"options":[{"model":"claude-sonnet-4-5-20250929"},{"model":"claude-opus-4-5-20251101"}],"replaceBuiltInOptions":true}}`)
+	writeCatalogFixture(t, managed, `{"availableModels":["claude-sonnet-4"]}`)
+	if got := claudeModelChoices(conv, managed, defaults); !slices.Equal(got, []string{"claude-sonnet-4-5-20250929"}) {
+		t.Fatalf("availableModels prefix must allow newer model IDs: %v", got)
+	}
+	writeCatalogFixture(t, settings, `{"availableModelsMatch":"exact","modelPicker":{"options":[{"model":"claude-sonnet-4-5-20250929"},{"model":"claude-opus-4-5-20251101"}],"replaceBuiltInOptions":true}}`)
+	if got := claudeModelChoices(conv, managed, defaults); !slices.Equal(got, []string{"claude-sonnet-4-5-20250929"}) {
+		t.Fatalf("non-managed availableModelsMatch must not override prefix matching: %v", got)
+	}
+
+	writeCatalogFixture(t, managed, `{"availableModels":["claude-sonnet-4"],"availableModelsMatch":"exact"}`)
+	if got := claudeModelChoices(conv, managed, defaults); len(got) != 0 {
+		t.Fatalf("exact availableModels matching must reject extended IDs: %v", got)
+	}
 }

@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -222,6 +223,70 @@ func TestExternalHTMLRequiresOwnerTailnetIdentityAndStaysSandboxed(t *testing.T)
 	} {
 		if code, _ := c.doText("GET", tc.path, tc.head); code != http.StatusNotFound {
 			t.Errorf("%s: status %d, want 404", tc.name, code)
+		}
+	}
+}
+
+func TestExternalVideoRequiresOwnerAndSupportsRangePreview(t *testing.T) {
+	root := t.TempDir()
+	video := []byte("synthetic-video-content")
+	if err := os.WriteFile(filepath.Join(root, "clip.mp4"), video, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "notes.txt"), []byte("not video"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(root, "clip.mp4"), filepath.Join(root, "clip-link.mp4")); err != nil {
+		t.Fatal(err)
+	}
+	pages := map[string]Page{"files": {Kind: KindFiles, Title: "Files", Dir: root}}
+	s := New(fakeToken, func() int64 { return 42 }, func(id string) (Page, bool) { p, ok := pages[id]; return p, ok }, nil).
+		WithFiles(func() bool { return true }, nil).
+		WithTailnetOnly(true).
+		WithLogins(&fakeLogins{allow: map[string]bool{"me@example.com": true}})
+	server := httptest.NewServer(s.Handler())
+	defer server.Close()
+	owner := map[string]string{"Tailscale-User-Login": "me@example.com"}
+	stranger := map[string]string{"Tailscale-User-Login": "other@example.com"}
+	c := caller{t, server.URL}
+	if code, page := c.do("GET", "/api/page?id=files", map[string]string{
+		"Tailscale-User-Login": "me@example.com",
+		"X-Telegram-Init-Data": sign(t, fakeToken, fields(42, time.Now())),
+	}, ""); code != http.StatusOK || page["can_open_external_video"] != true {
+		t.Fatalf("external video capability: %d %v", code, page)
+	}
+	if code, body := c.doText("GET", "/external/file?id=files&path=clip.mp4", owner); code != http.StatusOK || body != string(video) {
+		t.Fatalf("owner video: %d %q", code, body)
+	}
+	req, err := http.NewRequest(http.MethodGet, server.URL+"/external/file?id=files&path=clip.mp4", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Tailscale-User-Login", "me@example.com")
+	req.Header.Set("Range", "bytes=2-6")
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	data, err := io.ReadAll(res.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.StatusCode != http.StatusPartialContent || string(data) != string(video[2:7]) || res.Header.Get("Content-Type") != "video/mp4" || res.Header.Get("Accept-Ranges") != "bytes" || !strings.Contains(res.Header.Get("Content-Disposition"), "inline") {
+		t.Fatalf("video range response: status=%d headers=%v body=%q", res.StatusCode, res.Header, data)
+	}
+	for _, tc := range []struct {
+		path string
+		head map[string]string
+	}{
+		{"/external/file?id=files&path=clip.mp4", stranger},
+		{"/external/file?id=files&path=notes.txt", owner},
+		{"/external/file?id=files&path=.env.mp4", owner},
+		{"/external/file?id=files&path=clip-link.mp4", owner},
+	} {
+		if code, _ := c.doText("GET", tc.path, tc.head); code != http.StatusNotFound {
+			t.Errorf("%s: status %d, want 404", tc.path, code)
 		}
 	}
 }

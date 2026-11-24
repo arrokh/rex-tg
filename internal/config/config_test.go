@@ -49,7 +49,7 @@ func TestDefaults(t *testing.T) {
 	}
 	if c.InputSettings.QueueExpiry.Duration != 30*time.Minute || c.InputSettings.BusyAfterTyping.Duration != 15*time.Second ||
 		c.InputSettings.JoinWindow.Duration != 300*time.Millisecond || c.InputSettings.JoinWindowLong.Duration != 1500*time.Millisecond ||
-		c.InputSettings.WhileBusy != "steer" || c.Display.ProgressAnimation.Duration != 0 || c.Display.ProgressEditInterval.Duration != 5*time.Second || !c.Display.RichMessages ||
+		c.InputSettings.WhileBusy != "steer" || c.Display.ProgressAnimation.Duration != 0 || c.Display.ProgressEditInterval.Duration != 5*time.Second || c.Display.RichMessages ||
 		c.Display.SummaryAfter.Duration != 2*time.Minute {
 		t.Errorf("input = %+v", c.InputSettings)
 	}
@@ -122,6 +122,7 @@ send_files = [".PDF", " csv "]
 stream = true
 stream_interval = "2s"
 message_length = 2000
+rich_messages = true
 
 [input]
 queue_expiry = "1h"
@@ -166,7 +167,7 @@ dir = "~/st"
 	if len(c.Input(agents.Codex).Answers) != 0 {
 		t.Errorf("codex fallback should be empty unless configured: %+v", c.Input(agents.Codex).Answers)
 	}
-	if strings.Join(c.Display.SendFiles, ",") != "pdf,csv" || !c.Display.Stream || c.Display.StreamInterval.Duration != 2*time.Second || c.Display.MessageLength != 2000 {
+	if strings.Join(c.Display.SendFiles, ",") != "pdf,csv" || !c.Display.Stream || c.Display.StreamInterval.Duration != 2*time.Second || c.Display.MessageLength != 2000 || !c.Display.RichMessages {
 		t.Errorf("send files %q, stream %v", c.Display.SendFiles, c.Display.Stream)
 	}
 	if c.Display.Mode != "final" || c.Display.Backfill != 5 || c.Display.ShowMacPrompts || c.Display.ProgressDelay.Duration != 3*time.Second {

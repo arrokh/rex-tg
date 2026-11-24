@@ -529,12 +529,15 @@
   .config-options { display: flex; flex-wrap: wrap; gap: 8px; }
   .config-options .selected { box-shadow: inset 0 0 0 2px var(--btn); }
   .config-input { min-width: 12rem; flex: 1; height: 40px; padding: 0 10px; border: 0; border-radius: 10px; background: var(--bg); color: var(--fg); font: 16px/1.4 -apple-system, system-ui, sans-serif; }
+  .config-model-options { width: 100%; flex-direction: column; align-items: stretch; gap: 8px; }
+  .config-model-options .config-input { width: 100%; min-width: 0; flex: none; }
+  .video-preview { display: block; width: 100%; max-height: 65vh; margin: 8px 0; border-radius: 10px; background: #000; }
 
   /* locally saved message templates */
   .templates { display: flex; flex-direction: column; gap: 12px; }
   .template-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
   .template-intro { flex: 1; min-width: 0; margin: 0 2px; color: var(--hint); font-size: 0.875rem; }
-  .template-add { flex: none; width: 40px; min-height: 40px; padding: 8px; }
+  .template-add { flex: none; width: 40px; min-height: 40px; display: inline-flex; align-items: center; justify-content: center; padding: 0; }
   .template-add svg { display: block; width: 20px; height: 20px; }
   .template-list { display: flex; flex-direction: column; gap: 6px; }
   .template-pending { padding: 10px 12px; border-radius: 12px; background: color-mix(in srgb, var(--warn) 12%, var(--bg)); }
@@ -549,8 +552,11 @@
   .template-body { margin: 4px 0 0; color: var(--hint); font-size: 0.875rem; white-space: pre-wrap; overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; }
   .template-actions { display: flex; gap: 6px; margin-top: 6px; }
   .file-mention { color: var(--btn); text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 2px; cursor: pointer; }
-  .file-preview-nav { display: flex; align-items: center; gap: 8px; padding: 4px 0 10px; }
-  .file-preview-nav .path { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+  .file-preview-nav { display: flex; align-items: center; gap: 8px; padding: 4px 0 10px; flex-wrap: wrap; }
+  .file-preview-nav .path { flex: 1 1 100%; order: 2; min-width: 0; overflow-wrap: anywhere; }
+  .itembar { justify-content: flex-start; }
+  .itembar > .path { order: 2; }
+  .itembar > .btn { flex: none; }
   .file-preview { min-height: 0; max-height: 65vh; overflow: auto; overscroll-behavior: contain; }
   .file-preview .content { padding: 0; }
   .html-viewer { display: block; width: 100%; height: min(65vh, 640px); border: 0; border-radius: 8px; background: #fff; }
