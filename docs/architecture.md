@@ -559,7 +559,7 @@ An unlinked Threaded Mode topic acts as the main chat. These commands also work 
 
 | Surface | Actions |
 | --- | --- |
-| Reply keyboard | 🎛 Panel, 🖥 Screen, 📁 Project, ⚙️ Config, ✍️ Annotate, and 🧩 Templates. Project groups Files and Changes. Config adjusts the linked session's model and thinking effort. Buttons never route as agent prompt text. |
+| Reply keyboard | 🎛 Panel, 🖥 Screen, 📁 Project, ✍️ Annotate, and 🧩 Templates. Project groups Files, Changes, and session-bound Config. Buttons never route as agent prompt text. |
 | Waiting notice | Send now / Send all now, Cancel / Cancel all. Sending stops at the first non-steerable command or note and never bypasses prompt checks. |
 | Permission / question | Options from the supported prompt, Escape, and where supported tick/next/text-answer flows. Read the full prompt. |
 | Startup question | Checked cursor movement and Enter; buttons are bound to the question's process. |

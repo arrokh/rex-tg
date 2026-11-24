@@ -66,19 +66,17 @@ func TestKeyboardWebAppURLs(t *testing.T) {
 	k := &keyboardSource{}
 	k.snap.Store(&kbSnap{key: key, gen: "1", url: "https://mac.example.ts.net/"})
 	kb := k.forPart(store.Part{Kind: "notice", Key: "intro:4", ThreadID: 7})
-	if len(kb.Keyboard) != 2 || len(kb.Keyboard[0]) != 3 || len(kb.Keyboard[1]) != 3 {
+	if len(kb.Keyboard) != 2 || len(kb.Keyboard[0]) != 3 || len(kb.Keyboard[1]) != 2 {
 		t.Fatalf("rows: %+v", kb.Keyboard)
 	}
 	want := map[string]string{
-		"🎛 Panel": "panel", "🖥 Screen": "screen", "📁 Project": "project", "⚙️ Config": "config", "✍️ Annotate": "annotate", "🧩 Templates": "templates",
+		"🎛 Panel": "panel", "🖥 Screen": "screen", "📁 Project": "project", "✍️ Annotate": "annotate", "🧩 Templates": "templates",
 	}
 	for _, row := range kb.Keyboard {
 		for _, b := range row {
 			view, hasView := want[b.Text]
 			if !hasView {
-				if b.Text != "📥 Queue" || b.WebApp != nil {
-					t.Errorf("unexpected non-page button: %+v", b)
-				}
+				t.Errorf("unexpected keyboard button: %+v", b)
 				continue
 			}
 			if b.WebApp == nil {

@@ -1289,7 +1289,7 @@ func TestReplyKeyboard(t *testing.T) {
 	wantKeyboard := func(m tgtest.Message) {
 		t.Helper()
 		kb := m.Keyboard
-		if kb == nil || !kb.IsPersistent || !kb.ResizeKeyboard || len(kb.Keyboard) != 2 {
+		if kb == nil || !kb.IsPersistent || !kb.ResizeKeyboard || len(kb.Keyboard) != 2 || len(kb.Keyboard[0]) != 3 || len(kb.Keyboard[1]) != 2 {
 			t.Fatalf("%q: keyboard = %+v", m.Text, kb)
 		}
 		var got []string
@@ -1301,7 +1301,7 @@ func TestReplyKeyboard(t *testing.T) {
 				got = append(got, b.Text)
 			}
 		}
-		if strings.Join(got, "|") != "🎛 Panel|🖥 Screen|📁 Project|⚙️ Config|✍️ Annotate|🧩 Templates" {
+		if strings.Join(got, "|") != "🎛 Panel|🖥 Screen|📁 Project|✍️ Annotate|🧩 Templates" {
 			t.Errorf("buttons = %v", got)
 		}
 	}
