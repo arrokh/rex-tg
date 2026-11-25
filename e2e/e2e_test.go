@@ -27,8 +27,15 @@ import (
 	"rex-tg/internal/telegram/tgtest"
 )
 
+var rexBin = func() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return config.Default("").Rex.CLI
+	}
+	return config.Default(home).Rex.CLI
+}()
+
 const (
-	rexBin  = "/Applications/Rex Beta.app/Contents/Helpers/Rex Server.rex/Contents/MacOS/rex"
 	ownerID = int64(4242)
 	chatID  = int64(4242)
 	think   = 3 * time.Second

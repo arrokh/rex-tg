@@ -217,6 +217,43 @@ type Config struct {
 
 func secs(s float64) Duration { return Duration{time.Duration(s * float64(time.Second))} }
 
+func rexAppBundleCLI(app string) string {
+	return filepath.Join("/Applications", app, "Contents", "Helpers", "Rex Server.rex", "Contents", "MacOS", "rex")
+}
+
+func executableFile(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.Mode().IsRegular() && info.Mode().Perm()&0o111 != 0
+}
+
+// defaultRexCLI prefers installed Rex paths, including the version-managed
+// app-support install, then falls back to the current app bundle location.
+func defaultRexCLI(home string) string {
+	candidates := make([]string, 0, 3)
+	if home != "" {
+		candidates = append(candidates, filepath.Join(home, "Library", "Application Support", "com.superlogical.rex", "RexServer", "Versions", "Current", "Rex Server.app", "Contents", "MacOS", "rex"))
+	}
+	candidates = append(candidates, rexAppBundleCLI("Rex.app"), rexAppBundleCLI("Rex Beta.app"))
+	for _, candidate := range candidates {
+		if executableFile(candidate) {
+			return candidate
+		}
+	}
+	return rexAppBundleCLI("Rex.app")
+}
+
+// migrateMissingRexCLI updates only a missing known bundle path; custom paths
+// stay authoritative so a typo or a remote setup is not silently rewritten.
+func migrateMissingRexCLI(cli, home string) string {
+	if executableFile(cli) {
+		return cli
+	}
+	if cli == rexAppBundleCLI("Rex.app") || cli == rexAppBundleCLI("Rex Beta.app") {
+		return defaultRexCLI(home)
+	}
+	return cli
+}
+
 // Default returns the default configuration for the given home folder.
 func Default(home string) Config {
 	var c Config
@@ -225,7 +262,7 @@ func Default(home string) Config {
 	c.Telegram.RatePerSecond = 1
 	c.Telegram.RateBurst = 5
 
-	c.Rex.CLI = "/Applications/Rex Beta.app/Contents/Helpers/Rex Server.rex/Contents/MacOS/rex"
+	c.Rex.CLI = defaultRexCLI(home)
 	c.Rex.ScanInterval = Duration{30 * time.Second}
 	c.Rex.NewSession = "rex-tg"
 
@@ -302,6 +339,7 @@ func Load(path, home string) (Config, error) {
 	if err != nil {
 		return Config{}, fmt.Errorf("config: parse %s: %w", path, err)
 	}
+	c.Rex.CLI = migrateMissingRexCLI(c.Rex.CLI, home)
 	if un := md.Undecoded(); len(un) > 0 {
 		keys := make([]string, len(un))
 		for i, k := range un {
