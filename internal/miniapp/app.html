@@ -193,6 +193,8 @@
   .bar .status { min-width: 0; overflow-wrap: anywhere; }
   .chip { white-space: nowrap; }
   .chip:disabled { opacity: 0.35; }
+  /* Project panes can set their own display, such as config-page's flex layout. */
+  .view-pane[hidden] { display: none !important; }
   /* one file or one change */
   .view[hidden] { display: none; }
   .itembar { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 0 0 10px; flex-wrap: wrap; }
