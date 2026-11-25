@@ -402,8 +402,8 @@
   // --- trees: the file explorer and the changes ---
 
   // Telegram's back button runs the one action set last (none: hidden).
-  // rootBack is what Back does at the top of a page opened from the panel:
-  // it returns to the panel.
+  // rootBack returns panel-opened pages to the panel and closes keyboard-opened
+  // pages; a view can set a more local action while it is open.
   var backAction = null, rootBack = null;
   if (tg && tg.BackButton) { tg.BackButton.onClick(function () { if (backAction) { backAction(); } }); }
   function setBack(f) {
@@ -412,6 +412,9 @@
   }
   function backToPanel() {
     if (history.length > 1) { history.back(); } else if (tg && tg.close) { tg.close(); }
+  }
+  function closeMiniApp() {
+    if (tg && tg.close) { tg.close(); }
   }
 
   function size(n) {
@@ -3617,14 +3620,13 @@
         back.setAttribute("aria-label", "Back to the control panel");
         back.addEventListener("click", backToPanel);
         title.parentNode.insertBefore(back, title);
-      } else if (p.kind !== "control" && fromKb) {
-        var toPanel = function () { location.href = appURL({ go: "panel" }); };
-        rootBack = toPanel;
-        var back2 = el("button", "backlink", "‹ Panel");
-        back2.type = "button";
-        back2.setAttribute("aria-label", "Back to the panel");
-        back2.addEventListener("click", toPanel);
-        title.parentNode.insertBefore(back2, title);
+      } else if (fromKb) {
+        rootBack = closeMiniApp;
+        var closeButton = el("button", "backlink", "Close");
+        closeButton.type = "button";
+        closeButton.setAttribute("aria-label", "Close the Mini App");
+        closeButton.addEventListener("click", closeMiniApp);
+        title.parentNode.insertBefore(closeButton, title);
       }
       setBack(null);
       if (p.kind === "screen") { liveScreen(); return; }

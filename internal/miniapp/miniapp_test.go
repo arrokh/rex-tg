@@ -132,6 +132,21 @@ func TestProjectTabsHideInactivePanesDespiteDisplayStyles(t *testing.T) {
 	}
 }
 
+func TestKeyboardLaunchHasCloseInsteadOfPanelBack(t *testing.T) {
+	js := string(appJS)
+	for _, want := range []string{
+		"else if (fromKb) {",
+		"rootBack = closeMiniApp;",
+		`el("button", "backlink", "Close")`,
+		`setAttribute("aria-label", "Close the Mini App")`,
+		"addEventListener(\"click\", closeMiniApp)",
+	} {
+		if !strings.Contains(js, want) {
+			t.Errorf("app.js lacks keyboard-launch close behavior %q", want)
+		}
+	}
+}
+
 func TestExplicitFileOfferCanPreviewGitIgnoredFile(t *testing.T) {
 	root, _ := newRepo(t)
 	write(t, filepath.Join(root, ".gitignore"), "node_modules/\nbuild.log\nresults/\n")
