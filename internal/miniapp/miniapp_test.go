@@ -126,6 +126,12 @@ func TestPageOnlyForTheOwner(t *testing.T) {
 	}
 }
 
+func TestProjectTabsHideInactivePanesDespiteDisplayStyles(t *testing.T) {
+	if !strings.Contains(string(appHTML), `.view-pane[hidden] { display: none !important; }`) {
+		t.Fatal("project tab panes need an explicit hidden rule to override pane display styles")
+	}
+}
+
 func TestExplicitFileOfferCanPreviewGitIgnoredFile(t *testing.T) {
 	root, _ := newRepo(t)
 	write(t, filepath.Join(root, ".gitignore"), "node_modules/\nbuild.log\nresults/\n")
