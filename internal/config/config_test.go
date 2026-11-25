@@ -19,6 +19,62 @@ func write(t *testing.T, body string) string {
 	return p
 }
 
+func TestDefaultRexCLIFindsCurrentAppSupportInstall(t *testing.T) {
+	home := t.TempDir()
+	cli := filepath.Join(home, "Library", "Application Support", "com.superlogical.rex", "RexServer", "Versions", "Current", "Rex Server.app", "Contents", "MacOS", "rex")
+	if err := os.MkdirAll(filepath.Dir(cli), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cli, []byte("fixture"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if got := Default(home).Rex.CLI; got != cli {
+		t.Fatalf("default Rex CLI = %q, want installed path %q", got, cli)
+	}
+}
+
+func TestDefaultRexCLIFallsBackToAnAppBundlePath(t *testing.T) {
+	const current = "/Applications/Rex.app/Contents/Helpers/Rex Server.rex/Contents/MacOS/rex"
+	const legacy = "/Applications/Rex Beta.app/Contents/Helpers/Rex Server.rex/Contents/MacOS/rex"
+	if got := defaultRexCLI(t.TempDir()); got != current && got != legacy {
+		t.Fatalf("default Rex CLI fallback = %q, want a supported app-bundle path", got)
+	}
+}
+
+func TestLoadMigratesMissingLegacyRexCLI(t *testing.T) {
+	home := t.TempDir()
+	want := filepath.Join(home, "Library", "Application Support", "com.superlogical.rex", "RexServer", "Versions", "Current", "Rex Server.app", "Contents", "MacOS", "rex")
+	if err := os.MkdirAll(filepath.Dir(want), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(want, []byte("fixture"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path := write(t, `[rex]
+cli = "/Applications/Rex Beta.app/Contents/Helpers/Rex Server.rex/Contents/MacOS/rex"
+`)
+	got, err := Load(path, home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Rex.CLI != want {
+		t.Fatalf("migrated Rex CLI = %q, want %q", got.Rex.CLI, want)
+	}
+}
+
+func TestLoadPreservesCustomMissingRexCLI(t *testing.T) {
+	const custom = "/custom/rex"
+	got, err := Load(write(t, `[rex]
+cli = "/custom/rex"
+`), t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Rex.CLI != custom {
+		t.Fatalf("custom Rex CLI = %q, want %q", got.Rex.CLI, custom)
+	}
+}
+
 func TestDefaults(t *testing.T) {
 	c := Default("/h")
 	if c.Telegram.RatePerSecond != 1 || c.Telegram.RateBurst != 5 {

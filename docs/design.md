@@ -1070,7 +1070,7 @@ rate_per_second = 1
 rate_burst = 5
 
 [rex]
-cli = "/Applications/Rex Beta.app/Contents/Helpers/Rex Server.rex/Contents/MacOS/rex"
+cli = "/Applications/Rex.app/Contents/Helpers/Rex Server.rex/Contents/MacOS/rex" # Default searches the version-managed app-support install and both app bundles.
 scan_interval = "30s"
 new_session = "rex-tg"       # the Rex session where /new opens its tabs
 new_folders = []             # folders that /new offers first, such as ["~/work/app"]

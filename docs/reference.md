@@ -345,7 +345,7 @@ rate_per_second = 1                     # Messages per second for the whole chat
 rate_burst = 5                          # Messages that may be sent at once above that rate.
 
 [rex]
-cli = "/Applications/Rex Beta.app/Contents/Helpers/Rex Server.rex/Contents/MacOS/rex"  # Path to the rex CLI.
+cli = "/Applications/Rex.app/Contents/Helpers/Rex Server.rex/Contents/MacOS/rex"  # Default finds the installed Rex CLI; this is its fallback path.
 scan_interval = "30s"                   # How often rex-tg scans the Rex panes, as a backup to Rex events.
 new_session = "rex-tg"                  # The Rex session where /new and `rex-tg new` open tabs.
 new_folders = []                        # Folders that /new always offers first, such as ["~/work/app"].
@@ -569,7 +569,7 @@ To delete the token: `security delete-generic-password -s rex-tg -a bot-token`. 
 | --- | --- |
 | Threaded Mode is off | In @BotFather, choose your bot, then turn on Bot Settings > Threaded Mode. Check with `rex-tg doctor`. |
 | Codex does not trust the hooks | Start Codex once, and trust the new rex-tg entries. |
-| Rex is not running | rex-tg cannot read or type into panes. It retries every 10 seconds and never starts Rex. Start Rex Beta. If `doctor` cannot find the Rex CLI, set `[rex] cli`. |
+| Rex is not running | rex-tg cannot read or type into panes. It retries every 10 seconds and never starts Rex. Start Rex. The default searches the version-managed app-support install, `/Applications/Rex.app`, and the older Rex Beta app. If `doctor` still cannot find the Rex CLI, set `[rex] cli` to its executable path. |
 | No owner is paired | Run `rex-tg pair`, then send `/start <code>` to the bot. |
 | "waiting for session" | rex-tg learns the session file at the agent's next prompt or turn end. |
 | "message thread not found" | You deleted the topic in Telegram, so rex-tg detached it without stopping the agent. Open the agent again with `/agents` to make a replacement topic. |
