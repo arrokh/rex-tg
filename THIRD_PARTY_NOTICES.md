@@ -28,4 +28,4 @@ Inspect the upstream license files at the pinned module versions. A successful b
 
 ## External tools and assets
 
-Rex Beta, pi, Claude Code/cux, Codex, Telegram, Tailscale, ffmpeg, whisper.cpp, and speech models are installed or accessed separately. Their own licenses, service terms, and account requirements apply. The screen renderer uses fonts installed on macOS; no font files are vendored here. Review separate distribution obligations before bundling any of these products or models with rex-tg.
+Rex, pi, Claude Code/cux, Codex, Telegram, Tailscale, Hex, and Hex speech models are installed or accessed separately. Their own licenses, service terms, and account requirements apply. The screen renderer uses fonts installed on macOS; no font files are vendored here. Review separate distribution obligations before bundling any of these products or models with rex-tg.

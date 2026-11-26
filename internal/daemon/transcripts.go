@@ -578,13 +578,13 @@ func (d *daemon) onBatch(ev evBatch) {
 			if at.IsZero() {
 				at = now
 			}
-			echo := false
+			echo, steered := false, false
 			switch e.Kind {
 			case agents.UserPrompt:
 				d.shownReset(th.ID) // a new turn: the images of the last one are not its own
 				d.turnStarted(conv.ID, conv.CWD, e.Key, tr.Running())
 				if !e.Auto { // no person typed it, so it is no Telegram message
-					echo = d.echo(th, e, now)
+					echo, steered = d.echo(th, e, now)
 					if !echo && d.cfg.Display.MacNotice && d.typedRecently(th.ID, e.At, now) {
 						// The text did not match, but rex-tg typed into this
 						// pane a moment ago. Never hold that turn: its answer
@@ -617,7 +617,11 @@ func (d *daemon) onBatch(ev evBatch) {
 					}
 				}
 			}
-			items = append(items, d.work(th, tr.Event(e, echo, now))...)
+			actions := tr.Event(e, echo, now)
+			if steered {
+				tr.SteeredPrompt()
+			}
+			items = append(items, d.work(th, actions)...)
 		}
 	}
 
@@ -688,9 +692,10 @@ func (d *daemon) typedRecently(thread int64, at, now time.Time) bool {
 	return false
 }
 
-// echo tells whether a transcript prompt is a message that rex-tg typed. An
-// echo acknowledges the Telegram message (👍) and is not posted again.
-func (d *daemon) echo(th store.Thread, e agents.Event, now time.Time) bool {
+// echo tells whether a transcript prompt is a message that rex-tg typed and
+// whether it joined a turn already in progress. An echo acknowledges the
+// Telegram message (👍) and is not posted again.
+func (d *daemon) echo(th store.Thread, e agents.Event, now time.Time) (echo, steered bool) {
 	at := e.At
 	if at.IsZero() || now.Sub(at) < 30*time.Second {
 		at = now
@@ -712,24 +717,26 @@ func (d *daemon) echo(th store.Thread, e agents.Event, now time.Time) bool {
 	id, ok := inbound.MatchEcho(e.Text, at, cands)
 	if !ok {
 		// A previous attempt may already have acknowledged this event before
-		// its transcript transaction failed. Preserve its Telegram origin on
-		// replay, including after restart, without acknowledging it twice.
-		acked, err := d.st.AcknowledgedEcho(d.ctx, th.ID, e.Key)
+		// its transcript transaction failed. Preserve its Telegram origin and
+		// steering state on replay, including after restart, without acknowledging
+		// it twice.
+		acked, steered, err := d.st.AcknowledgedEcho(d.ctx, th.ID, e.Key)
 		if err != nil {
 			d.log.Warn("echo: acknowledged event", "err", err)
 		}
-		return acked
+		return acked, steered
 	}
 	if dl != nil && dl.in.UpdateID == id {
 		dl.echoKey = e.Key // the Enter is still being confirmed; onTyped acknowledges
-		return true
-	}
-	if err := d.st.AckInbound(d.ctx, id, e.Key); err != nil {
-		d.log.Warn("ack inbound", "err", err)
+		return true, dl.steered
 	}
 	if r, ok := byID[id]; ok {
+		steered = r.Reason == store.InboundReasonSteered
+		if err := d.st.AckInbound(d.ctx, id, e.Key); err != nil {
+			d.log.Warn("ack inbound", "err", err)
+		}
 		d.react(r, "👍")
 		delete(d.extra, r.UpdateID)
 	}
-	return true
+	return true, steered
 }

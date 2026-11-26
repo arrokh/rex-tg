@@ -154,6 +154,7 @@ rex-tg adds a keyboard under the message box: 🎛 Panel, 🖥 Screen, 📁 Proj
 
 - Tap a paragraph, a list item, a heading, a table row, or a line of code to add a note to it. Or select part of the text and tap `✍️ Note on selection`. Notes are marked with numbers; tap one to change or delete it.
 - The note editor has quick actions for `Yes` and `No`; either one saves the note and closes the editor in one tap. The existing-comment button restores the saved comment on this note, or reuses the latest saved comment when adding a new one; it fills the editor, so tap `Save` to keep it. Annotations are green for Yes, red for No, and purple for comments. Use `Review` to send.
+- Add Note and Review focus their text fields when opened. On a hardware keyboard, ⌘/Ctrl+Enter saves and closes Add Note, ⌘/Ctrl+Y saves Yes, and ⌘/Ctrl+N saves No. In Review, ⌘/Ctrl+Enter sends to the agent and ⌘/Ctrl+Y copies the notes.
 - `Review` lists the notes. You can add a message to the agent. Then choose how to send:
   - `Send to agent`: rex-tg sends the notes to the agent as one queued message. It waits until the agent is idle and follows `/pause`; the topic gets a copy (`✍️ Notes sent to the agent`). Keyboard launches require your verified Tailscale login; signed launches require fresh Telegram data. The action stays on the page's topic and session. If the agent started a new session meanwhile, or the page belongs to another topic, the notes are refused. After a successful send, the notes disappear from this page and the Mini App closes. An uncertain send keeps the notes and action ID, and leaves the Mini App open; retries use the same ID. After ten minutes, the page asks you to check the topic before starting another send.
   - `Copy`: copies the notes. Paste them in the topic yourself.
@@ -237,7 +238,7 @@ In a linked topic, open the **Config** tab inside **📁 Project** to change the
 - Only two kinds of message make a sound: the agent's answer (its first message) and a prompt that waits for you (an alert or its reminder). Progress, notices, the waiting notice, and replies to commands come silently. `/mute` makes a topic's answers and reminders silent too. An alert still makes a sound.
 - Quick replies are buttons under each answer that send their text to the agent with one tap, as if you typed it. They are off by default. Set them with `[display] quick_replies`, such as `["Continue", "Yes", "Run tests", "Commit"]`: at most 8, each 1 to 64 characters. They sit two to a row, and the 📄 and 📝 buttons one to a row, so a phone shows their labels whole. A quick reply waits like any typed message, for example while a prompt is open. An answer that comes as a `.md` file has no buttons.
 - `typing…` shows while the agent works, in the topic you used last.
-- The progress message appears after 2 seconds without an answer. It shows the latest commentary and the recent tool calls. It never shows tool output, unless `/verbose full` is on.
+- In progress mode, the message appears after 2 seconds without an answer. It shows the latest commentary and recent tool calls. If you send another Telegram message while the agent works, its first non-final text is sent as a separate answer, not shown as the progress headline. The progress message never shows tool output, unless `/verbose full` is on.
 - The progress message stays the last message of a running turn. When an alert, a notice, or your own message comes below it, it moves down. While a prompt waits for your answer, the alert stays last.
 - At the end of a turn, the progress message becomes a `✅ Done` summary only when the turn took 2 minutes or more (`[display] summary_after`). A shorter turn that ends with an answer leaves just the answer, so many short turns do not fill the topic. An error, a stop, or an interrupted turn always keeps its summary.
 - Its first icon is an hourglass (⏳ ⌛). By default it turns only when the message changes. Set `[display] progress_animation` (for example `"5s"`) to turn it on a fixed pace while the agent works. The progress edits share one budget (below), so a fast animation on many topics slows down instead.
@@ -331,7 +332,7 @@ rex-tg reads `~/.config/rex-tg/config.toml`. The file is optional.
 
 - You only need the lines you change.
 - An unknown key is an error. rex-tg names the key.
-- A leading `~` is expanded in `rex.cli`, `rex.new_folders`, `state.dir`, `voice.whisper_cli`, and `agents.claude_exec_glob`. Use an absolute path for `voice.model`.
+- A leading `~` is expanded in `rex.cli`, `rex.new_folders`, `state.dir`, `voice.hex_cli`, and `agents.claude_exec_glob`.
 - Restart the daemon after a change: `launchctl kickstart -k gui/$(id -u)/local.rex-tg`.
 
 Every key, with its default:
@@ -425,9 +426,11 @@ files = true                            # /files opens a read-only browser of th
 changes = true                          # /changes shows what changed in the agent's git repository in the Mini App.
 
 [voice]
-whisper_cli = ""                        # Path to whisper-cli. Empty turns voice notes off.
-model = ""                              # Path to a ggml model file. Use an absolute path.
-language = ""                           # Language code for whisper.cpp, such as "en".
+enable_stt = true                       # Turn local voice-note transcription on.
+auto_process_stt = true                 # Transcribe new voice notes automatically.
+disable_stt = false                     # Turn transcription off after Hex is installed.
+hex_cli = ""                            # Hex CLI path; empty discovers it automatically.
+language = ""                           # Optional language code supported by Hex's selected model.
 
 [state]
 dir = "~/.local/state/rex-tg"           # Database, spool, logs, and uploads.
@@ -501,24 +504,22 @@ Final answers, summaries, and other Markdown messages use the same Telegram HTML
 
 ## Voice notes
 
-Telegram voice notes and audio files use the same local transcription setup: ffmpeg and whisper.cpp.
+Voice-note transcription is on by default and runs locally through Hex. Audio does not go to a cloud speech service. On the first voice note, if Hex is missing, rex-tg asks whether to install it. **Yes** checks for Hex and Homebrew, installs Hex with `brew install --cask anomalyco/tap/hex` only when needed, and installs Hex's selected speech model. **No** skips setup. **Read the action items** lists what Yes will do. Nothing is installed before you choose Yes.
 
-1. Install ffmpeg: `brew install ffmpeg`.
-2. Install whisper.cpp: `brew install whisper-cpp`. This adds the `whisper-cli` command.
-3. Download a ggml model file from the whisper.cpp project, such as `ggml-base.en.bin`.
-4. Find the command path: `which whisper-cli`.
-5. Set the three keys:
+If Hex is already installed, setup skips the app installation. If Hex is open, model installation may continue in the background; rex-tg waits until Hex reports that the model is ready before it says setup is complete. Then send a new voice note to test transcription. Hex chooses its selected model by default. `hex model list` shows models; `hex model install <id>` downloads and selects one, while `hex model use <id>` selects an installed model. `hex transcribe <file> --model <id>` can override the model for one command. The optional `voice.language` setting is passed to Hex and must be supported by its selected model. Legacy `voice.whisper_cli` and `voice.model` keys are accepted but ignored so older config files still load; remove them.
+
+The bot replies with 🎤 and the transcript, then queues the text for the agent like a normal message. A restart that interrupts a transcription asks you to send the voice note again; it never types the audio twice.
 
 ```toml
 [voice]
-whisper_cli = "/path/from/which/whisper-cli"
-model = "/Users/you/models/ggml-base.en.bin"   # absolute path; ~ is not expanded here
-language = "en"
+enable_stt = true                       # Turn local voice-note transcription on.
+auto_process_stt = true                 # Transcribe new voice notes automatically.
+disable_stt = false                     # Turn transcription off after Hex is installed.
+hex_cli = ""                            # Hex CLI path; empty discovers it automatically.
+language = ""                           # Optional language supported by Hex's selected model.
 ```
 
-rex-tg converts a voice note or audio file to 16 kHz WAV with ffmpeg, and whisper-cli transcribes it. The bot replies with 🎤 and the text. The text then goes to the agent like any message.
-
-When voice is off, the bot replies `Voice notes need whisper.cpp; see the README.`
+`auto_process_stt = false` leaves new voice notes untranscribed and tells you automatic transcription is paused. `disable_stt = true` takes effect when Hex is installed; if Hex is not installed yet, the setup offer still appears. `enable_stt = false` turns off transcription and setup.
 
 ## Run, stop, and update
 

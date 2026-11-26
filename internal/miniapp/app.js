@@ -2297,7 +2297,7 @@
 
   // sheetUI shows a bottom sheet. build(box, close) fills it; Back closes it.
   function sheetUI(label, build, onClose) {
-    var prev = document.activeElement;
+    var prev = document.activeElement, shortcut = null;
     var scrim = el("div", "scrim");
     var box = el("div", "sheet");
     box.setAttribute("role", "dialog");
@@ -2314,7 +2314,11 @@
       scrim.style.bottom = "auto";
       box.style.maxHeight = Math.floor(vv.height * 0.9) + "px";
     }
-    function onKey(e) { if (e.key === "Escape") { close(); } }
+    function onKey(e) {
+      if (e.key === "Escape") { close(); return; }
+      if (!shortcut || !(e.metaKey || e.ctrlKey) || e.altKey || e.shiftKey) { return; }
+      if (shortcut(e)) { e.preventDefault(); }
+    }
     var closed = false;
     function close(quiet) {
       if (closed) { return; }
@@ -2330,7 +2334,7 @@
     scrim.addEventListener("click", function (e) { if (e.target === scrim) { close(); } });
     document.addEventListener("keydown", onKey);
     if (vv) { vv.addEventListener("resize", fit); vv.addEventListener("scroll", fit); fit(); }
-    build(box, close);
+    build(box, close, function (handle) { shortcut = handle; });
     document.body.appendChild(scrim);
     document.body.style.overflow = "hidden";
     setBack(close);
@@ -2506,7 +2510,7 @@
         setTimeout(restore, 300);
       }
       hap("light");
-      sheetUI(existing ? "Edit note" : "Add a note", function (box, close) {
+      sheetUI(existing ? "Edit note" : "Add a note", function (box, close, setShortcut) {
         var q = el("button", "aquote", o.quote);
         q.type = "button";
         q.setAttribute("aria-expanded", "false");
@@ -2572,6 +2576,16 @@
         });
         del.addEventListener("click", function () { dropNote(o.id); hap("light"); close(); });
         cancel.addEventListener("click", function () { close(); });
+        setShortcut(function (e) {
+          var key = e.key.toLowerCase();
+          if (key === "enter") {
+            if (!sv.disabled) { sv.click(); }
+            return true;
+          }
+          if (key === "y") { saveQuick("Yes"); return true; }
+          if (key === "n") { saveQuick("No"); return true; }
+          return false;
+        });
         setTimeout(function () { try { ta.focus(); } catch (e) { /* none */ } }, 30);
       }, function () {
         if (!again) { restorePagePosition(); }
@@ -2584,7 +2598,7 @@
 
     function reviewSheet() {
       hap("light");
-      sheetUI("Review", function (box, close) {
+      sheetUI("Review", function (box, close, setShortcut) {
         reviewClose = close;
         var listBox = el("div", "rlistn");
         function draw() {
@@ -2750,16 +2764,40 @@
           attempt();
         }
         function sendNow(text) {
+          if (busy) { return; }
           if (sendPath() !== "direct") {
             toast({ ok: false, message: noSendText() });
             busy = false;
             sync();
             return;
           }
+          if (utf8Length(text) > 16000) {
+            toast({ ok: false, message: "These notes are too long to send (16000 bytes at most). Remove a note, or use Copy." });
+            return;
+          }
           sendDirect(text);
         }
         draw();
         sync();
+        setShortcut(function (e) {
+          var key = e.key.toLowerCase();
+          if (key === "enter") {
+            msg = mta.value;
+            persist();
+            var text = compose();
+            if (text) { sendNow(text); }
+            return true;
+          }
+          if (key === "y") {
+            msg = mta.value;
+            persist();
+            var text = compose();
+            if (text) { copyText(text); }
+            return true;
+          }
+          return false;
+        });
+        setTimeout(function () { try { mta.focus(); } catch (e) { /* none */ } }, 30);
       }, function () { reviewClose = null; });
     }
     review.addEventListener("click", reviewSheet);

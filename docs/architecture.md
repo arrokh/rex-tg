@@ -404,7 +404,7 @@ For deeper behavior use [design.md](design.md); for exported APIs use [implement
 
 | Feature | Availability / behavior |
 | --- | --- |
-| Progress display | `progress` mode keeps one edited tool-progress message, followed by a separate answer. `block` and `final` modes are alternatives. |
+| Progress display | `progress` mode keeps one edited tool-progress message. The first non-final text after a message steered into an active turn is posted separately; the final answer also stays separate. `block` and `final` modes are alternatives. |
 | Completion summary | A short successful turn leaves its answer; longer turns, failures, and stopped turns can retain a summary. |
 | Verbose / reasoning | Per-topic tool calls/output and stored reasoning can be shown. Reasoning is available only when the agent records it. |
 | Live draft text | Optional `[display] stream`; off by default. Drafts are previews, not durable delivered answers. |
@@ -413,7 +413,7 @@ For deeper behavior use [design.md](design.md); for exported APIs use [implement
 | Work on the Mac | Mac-originated turns can stay on the Mac behind one notice. Send a Telegram message to return to Telegram; the notice can offer the latest answer. |
 | Quick replies | Configurable one-tap answer buttons; off until `[display] quick_replies` is set. |
 | Incoming photos/documents | Download to private local storage; type caption and path. Explicit retry after failure/interruption; successful queue insertion is deduplicated. |
-| Voice / audio | Local ffmpeg + whisper.cpp transcription when configured. Failure/interruption is reported; no cloud speech service is built in. |
+| Voice / audio | Local Hex `transcribe` using Hex's selected speech model; first-time setup requires explicit Yes. A running Hex is checked until its model is ready. Failure/interruption is reported; no cloud speech service is built in. |
 | Outgoing images | Images named by answers can be sent. Images viewed in tool results are also supported for pi and Claude Code, not Codex. |
 | Outgoing file offers | Configured paths in answers get download buttons. Default extensions: `pdf`, `csv`, `tsv`, `html`, `htm`, `xlsx`, `docx`, `pptx`. |
 | Mute | Per-topic answer sound setting; permission alerts still notify. |

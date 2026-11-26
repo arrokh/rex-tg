@@ -37,14 +37,19 @@ var ErrUpdated = errors.New("daemon: the rex-tg binary was replaced; restarting 
 
 // Options configures Run. Nil test seams use the real implementations.
 type Options struct {
-	Config    config.Config
-	Token     string
-	Home      string
-	Logger    *slog.Logger
-	Rex       *rex.Client
-	Telegram  *telegram.Client
-	Now       func() time.Time
-	ProcStart func(pid int) (time.Time, error)
+	Config config.Config
+	// VoiceCommand runs Hex or Homebrew commands for local speech-to-text.
+	// Nil uses exec.CommandContext. Tests inject a fake to avoid installing software.
+	VoiceCommand func(context.Context, string, ...string) ([]byte, error)
+	// VoiceLookPath resolves Hex and Homebrew executables. Nil uses exec.LookPath.
+	VoiceLookPath func(string) (string, error)
+	Token         string
+	Home          string
+	Logger        *slog.Logger
+	Rex           *rex.Client
+	Telegram      *telegram.Client
+	Now           func() time.Time
+	ProcStart     func(pid int) (time.Time, error)
 	// Timing shortens the daemon's fixed waits in tests. Zero keeps the
 	// production values.
 	Timing Timing
@@ -81,6 +86,9 @@ func Run(ctx context.Context, opt Options) error {
 	log := opt.Logger
 	if log == nil {
 		log = slog.New(slog.NewTextHandler(io.Discard, nil))
+	}
+	if cfg.Voice.LegacyWhisperCLI != "" || cfg.Voice.LegacyWhisperModel != "" {
+		log.Warn("legacy voice.whisper_cli and voice.model settings are ignored; voice transcription now uses Hex; remove these keys from config")
 	}
 	now := opt.Now
 	if now == nil {
@@ -146,6 +154,8 @@ func Run(ctx context.Context, opt Options) error {
 		PolledSince:   func(t time.Time) bool { return polled.Load() >= t.UnixNano() },
 	})
 	d := newDaemon(cfg, home, log, now, st, tg, rx, snd, opt.ProcStart, timing)
+	d.voiceCommand = opt.VoiceCommand
+	d.voiceLookPath = opt.VoiceLookPath
 	d.polled = polled
 	d.kb = kb
 	tg.OnHold(d.noteHold) // a long Telegram wait outlives a restart (hold.go)

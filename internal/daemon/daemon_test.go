@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -737,16 +738,192 @@ func TestPhotoIsDownloadedAndItsPathTyped(t *testing.T) {
 	e.waitFor("Enter", func() bool { return len(e.keys()) == 1 })
 }
 
-func TestVoiceNoteWithoutWhisper(t *testing.T) {
-	e, _, thread := piTopic(t, "pi-voice")
+func TestVoiceNoteOffersHexSetupAndCanDecline(t *testing.T) {
+	e := newEnvSerial(t)
+	// DisableSTT does not prevent first-time Hex setup when the CLI is absent.
+	e.cfg.Voice.DisableSTT = true
+	e.seedOwner()
+	p := e.newPi("pi-voice")
+	p.User("start")
+	p.Final("ready")
+	opt := e.options()
+	opt.VoiceLookPath = func(string) (string, error) { return "", errors.New("not installed") }
+	e.startWith(opt)
+	e.hookPi(p, "startup")
+	thread := e.openTopic()
+	e.waitText(thread, "ready")
 	e.tg.AddFile("voice-1", "voice/file_1.oga", []byte("ogg"))
 	e.tg.PushUpdate(telegram.Update{Message: &telegram.Message{
 		MessageID: 9100, MessageThreadID: thread, IsTopicMessage: true,
 		From: &telegram.User{ID: ownerID}, Chat: telegram.Chat{ID: chatID, Type: "private"},
 		Voice: &telegram.Voice{FileID: "voice-1", FileSize: 3, Duration: 1},
 	}})
-	e.waitText(thread, "Voice notes need whisper.cpp")
-	e.never("typing a voice note", 400*time.Millisecond, func() bool { return len(e.pastes()) > 0 })
+	prompt := e.waitText(thread, "Do you want me to help set it up?")
+	if prompt.Markup == nil || len(prompt.Markup.InlineKeyboard) != 2 || prompt.Markup.InlineKeyboard[0][0].Text != "Yes" ||
+		prompt.Markup.InlineKeyboard[0][1].Text != "No" || prompt.Markup.InlineKeyboard[1][0].Text != "Read the action items" {
+		t.Fatalf("setup choices = %+v", prompt.Markup)
+	}
+	e.pressButton(prompt, buttonData(prompt, "Read the action items"))
+	e.waitText(thread, "To set up local speech-to-text")
+	e.pressButton(prompt, buttonData(prompt, "No"))
+	e.waitFor("the No choice to be acknowledged", func() bool { return len(e.tg.Calls("answerCallbackQuery")) > 0 })
+	e.never("typing an untranscribed voice note", 300*time.Millisecond, func() bool { return len(e.pastes()) > 0 })
+}
+
+func TestVoiceDisableSTTOnlyAppliesWhenHexIsAvailable(t *testing.T) {
+	bin := t.TempDir()
+	hex := filepath.Join(bin, "hex")
+	if err := os.WriteFile(hex, nil, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	e := newEnvSerial(t)
+	e.cfg.Voice.DisableSTT = true
+	e.seedOwner()
+	p := e.newPi("pi-voice-disabled")
+	p.User("start")
+	p.Final("ready")
+	opt := e.options()
+	opt.VoiceLookPath = func(name string) (string, error) {
+		if name == "hex" {
+			return hex, nil
+		}
+		return "", errors.New("not installed")
+	}
+	opt.VoiceCommand = func(context.Context, string, ...string) ([]byte, error) {
+		t.Error("disabled voice note ran a Hex command")
+		return nil, errors.New("unexpected command")
+	}
+	e.startWith(opt)
+	e.hookPi(p, "startup")
+	thread := e.openTopic()
+	e.waitText(thread, "ready")
+	e.tg.PushUpdate(telegram.Update{Message: &telegram.Message{
+		MessageID: 9149, MessageThreadID: thread, IsTopicMessage: true,
+		From: &telegram.User{ID: ownerID}, Chat: telegram.Chat{ID: chatID, Type: "private"},
+		Voice: &telegram.Voice{FileID: "voice-disabled", FileSize: 3, Duration: 1},
+	}})
+	e.waitText(thread, "Voice transcription is disabled")
+	if got := len(e.tg.Calls("getFile")); got != 0 {
+		t.Errorf("disabled voice note downloaded %d files", got)
+	}
+	e.stop()
+}
+
+func TestVoiceSetupInstallsHexIdempotentlyThenTranscribes(t *testing.T) {
+	bin := t.TempDir()
+	brew := filepath.Join(bin, "brew")
+	hex := filepath.Join(bin, "hex")
+	for _, path := range []string{brew, hex} {
+		if err := os.WriteFile(path, nil, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	e := newEnvSerial(t)
+	e.seedOwner()
+	p := e.newPi("pi-hex-setup")
+	p.User("start")
+	p.Final("ready")
+	var mu sync.Mutex
+	installed := false
+	brewCalls, modelCalls, statusCalls, transcriptionCalls := 0, 0, 0, 0
+	opt := e.options()
+	opt.VoiceLookPath = func(name string) (string, error) {
+		switch name {
+		case "brew":
+			return brew, nil
+		case "hex":
+			mu.Lock()
+			defer mu.Unlock()
+			if installed {
+				return hex, nil
+			}
+		}
+		return "", errors.New("not installed")
+	}
+	opt.VoiceCommand = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		switch name {
+		case brew:
+			if strings.Join(args, " ") != "install --cask anomalyco/tap/hex" {
+				t.Errorf("Homebrew args = %q", args)
+			}
+			brewCalls++
+			installed = true
+			return nil, nil
+		case hex:
+			if len(args) == 2 && args[0] == "status" && args[1] == "--json" {
+				statusCalls++
+				if statusCalls == 1 {
+					return []byte(`{"model":{"installed":false,"preparing":{"state":"downloading"}},"permissions":{"transcription_model":false}}`), nil
+				}
+				return []byte(`{"model":{"installed":true,"preparing":null},"permissions":{"transcription_model":true}}`), nil
+			}
+			if len(args) >= 2 && args[0] == "model" && args[1] == "install" {
+				modelCalls++
+				return nil, nil
+			}
+			if len(args) >= 2 && args[0] == "transcribe" {
+				transcriptionCalls++
+				if !strings.HasSuffix(args[1], ".oga") {
+					t.Errorf("Hex did not receive the original Ogg voice file: %q", args[1])
+				}
+				data, err := os.ReadFile(args[1])
+				if err != nil || string(data) != "voice-test" {
+					t.Errorf("voice file = %q, %v", data, err)
+				}
+				return []byte("the   test transcript"), nil
+			}
+		}
+		t.Errorf("unexpected voice command %q %q", name, args)
+		return nil, errors.New("unexpected command")
+	}
+	e.startWith(opt)
+	e.hookPi(p, "startup")
+	thread := e.openTopic()
+	e.waitText(thread, "ready")
+
+	e.tg.AddFile("voice-setup", "voice/setup.oga", []byte("ogg"))
+	e.tg.PushUpdate(telegram.Update{Message: &telegram.Message{
+		MessageID: 9150, MessageThreadID: thread, IsTopicMessage: true,
+		From: &telegram.User{ID: ownerID}, Chat: telegram.Chat{ID: chatID, Type: "private"},
+		Voice: &telegram.Voice{FileID: "voice-setup", FileSize: 3, Duration: 1},
+	}})
+	prompt := e.waitText(thread, "Do you want me to help set it up?")
+	e.pressButton(prompt, buttonData(prompt, "Read the action items"))
+	e.waitText(thread, "To set up local speech-to-text")
+	e.pressButton(prompt, buttonData(prompt, "Yes"))
+	e.waitText(thread, "Send a new voice note to test transcription")
+
+	// A second confirmation that was already in flight does not reinstall the
+	// cask or repeat the model setup in this daemon process.
+	e.pressButton(prompt, buttonData(prompt, "Yes"))
+	e.waitFor("the duplicate setup choice to be acknowledged", func() bool { return len(e.callbackTexts()) >= 3 })
+
+	e.tg.AddFile("voice-ready", "voice/ready.oga", []byte("voice-test"))
+	e.tg.PushUpdate(telegram.Update{Message: &telegram.Message{
+		MessageID: 9151, MessageThreadID: thread, IsTopicMessage: true,
+		From: &telegram.User{ID: ownerID}, Chat: telegram.Chat{ID: chatID, Type: "private"},
+		Voice: &telegram.Voice{FileID: "voice-ready", FileSize: 10, Duration: 1},
+	}})
+	e.waitText(thread, "🎤 the test transcript")
+	e.waitFor("the Hex transcript to be typed", func() bool { return len(e.pastes()) == 1 })
+	if got := e.pastes()[0]; got != "the test transcript" {
+		t.Errorf("pasted transcript = %q", got)
+	}
+	e.stop() // wait for the idempotent second setup confirmation to finish
+	mu.Lock()
+	defer mu.Unlock()
+	if brewCalls != 1 || modelCalls != 1 {
+		t.Errorf("setup commands: brew=%d model=%d, want each once", brewCalls, modelCalls)
+	}
+	if statusCalls != 2 {
+		t.Errorf("Hex status checks = %d, want one while downloading and one when ready", statusCalls)
+	}
+	if transcriptionCalls != 1 {
+		t.Errorf("Hex transcribe calls = %d, want 1", transcriptionCalls)
+	}
 }
 
 func TestTakeOverAfterClear(t *testing.T) {
@@ -1009,6 +1186,58 @@ func TestMessageSteersAWorkingAgent(t *testing.T) {
 	e.say(thread, "//compact")
 	e.waitText(thread, "Waiting until the agent is idle")
 	e.never("an agent command typed into the run", 500*time.Millisecond, func() bool { return len(e.pastes()) > 3 })
+}
+
+func TestSteeredCommentaryIsPostedBesideProgress(t *testing.T) {
+	e, p, thread := piTopicCfg(t, "pi-steered-answer", func(e *env) { e.cfg.InputSettings.WhileBusy = "steer" })
+	p.User("start work")
+	p.ToolCall("c1", "sleep 5")
+	initialProgress := e.waitText(thread, "⏱")
+
+	postSteeredAnswer := func(questionText, answerText, callID string, waitForDelivery bool) tgtest.Message {
+		t.Helper()
+		pastes := len(e.pastes())
+		question := e.say(thread, questionText)
+		e.waitFor("the steered question to be typed", func() bool { return len(e.pastes()) > pastes })
+		if waitForDelivery {
+			e.waitFor("the steered delivery to complete", func() bool { m, _ := e.message(question); return m.Reaction == "👀" })
+		}
+		p.User(questionText)
+		e.waitFor("the Telegram prompt echo", func() bool { m, _ := e.message(question); return m.Reaction == "👍" })
+
+		// Pi can write a non-final assistant text block and a tool call in one
+		// JSONL message. The text answers the new question; the tool keeps the
+		// original turn running.
+		p.write(fmt.Sprintf(`{"type":"message","id":%q,"timestamp":%q,"message":{"role":"assistant","content":[{"type":"text","text":%s},{"type":"toolCall","id":%q,"name":"bash","arguments":{"command":"run tests"}}],"stopReason":"toolUse"}}`,
+			p.nextID(), now(), jstr(answerText), callID))
+
+		var answer tgtest.Message
+		e.waitFor("the answer as a separate Telegram message", func() bool {
+			for _, m := range e.botMessages(thread) {
+				if strings.Contains(m.Text, answerText) && !strings.Contains(m.Text, "⏱") {
+					answer = m
+					return true
+				}
+			}
+			return false
+		})
+		e.waitFor("a clean progress message below the answer", func() bool {
+			var latest tgtest.Message
+			for _, m := range e.botMessages(thread) {
+				if strings.Contains(m.Text, "⏱") {
+					latest = m
+				}
+			}
+			return latest.ID > answer.ID && !strings.Contains(latest.Text, answerText)
+		})
+		return answer
+	}
+
+	postSteeredAnswer("quick question one", "The separate answer one", "c2", false)
+	if m, ok := e.message(initialProgress.ID); ok && !m.Deleted {
+		t.Fatal("old progress message should be replaced below the separate answer")
+	}
+	postSteeredAnswer("quick question two", "The separate answer two", "c3", true)
 }
 
 // The progress message stays the last message of a running turn: an alert
@@ -1697,31 +1926,32 @@ func TestCodexAlertUsesConfiguredAnswersAndDenyIsNo(t *testing.T) {
 	}
 }
 
-func writeScript(t *testing.T, path, body string) {
-	t.Helper()
-	if err := os.WriteFile(path, []byte("#!/bin/sh\n"+body+"\n"), 0o755); err != nil {
+func TestVoiceNoteUsesHexTranscribe(t *testing.T) {
+	bin := t.TempDir()
+	hex := filepath.Join(bin, "hex")
+	if err := os.WriteFile(hex, nil, 0o700); err != nil {
 		t.Fatal(err)
 	}
-}
-
-func TestVoiceNoteWithWhisper(t *testing.T) {
-	bin := t.TempDir()
-	// The fake ffmpeg copies its input to the last argument; the fake whisper
-	// prints a transcript and records its arguments.
-	writeScript(t, filepath.Join(bin, "ffmpeg"), `for a; do last="$a"; done; cp "$5" "$last"`)
-	argsFile := filepath.Join(bin, "whisper.args")
-	writeScript(t, filepath.Join(bin, "whisper"), fmt.Sprintf(`echo "$@" > %s; echo " run the   tests "`, argsFile))
-	t.Setenv("PATH", bin+":"+os.Getenv("PATH")) // so this test does not run in parallel
-
 	e := newEnvSerial(t)
-	e.cfg.Voice.WhisperCLI = filepath.Join(bin, "whisper")
-	e.cfg.Voice.Model = "/models/base.bin"
+	e.cfg.Voice.HexCLI = hex
 	e.cfg.Voice.Language = "en"
 	e.seedOwner()
-	p := e.newPi("pi-whisper")
+	p := e.newPi("pi-hex")
 	p.User("start")
 	p.Final("ready")
-	e.start()
+	opt := e.options()
+	var args []string
+	opt.VoiceCommand = func(_ context.Context, name string, got ...string) ([]byte, error) {
+		if name != hex {
+			t.Fatalf("voice command = %q, want %q", name, hex)
+		}
+		args = append([]string(nil), got...)
+		if len(got) < 2 || got[0] != "transcribe" {
+			t.Fatalf("Hex arguments = %q", got)
+		}
+		return []byte(" run the   tests \n"), nil
+	}
+	e.startWith(opt)
 	e.hookPi(p, "startup")
 	thread := e.openTopic()
 	e.waitText(thread, "ready")
@@ -1737,9 +1967,8 @@ func TestVoiceNoteWithWhisper(t *testing.T) {
 	if got := e.pastes()[0]; got != "run the tests" {
 		t.Errorf("pasted %q", got)
 	}
-	args, _ := os.ReadFile(argsFile)
-	if !strings.Contains(string(args), "-m /models/base.bin -l en -nt") || !strings.Contains(string(args), "-f ") {
-		t.Errorf("whisper arguments = %q", args)
+	if len(args) != 4 || args[0] != "transcribe" || !strings.HasSuffix(args[1], ".oga") || args[2] != "--language" || args[3] != "en" {
+		t.Errorf("Hex arguments = %q", args)
 	}
 }
 

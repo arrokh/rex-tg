@@ -228,6 +228,8 @@ type Tracker struct {
 	macNote   string // the last notice HTML asked for
 	quiet     bool   // this turn is held: nothing of it is posted
 	fromTG    bool   // a message from Telegram is part of this turn
+
+	awaitingPromptReply bool // a steered Telegram prompt needs a separate reply message
 }
 
 // New returns a Tracker with no turn in progress.
@@ -244,11 +246,11 @@ func (t *Tracker) Running() bool { return t.ph == phActive }
 
 // Streaming tells whether a draft of the agent's text belongs to the topic
 // now (design section 8.1a): a turn runs, it is shown on Telegram (not held
-// for the Mac), its answer is not out yet, and the mode is not final (answers
-// only). text is the agent's latest commentary, redacted; it is "" in block
-// mode, where each block is posted as a message anyway.
+// for the Mac), its answer is not out yet, no steered reply is pending, and the
+// mode is not final (answers only). text is the agent's latest commentary,
+// redacted; it is "" in block mode, where each block is posted as a message.
 func (t *Tracker) Streaming() (text string, ok bool) {
-	if (t.ph != phActive && t.ph != phEnding) || t.quiet || t.answered || t.set.Mode == "final" {
+	if (t.ph != phActive && t.ph != phEnding) || t.quiet || t.answered || t.awaitingPromptReply || t.set.Mode == "final" {
 		return "", false
 	}
 	if t.set.Mode == "block" {
@@ -295,6 +297,17 @@ func (t *Tracker) post(out []Action, p Post) []Action {
 		t.pendingRepost = true
 	}
 	return append(out, p)
+}
+
+// SteeredPrompt marks a Telegram prompt delivered while this turn was working.
+// Its first non-final assistant text is posted separately from progress.
+func (t *Tracker) SteeredPrompt() {
+	if t.ph != phActive || !t.progressMode() {
+		return
+	}
+	t.awaitingPromptReply = true
+	t.commentary, t.commentaryKey, t.commentaryPending = "", "", false
+	t.markDirty()
 }
 
 // Event feeds one transcript event. echo is true for a prompt that came from
@@ -394,6 +407,17 @@ func (t *Tracker) Event(ev agents.Event, echo bool, now time.Time) []Action {
 		default:
 			out = t.beginIfNeeded(out, now)
 			t.unblock()
+			if t.awaitingPromptReply && t.progressMode() && strings.TrimSpace(ev.Text) != "" {
+				t.awaitingPromptReply = false
+				t.commentary, t.commentaryKey, t.commentaryPending = "", "", false
+				t.commentarySeen = true
+				t.markDirty()
+				out = t.post(out, Post{Key: ev.Key, Kind: "answer", Markdown: r(ev.Text)})
+				break
+			}
+			if !t.progressMode() {
+				t.awaitingPromptReply = false
+			}
 			t.commentary = ev.Text
 			t.commentaryKey = ev.Key
 			t.commentaryPending = true
@@ -447,6 +471,7 @@ func (t *Tracker) markDirty() {
 
 // answer handles a Final or Error-phase text.
 func (t *Tracker) answer(out []Action, ev agents.Event, now time.Time) []Action {
+	t.awaitingPromptReply = false
 	isErr := ev.Phase == agents.Error
 	text := t.cfg.Redact(ev.Text)
 	held := t.held()
@@ -532,6 +557,7 @@ func (t *Tracker) finalize(out []Action, now time.Time) []Action {
 		t.commentaryPending = false
 	}
 	t.ph = phEnded
+	t.awaitingPromptReply = false
 	if t.shown {
 		out = t.finish(out, now)
 	}
@@ -749,31 +775,32 @@ type SnapshotCall struct {
 // Snapshot is everything needed to continue a turn after a restart. It is
 // JSON-serializable.
 type Snapshot struct {
-	Phase             string         `json:"phase"` // "", active, ending, ended
-	Start             time.Time      `json:"start"`
-	EndedAt           time.Time      `json:"ended_at"`
-	GraceAt           time.Time      `json:"grace_at"`
-	EndKind           string         `json:"end_kind,omitempty"`
-	Calls             []SnapshotCall `json:"calls,omitempty"`
-	Commentary        string         `json:"commentary,omitempty"`
-	CommentaryKey     string         `json:"commentary_key,omitempty"`
-	CommentaryPending bool           `json:"commentary_pending,omitempty"`
-	CommentarySeen    bool           `json:"commentary_seen,omitempty"`
-	Answered          bool           `json:"answered,omitempty"`
-	ErrText           string         `json:"err_text,omitempty"`
-	Blocked           bool           `json:"blocked,omitempty"`
-	Shown             bool           `json:"shown,omitempty"`
-	LastEdit          time.Time      `json:"last_edit"`
-	Dirty             bool           `json:"dirty,omitempty"`
-	PendingRepost     bool           `json:"pending_repost,omitempty"`
-	FinishHeld        bool           `json:"finish_held,omitempty"`
-	LastHTML          string         `json:"last_html,omitempty"`
-	LastTyping        time.Time      `json:"last_typing"`
-	OnMac             bool           `json:"on_mac,omitempty"`
-	MacPrompt         string         `json:"mac_prompt,omitempty"`
-	MacNote           string         `json:"mac_note,omitempty"`
-	Quiet             bool           `json:"quiet,omitempty"`
-	FromTG            bool           `json:"from_tg,omitempty"`
+	Phase               string         `json:"phase"` // "", active, ending, ended
+	Start               time.Time      `json:"start"`
+	EndedAt             time.Time      `json:"ended_at"`
+	GraceAt             time.Time      `json:"grace_at"`
+	EndKind             string         `json:"end_kind,omitempty"`
+	Calls               []SnapshotCall `json:"calls,omitempty"`
+	Commentary          string         `json:"commentary,omitempty"`
+	CommentaryKey       string         `json:"commentary_key,omitempty"`
+	CommentaryPending   bool           `json:"commentary_pending,omitempty"`
+	CommentarySeen      bool           `json:"commentary_seen,omitempty"`
+	Answered            bool           `json:"answered,omitempty"`
+	ErrText             string         `json:"err_text,omitempty"`
+	Blocked             bool           `json:"blocked,omitempty"`
+	Shown               bool           `json:"shown,omitempty"`
+	LastEdit            time.Time      `json:"last_edit"`
+	Dirty               bool           `json:"dirty,omitempty"`
+	PendingRepost       bool           `json:"pending_repost,omitempty"`
+	FinishHeld          bool           `json:"finish_held,omitempty"`
+	LastHTML            string         `json:"last_html,omitempty"`
+	LastTyping          time.Time      `json:"last_typing"`
+	OnMac               bool           `json:"on_mac,omitempty"`
+	MacPrompt           string         `json:"mac_prompt,omitempty"`
+	MacNote             string         `json:"mac_note,omitempty"`
+	Quiet               bool           `json:"quiet,omitempty"`
+	FromTG              bool           `json:"from_tg,omitempty"`
+	AwaitingPromptReply bool           `json:"awaiting_prompt_reply,omitempty"`
 }
 
 // Active reports whether the snapshot holds a turn that has not ended.
@@ -789,6 +816,7 @@ func (t *Tracker) Snapshot() Snapshot {
 		Shown: t.shown, LastEdit: t.lastEdit, Dirty: t.dirty, PendingRepost: t.pendingRepost, FinishHeld: t.finishHeld,
 		LastHTML: t.lastHTML, LastTyping: t.lastTyping,
 		OnMac: t.onMac, MacPrompt: t.macPrompt, MacNote: t.macNote, Quiet: t.quiet, FromTG: t.fromTG,
+		AwaitingPromptReply: t.awaitingPromptReply,
 	}
 	for _, c := range t.calls {
 		s.Calls = append(s.Calls, SnapshotCall{ID: c.id, Name: c.name, Kind: c.kind, Label: c.label, Status: c.status})
@@ -807,6 +835,7 @@ func Restore(cfg Config, s Settings, snap Snapshot) *Tracker {
 	t.shown, t.lastEdit, t.dirty, t.pendingRepost, t.finishHeld = snap.Shown, snap.LastEdit, snap.Dirty, snap.PendingRepost, snap.FinishHeld
 	t.lastHTML, t.lastTyping = snap.LastHTML, snap.LastTyping
 	t.onMac, t.macPrompt, t.macNote, t.quiet, t.fromTG = snap.OnMac, snap.MacPrompt, snap.MacNote, snap.Quiet, snap.FromTG
+	t.awaitingPromptReply = snap.AwaitingPromptReply
 	t.dropHoldIfOff()
 	for _, c := range snap.Calls {
 		t.calls = append(t.calls, call{id: c.ID, name: c.Name, kind: c.Kind, label: c.Label, status: c.Status})

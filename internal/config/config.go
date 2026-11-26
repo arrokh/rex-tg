@@ -204,11 +204,16 @@ type Config struct {
 		// idle, with ⚡ Send now and ✖ Cancel.
 		WhileBusy string `toml:"while_busy"`
 	} `toml:"input"`
-	// Voice is optional. An empty WhisperCLI turns voice notes off.
+	// Voice controls local speech-to-text for Telegram voice notes. Hex is
+	// discovered automatically unless HexCLI names an explicit executable.
 	Voice struct {
-		WhisperCLI string `toml:"whisper_cli"`
-		Model      string `toml:"model"`
-		Language   string `toml:"language"`
+		EnableSTT          bool   `toml:"enable_stt"`
+		AutoProcessSTT     bool   `toml:"auto_process_stt"`
+		DisableSTT         bool   `toml:"disable_stt"`
+		HexCLI             string `toml:"hex_cli"`
+		Language           string `toml:"language"`
+		LegacyWhisperCLI   string `toml:"whisper_cli"` // accepted for old configs, ignored
+		LegacyWhisperModel string `toml:"model"`       // accepted for old configs, ignored
 	} `toml:"voice"`
 	State struct {
 		Dir string `toml:"dir"`
@@ -319,6 +324,10 @@ func Default(home string) Config {
 	c.InputSettings.WhileBusy = "steer"
 	c.InputSettings.MaxUploadMB = 20
 
+	c.Voice.EnableSTT = true
+	c.Voice.AutoProcessSTT = true
+	c.Voice.DisableSTT = false
+
 	c.State.Dir = filepath.Join(home, ".local/state/rex-tg")
 	return c
 }
@@ -389,7 +398,7 @@ func expandHome(p, home string) string {
 func (c *Config) expand(home string) {
 	c.Rex.CLI = expandHome(c.Rex.CLI, home)
 	c.State.Dir = expandHome(c.State.Dir, home)
-	c.Voice.WhisperCLI = expandHome(c.Voice.WhisperCLI, home)
+	c.Voice.HexCLI = expandHome(c.Voice.HexCLI, home)
 	for i, g := range c.Agents.ClaudeExecGlob {
 		c.Agents.ClaudeExecGlob[i] = expandHome(g, home)
 	}

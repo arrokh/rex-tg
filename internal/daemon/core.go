@@ -66,9 +66,10 @@ type (
 	}
 	// evTyped reports the end of a paste and Enter.
 	evTyped struct {
-		thread int64
-		in     store.Inbound
-		err    error
+		thread  int64
+		in      store.Inbound
+		steered bool
+		err     error
 	}
 	// evTopicCreated reports a new Telegram topic that the core must link.
 	evTopicCreated struct {
@@ -174,7 +175,11 @@ type daemon struct {
 	rules         registry.Rules // how a process is told to be an agent
 	// hasProgram reports whether a program that /new can start (cux) is
 	// installed; see installed.
-	hasProgram func(name string) bool
+	hasProgram      func(name string) bool
+	voiceCommand    func(context.Context, string, ...string) ([]byte, error)
+	voiceLookPath   func(string) (string, error)
+	voiceSetupMu    sync.Mutex
+	voiceSetupReady atomic.Bool
 
 	ctx    context.Context
 	cancel context.CancelFunc

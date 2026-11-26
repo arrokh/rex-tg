@@ -32,6 +32,22 @@ func TestClaudeSessionStartedWithTailStart(t *testing.T) {
 	wantKinds(t, e.claudeHook("b1", "UserPromptSubmit", "c1", "", e.at(6)), StateChanged)
 }
 
+func TestHookResolvesMissingRexSessionFromBlock(t *testing.T) {
+	e := newEnv(t)
+	e.rx.setBlock(sess1, "b1", piProc(101, cwdA))
+	ch, err := e.reg.Hook(e.ctx, HookReport{
+		Runtime: agents.Pi, Event: "session_start", At: e.at(5), RexBlock: "b1",
+		Payload: []byte(`{"hook_event_name":"session_start","reason":"startup","session_id":"p1","session_file":"/h/.pi/agent/sessions/x/p1.jsonl","cwd":"/w/proj"}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantKinds(t, ch, SessionStarted)
+	if got := e.pane("b1"); got.Session != sess1 || got.ConversationID != e.conv(agents.Pi, "p1").ID {
+		t.Fatalf("pane after hook = %+v", got)
+	}
+}
+
 // cux starts claude as its child, so cux is in front of the pane. Claude's
 // hooks from that pane count, and the pane's agent process is cux: typing
 // checks that cux is still in front.

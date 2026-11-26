@@ -57,8 +57,18 @@ func hookState(rt agents.Runtime, event string, p hookPayload) (state, kind stri
 func (r *Registry) Hook(ctx context.Context, rep HookReport) ([]Change, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if rep.RexSession == "" || rep.RexBlock == "" || !rep.Runtime.Valid() {
+	if rep.RexBlock == "" || !rep.Runtime.Valid() {
 		return nil, nil
+	}
+	if rep.RexSession == "" {
+		session, err := r.sessionForBlock(ctx, rep.RexBlock)
+		if err != nil {
+			return nil, err
+		}
+		if session == "" {
+			return nil, nil
+		}
+		rep.RexSession = session
 	}
 	now := r.opt.Now()
 	at := rep.At
@@ -148,6 +158,40 @@ func (r *Registry) Hook(ctx context.Context, rep HookReport) ([]Change, error) {
 		out = append(out, ch...)
 	}
 	return out, nil
+}
+
+// sessionForBlock finds the Rex session of a block when a hook process has no
+// REX_SESSION environment variable. The store is the fast path; the Rex scan
+// covers the first hook, which can arrive before the daemon's pane scan.
+func (r *Registry) sessionForBlock(ctx context.Context, block string) (string, error) {
+	pane, ok, err := r.st.PaneByBlock(ctx, r.opt.Host, block)
+	if err != nil {
+		return "", fmt.Errorf("registry: find pane for hook: %w", err)
+	}
+	if ok && pane.GoneAt.IsZero() && pane.Session != "" {
+		return pane.Session, nil
+	}
+	sessions, err := r.rx.Sessions(ctx)
+	if err != nil {
+		return "", fmt.Errorf("registry: list sessions for hook: %w", err)
+	}
+	found := ""
+	for _, s := range sessions {
+		blocks, err := r.rx.Blocks(ctx, s.ID)
+		if err != nil {
+			return "", fmt.Errorf("registry: list blocks for hook in %s: %w", s.ID, err)
+		}
+		for _, b := range blocks {
+			if b.ID != block {
+				continue
+			}
+			if found != "" && found != s.ID {
+				return "", nil // an ambiguous block is never adopted
+			}
+			found = s.ID
+		}
+	}
+	return found, nil
 }
 
 // hookSession extracts the session that a hook names. It returns false when
