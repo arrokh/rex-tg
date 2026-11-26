@@ -44,7 +44,7 @@ func (f *fakeRex) Blocks(_ context.Context, s string) ([]rex.Block, error) {
 	return append([]rex.Block(nil), f.blocks[s]...), nil
 }
 
-func (f *fakeRex) Process(_ context.Context, _, b string) (rex.Process, error) {
+func (f *fakeRex) Process(_ context.Context, s, b string) (rex.Process, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.procErr != nil {
@@ -54,7 +54,12 @@ func (f *fakeRex) Process(_ context.Context, _, b string) (rex.Process, error) {
 	if !ok {
 		return rex.Process{}, errors.New("no such block")
 	}
-	return p, nil
+	for _, block := range f.blocks[s] {
+		if block.ID == b {
+			return p, nil
+		}
+	}
+	return rex.Process{}, errors.New("no such block")
 }
 
 func (f *fakeRex) ProgramStatus(_ context.Context, _, b string) ([]rex.StatusRecord, error) {

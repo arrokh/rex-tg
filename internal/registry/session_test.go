@@ -48,6 +48,36 @@ func TestHookResolvesMissingRexSessionFromBlock(t *testing.T) {
 	}
 }
 
+func TestHookFindsMovedBlockWhenRexSessionIsMissing(t *testing.T) {
+	e := newEnv(t)
+	e.rx.setBlock(sess1, "b1", piProc(101, cwdA))
+	e.piHook("b1", "session_start", "p1", "startup", e.at(5))
+
+	// A stored session still resolves quickly while the block remains there.
+	same, err := e.reg.Hook(e.ctx, HookReport{
+		Runtime: agents.Pi, Event: "session_start", At: e.at(6), RexBlock: "b1",
+		Payload: []byte(`{"hook_event_name":"session_start","reason":"resume","session_id":"p1","session_file":"/h/.pi/agent/sessions/x/p1.jsonl","cwd":"/w/proj"}`),
+	})
+	if err != nil || len(same) != 0 {
+		t.Fatalf("same-session hook = %v, %v", kinds(same), err)
+	}
+
+	const movedSession = "session:two"
+	e.rx.removeBlock(sess1, "b1")
+	e.rx.setBlock(movedSession, "b1", piProc(101, cwdA))
+	ch, err := e.reg.Hook(e.ctx, HookReport{
+		Runtime: agents.Pi, Event: "session_start", At: e.at(7), RexBlock: "b1",
+		Payload: []byte(`{"hook_event_name":"session_start","reason":"resume","session_id":"p2","session_file":"/h/.pi/agent/sessions/x/p2.jsonl","cwd":"/w/proj"}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantKinds(t, ch, SessionStopped, SessionStarted)
+	if got := e.pane("b1"); got.Session != movedSession || got.ConversationID != e.conv(agents.Pi, "p2").ID {
+		t.Fatalf("pane after moved-block hook = %+v", got)
+	}
+}
+
 // cux starts claude as its child, so cux is in front of the pane. Claude's
 // hooks from that pane count, and the pane's agent process is cux: typing
 // checks that cux is still in front.
