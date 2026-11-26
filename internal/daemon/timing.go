@@ -34,6 +34,7 @@ type Timing struct {
 	ControlCoreWait time.Duration // how long a control panel request waits for the core (10 s)
 	ControlOpenWait time.Duration // how long the panel's open waits for the topic (30 s)
 	ControlRunWait  time.Duration // how long a panel request waits for a background action (35 s)
+	VoiceModelPoll  time.Duration // how often setup checks a model Hex downloads in the background (2 s)
 	// PromptRecheck is how often the screen of a blocked pane is read to see
 	// whether its prompt was answered, in its first minute (3 s).
 	PromptRecheck time.Duration
@@ -74,5 +75,6 @@ func (t Timing) withDefaults() Timing {
 	def(&t.ControlCoreWait, 10*time.Second)
 	def(&t.ControlOpenWait, 30*time.Second)
 	def(&t.ControlRunWait, 35*time.Second)
+	def(&t.VoiceModelPoll, 2*time.Second)
 	return t
 }

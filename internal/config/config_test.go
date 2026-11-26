@@ -114,8 +114,8 @@ func TestDefaults(t *testing.T) {
 		!strings.HasPrefix(c.UploadDir(), c.State.Dir) {
 		t.Errorf("paths: %s %s %s %s %s", c.DBPath(), c.SpoolDir(), c.LogDir(), c.LockPath(), c.UploadDir())
 	}
-	if c.Voice.WhisperCLI != "" {
-		t.Error("voice should be off by default")
+	if !c.Voice.EnableSTT || !c.Voice.AutoProcessSTT || c.Voice.DisableSTT || c.Voice.HexCLI != "" {
+		t.Errorf("voice defaults = %+v, want STT and auto processing on, disable off", c.Voice)
 	}
 	cl := c.Input(agents.Claude)
 	if cl.PasteEnterDelay.Duration != 300*time.Millisecond || cl.WhileWorking != "steer" ||
@@ -185,7 +185,10 @@ queue_expiry = "1h"
 max_upload_mb = 7
 
 [voice]
-whisper_cli = "~/w"
+hex_cli = "~/bin/hex"
+enable_stt = false
+auto_process_stt = false
+disable_stt = true
 language = "en"
 
 [state]
@@ -232,11 +235,27 @@ dir = "~/st"
 	if c.InputSettings.QueueExpiry.Duration != time.Hour || c.InputSettings.MaxUploadMB != 7 {
 		t.Errorf("input = %+v", c.InputSettings)
 	}
-	if c.Voice.WhisperCLI != "/h/w" || c.Voice.Language != "en" {
+	if c.Voice.HexCLI != "/h/bin/hex" || c.Voice.EnableSTT || c.Voice.AutoProcessSTT || !c.Voice.DisableSTT || c.Voice.Language != "en" {
 		t.Errorf("voice = %+v", c.Voice)
 	}
 	if c.State.Dir != "/h/st" || c.DBPath() != "/h/st/rex-tg.db" {
 		t.Errorf("state = %+v", c.State)
+	}
+}
+
+func TestLoadAcceptsLegacyWhisperSettings(t *testing.T) {
+	c, err := Load(write(t, `[voice]
+whisper_cli = "/usr/local/bin/whisper-cli"
+model = "/models/base.bin"
+`), "/h")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Voice.LegacyWhisperCLI != "/usr/local/bin/whisper-cli" || c.Voice.LegacyWhisperModel != "/models/base.bin" {
+		t.Errorf("legacy voice settings = %+v", c.Voice)
+	}
+	if !c.Voice.EnableSTT || !c.Voice.AutoProcessSTT {
+		t.Errorf("new voice defaults = %+v", c.Voice)
 	}
 }
 

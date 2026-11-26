@@ -359,20 +359,22 @@ func (s *Store) DeliveredSince(ctx context.Context, threadID int64, since time.T
 		threadID, toMsNN(since))
 }
 
-// AcknowledgedEcho reports whether this exact transcript event already
-// acknowledged input in this topic. Its identity remains useful when a
-// failed transcript transaction replays after the acknowledgment was saved.
-func (s *Store) AcknowledgedEcho(ctx context.Context, threadID int64, eventKey string) (bool, error) {
+// AcknowledgedEcho reports whether this transcript event already acknowledged
+// input in this topic and whether that input joined a running turn. Its identity
+// remains useful when a failed transcript transaction replays after the
+// acknowledgment was saved.
+func (s *Store) AcknowledgedEcho(ctx context.Context, threadID int64, eventKey string) (found, steered bool, err error) {
 	if eventKey == "" {
-		return false, nil
+		return false, false, nil
 	}
-	var found bool
-	err := s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM inbound
-		WHERE thread_id=? AND state='acked' AND acked_event_key=?)`, threadID, eventKey).Scan(&found)
+	err = s.db.QueryRowContext(ctx, `SELECT
+		EXISTS(SELECT 1 FROM inbound WHERE thread_id=? AND state='acked' AND acked_event_key=?),
+		EXISTS(SELECT 1 FROM inbound WHERE thread_id=? AND state='acked' AND acked_event_key=? AND reason=?)`,
+		threadID, eventKey, threadID, eventKey, InboundReasonSteered).Scan(&found, &steered)
 	if err != nil {
-		return false, fmt.Errorf("store: acknowledged echo: %w", err)
+		return false, false, fmt.Errorf("store: acknowledged echo: %w", err)
 	}
-	return found, nil
+	return found, steered, nil
 }
 
 // AckInbound marks an update as confirmed by a transcript line.

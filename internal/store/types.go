@@ -85,6 +85,12 @@ const (
 	InboundDone      = "done"
 )
 
+// Inbound reasons.
+const (
+	// InboundReasonSteered records that delivery joined an already-running turn.
+	InboundReasonSteered = "steered while working"
+)
+
 // Conversation is one agent session. ThreadID is 0 when it has no topic.
 type Conversation struct {
 	ID          int64

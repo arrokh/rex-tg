@@ -21,6 +21,7 @@ const defaultQueueExpiry = 30 * time.Minute
 type delivery struct {
 	in      store.Inbound
 	started time.Time
+	steered bool               // the input joined a turn that was already working
 	echoKey string             // set when the transcript recorded the prompt before Enter was confirmed
 	cancel  context.CancelFunc // stops in-flight work when its topic closes
 }
@@ -43,7 +44,8 @@ type prepResult struct {
 	conv   int64 // the session the checks were made for
 	// guard: the agent works, so a prompt may open at any moment. The
 	// screen is read for one right before the paste and before Enter.
-	guard bool
+	guard   bool
+	steered bool
 }
 
 // Kinds of queued rows that wait until the agent is idle even when
@@ -352,7 +354,7 @@ func (d *daemon) prepare(th store.Thread, in store.Inbound, act inbound.Action) 
 		return refuse(reason)
 	}
 	return prepResult{kind: prepGo, pane: pane, rt: rt, conv: th.CurrentConversationID,
-		guard: steer || act == inbound.ActSendNow}
+		guard: steer || act == inbound.ActSendNow, steered: steer}
 }
 
 // steers reports whether a message sent while an agent of runtime rt works
@@ -522,7 +524,7 @@ func (d *daemon) startTyping(th store.Thread, in store.Inbound, res prepResult) 
 	}
 	delete(d.actions, in.UpdateID)
 	ctx, cancel := context.WithCancel(d.ctx)
-	d.delivering[th.ID] = &delivery{in: in, started: d.now(), cancel: cancel}
+	d.delivering[th.ID] = &delivery{in: in, started: d.now(), steered: res.steered, cancel: cancel}
 	prof := d.cfg.Input(res.rt)
 	delay := prof.PasteEnterDelay.Duration
 	submit := "enter"
@@ -535,11 +537,11 @@ func (d *daemon) startTyping(th store.Thread, in store.Inbound, res prepResult) 
 			submit = ip.SubmitKey
 		}
 	}
-	pane, text, piVim, claudeVim, guard := res.pane, in.Body, res.rt == agents.Pi, res.rt == agents.Claude, res.guard
+	pane, text, piVim, claudeVim, guard, steered := res.pane, in.Body, res.rt == agents.Pi, res.rt == agents.Claude, res.guard, res.steered
 	d.spawn(func() {
 		defer cancel()
 		err := d.typeInto(ctx, th.ID, pane, text, delay, submit, piVim, claudeVim, guard)
-		d.emit(evTyped{thread: th.ID, in: in, err: err})
+		d.emit(evTyped{thread: th.ID, in: in, steered: steered, err: err})
 	})
 }
 
@@ -756,7 +758,11 @@ func (d *daemon) onTyped(e evTyped) {
 		return
 	}
 	d.forget(e.in.UpdateID)
-	if err := d.st.SetInboundState(d.ctx, e.in.UpdateID, store.InboundDelivered, "", now); err != nil {
+	reason := ""
+	if e.steered {
+		reason = store.InboundReasonSteered
+	}
+	if err := d.st.SetInboundState(d.ctx, e.in.UpdateID, store.InboundDelivered, reason, now); err != nil {
 		d.log.Warn("typing: state", "err", err)
 	}
 	control := d.controlTyped(e.in.UpdateID, true)

@@ -236,6 +236,11 @@ func (d *daemon) onCallback(u telegram.Update) {
 		return n, err == nil
 	}
 	switch parts[0] {
+	case voiceSetupCallback:
+		if len(parts) == 2 {
+			d.voiceSetupButton(cb, parts[1])
+			return
+		}
 	case quickReplyData:
 		d.quickReplyButton(u.UpdateID, cb, parts)
 		return

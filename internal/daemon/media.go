@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -16,18 +15,19 @@ import (
 )
 
 const (
-	onlyTextText    = "Only text is supported for now."
-	noVoiceText     = "Voice notes need whisper.cpp; see the README."
-	voiceFailText   = "❌ Could not turn the voice note into text."
-	fileFailText    = "❌ Could not download the file."
-	mediaTimeout    = 2 * time.Minute
-	defaultMaxMB    = 20
-	maxMediaWorkers = 4 // downloads, ffmpeg and Whisper share this budget
+	onlyTextText      = "Only text is supported for now."
+	voiceDisabledText = "Voice transcription is disabled in the [voice] config."
+	voicePausedText   = "Automatic voice transcription is disabled in the [voice] config."
+	voiceFailText     = "❌ Could not turn the voice note into text."
+	fileFailText      = "❌ Could not download the file."
+	mediaTimeout      = 2 * time.Minute
+	defaultMaxMB      = 20
+	maxMediaWorkers   = 4 // downloads and local Hex transcriptions share this budget
 )
 
 // media handles a topic message without text (flow 9). Photos and documents
 // are downloaded, and their path is typed like text. Voice notes are turned
-// into text when whisper.cpp is configured. Other kinds get a short answer.
+// into text by Hex when local STT is enabled. Other kinds get a short answer.
 // It runs in the core loop; downloads and speech to text run in workers.
 func (d *daemon) media(u telegram.Update, m *telegram.Message, th store.Thread) {
 	switch {
@@ -70,20 +70,41 @@ func (d *daemon) media(u telegram.Update, m *telegram.Message, th store.Thread) 
 		})
 	case m.Voice != nil || m.Audio != nil:
 		fileID, size := voiceFile(m.Voice, m.Audio)
+		if !d.cfg.Voice.EnableSTT {
+			if d.recorded(u, m, "voice", "", th.ID, store.InboundDone) {
+				d.replyTopic(th, fmt.Sprintf("voice:%d", u.UpdateID), voiceDisabledText)
+			}
+			return
+		}
+		cli := d.hexCLI()
+		if d.cfg.Voice.DisableSTT && cli != "" {
+			if d.recorded(u, m, "voice", "", th.ID, store.InboundDone) {
+				d.replyTopic(th, fmt.Sprintf("voice:%d", u.UpdateID), voiceDisabledText)
+			}
+			return
+		}
+		if !d.cfg.Voice.AutoProcessSTT {
+			if d.recorded(u, m, "voice", "", th.ID, store.InboundDone) {
+				d.replyTopic(th, fmt.Sprintf("voice:%d", u.UpdateID), voicePausedText)
+			}
+			return
+		}
+		if limit := d.maxUpload(); size > limit {
+			if d.recorded(u, m, "voice", "", th.ID, store.InboundDone) {
+				d.replyTopic(th, fmt.Sprintf("voice:%d", u.UpdateID),
+					fmt.Sprintf("❌ The voice note is too large. The limit is %d MB.", limit>>20))
+			}
+			return
+		}
 		pending := ""
-		if d.cfg.Voice.WhisperCLI != "" && d.cfg.Voice.Model != "" && size <= d.maxUpload() {
+		if cli != "" {
 			pending = voicePendingBody
 		}
 		if !d.recorded(u, m, "voice", pending, th.ID, store.InboundDone) {
 			return
 		}
-		if d.cfg.Voice.WhisperCLI == "" || d.cfg.Voice.Model == "" {
-			d.replyTopic(th, fmt.Sprintf("voice:%d", u.UpdateID), noVoiceText)
-			return
-		}
-		if limit := d.maxUpload(); size > limit {
-			d.replyTopic(th, fmt.Sprintf("voice:%d", u.UpdateID),
-				fmt.Sprintf("❌ The voice note is too large. The limit is %d MB.", limit>>20))
+		if cli == "" {
+			d.promptHexSetup(th)
 			return
 		}
 		dir := filepath.Join(d.cfg.UploadDir(), fmt.Sprint(th.ID))
@@ -95,10 +116,20 @@ func (d *daemon) media(u telegram.Update, m *telegram.Message, th store.Thread) 
 		}
 		d.spawn(func() {
 			defer d.releaseMediaSlot()
-			text, err := d.transcribe(fileID, dir, fmt.Sprintf("%d-voice", msg))
+			text, err := d.transcribe(fileID, dir, fmt.Sprintf("%d-voice", msg), cli)
 			if err != nil || strings.TrimSpace(text) == "" {
 				if d.ctx.Err() == nil {
 					d.log.Warn("voice note", "thread", th.ID, "err", err)
+					if err != nil && isHexSetupError(err) {
+						d.voiceSetupReady.Store(false)
+						if clearErr := d.st.SetInboundBody(d.ctx, update, ""); clearErr != nil {
+							d.log.Warn("clear interrupted voice marker", "update", update, "err", clearErr)
+							d.mediaWorkNotice(th, update, fmt.Sprintf("reply:voice:%d", update), voiceFailText)
+							return
+						}
+						d.promptHexSetup(th)
+						return
+					}
 					d.mediaWorkNotice(th, update, fmt.Sprintf("reply:voice:%d", update), voiceFailText)
 				}
 				return
@@ -216,36 +247,20 @@ func (d *daemon) download(fileID, dir, name string) (string, error) {
 	return path, nil
 }
 
-// transcribe downloads a voice note, converts it to 16 kHz mono WAV with
-// ffmpeg, and runs whisper.cpp on it.
-func (d *daemon) transcribe(fileID, dir, name string) (string, error) {
+// transcribe downloads a Telegram voice note and asks Hex to transcribe the
+// original Ogg/Opus file locally. Hex decodes it without ffmpeg.
+func (d *daemon) transcribe(fileID, dir, name, cli string) (string, error) {
 	src, err := d.download(fileID, dir, name)
 	if err != nil {
 		return "", err
 	}
 	defer os.Remove(src)
-	wav := strings.TrimSuffix(src, filepath.Ext(src)) + ".wav"
-	defer os.Remove(wav)
 	ctx, cancel := context.WithTimeout(d.ctx, mediaTimeout)
 	defer cancel()
-	ffmpeg, err := exec.LookPath("ffmpeg")
-	if err != nil {
-		ffmpeg = "/opt/homebrew/bin/ffmpeg"
+	if !executable(cli) {
+		return "", errHexUnavailable
 	}
-	if out, err := exec.CommandContext(ctx, ffmpeg, "-y", "-loglevel", "error", "-i", src,
-		"-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le", wav).CombinedOutput(); err != nil {
-		return "", fmt.Errorf("ffmpeg: %w: %s", err, strings.TrimSpace(string(out)))
-	}
-	lang := d.cfg.Voice.Language
-	if lang == "" {
-		lang = "auto"
-	}
-	out, err := exec.CommandContext(ctx, d.cfg.Voice.WhisperCLI,
-		"-m", d.cfg.Voice.Model, "-l", lang, "-nt", "-np", "-f", wav).Output()
-	if err != nil {
-		return "", fmt.Errorf("whisper: %w", err)
-	}
-	return strings.Join(strings.Fields(string(out)), " "), nil
+	return d.transcribeHex(ctx, cli, src)
 }
 
 // voiceFile returns the file of a voice note, or of an audio file.

@@ -173,6 +173,7 @@ var testTiming = daemon.Timing{
 	ControlCoreWait: 5 * time.Second,
 	ControlOpenWait: 5 * time.Second,
 	ControlRunWait:  6 * time.Second,
+	VoiceModelPoll:  10 * time.Millisecond,
 }
 
 // start runs the daemon in a goroutine.

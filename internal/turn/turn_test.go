@@ -248,6 +248,44 @@ func TestCommentaryBeforeToolIsNotAnswer(t *testing.T) {
 	}
 }
 
+func TestSteeredPromptCommentaryIsPostedOutsideProgress(t *testing.T) {
+	x := newH(t, turn.Config{}, progress)
+	x.k.Event(prompt("p1", "start work"), true, at(0))
+	x.ev(call("c1", "t1", "Read", agents.ToolRead, "a.go"), 0.5)
+	x.ev(text("m1", agents.Commentary, "Working through the task"), 0.6)
+	x.ev(call("c2", "t2", "Bash", agents.ToolShell, "run tests"), 1)
+	show := find[turn.ShowProgress](t, x.tick(2))
+	if !strings.Contains(show.HTML, "Working through the task") {
+		t.Fatalf("initial commentary should remain in progress: %q", show.HTML)
+	}
+
+	// This prompt joins the running Telegram turn. Its first commentary is a
+	// reply to the new prompt, not another progress headline.
+	x.k.Event(prompt("p2", "quick question"), true, at(2.2))
+	x.k.SteeredPrompt()
+	x.k = turn.Restore(turn.Config{}, progress, x.k.Snapshot())
+	if _, ok := x.k.Streaming(); ok {
+		t.Fatal("stale draft remained open while waiting for the steered prompt reply")
+	}
+	actions := x.k.Event(text("m2", agents.Commentary, "Here is the answer"), false, at(2.5))
+	if types(actions) != "Post" {
+		t.Fatalf("commentary after a steered prompt: got %s, want a separate Post", types(actions))
+	}
+	answer := find[turn.Post](t, actions)
+	if answer.Key != "m2" || answer.Kind != "answer" || answer.Markdown != "Here is the answer" || answer.Silent {
+		t.Fatalf("separate answer = %+v", answer)
+	}
+
+	x.ev(call("c3", "t3", "Edit", agents.ToolEdit, "a.go"), 2.6)
+	repost := find[turn.RepostProgress](t, x.tick(4))
+	if strings.Contains(repost.HTML, "Here is the answer") || strings.Contains(repost.HTML, "Working through the task") {
+		t.Fatalf("progress still contains a reply or stale commentary: %q", repost.HTML)
+	}
+	if !strings.Contains(repost.HTML, "Working…") {
+		t.Fatalf("progress should show work without a commentary headline: %q", repost.HTML)
+	}
+}
+
 func TestIdleNothingIsInterrupted(t *testing.T) {
 	x := newH(t, turn.Config{}, progress)
 	x.k.State(turn.StateWorking, at(0))

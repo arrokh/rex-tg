@@ -37,7 +37,7 @@ In the optional [Mini App](docs/reference.md#mini-app), you can check agent stat
 | --- | --- |
 | Follow progress, inspect a pane, or start another agent | [Daily controls](docs/quickstart.md#daily-use) · [All commands](docs/architecture.md#telegram-commands) |
 | Browse files and Git changes, or annotate answers on my phone | [Optional Mini App](docs/reference.md#mini-app) |
-| Send voice notes | [Local transcription setup](docs/reference.md#voice-notes) |
+| Send voice notes | [Hex speech-to-text setup](docs/reference.md#voice-notes) |
 | Configure, update, or remove the bridge | [User reference](docs/reference.md) |
 | Annotate an agent reply without leaving Rex | [Rex Annotation](https://github.com/arrokh/rex-annotation), a separate macOS plugin; not required by rex-tg |
 
