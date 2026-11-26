@@ -53,6 +53,7 @@ Send `/start <code>` to **the bot you created**, not to BotFather. The code expi
 | Start an agent remotely | `/new` in Telegram. Pick a runtime and a folder on your Mac. |
 | Start an agent locally | From its project folder, run `rex-tg new pi`, `rex-tg new claude`, or `rex-tg new codex`. Then open it with `/agents`. |
 | See what an agent is doing | `/info` for session details, `/screen` for the pane, `/interrupt` to interrupt its current turn. |
+| Post the latest answer held while working on the Mac | `/last` in the linked topic. |
 | Stop remote typing for a while | `/pause`; use `/unpause` to resume. Outgoing replies continue. |
 | Send an agent's slash command | Send `//help` to pass `/help` to the agent instead of opening the bot's help. |
 | Schedule a prompt | `/at 30m check the build` in a linked topic. |

@@ -521,6 +521,7 @@ An unlinked Threaded Mode topic acts as the main chat. These commands also work 
 | Command | Effect / restrictions |
 | --- | --- |
 | `/info` | Show session, pane, state, folder, and settings. |
+| `/last` | Post the newest answer held from the Mac in this topic, once. |
 | `/screen [lines]` | Send a redacted screen picture. Default 30 requested lines; maximum 80 requested, picture limited to 60 lines/200 columns. |
 | `/screen text [lines]` | Send redacted text; `text` and count can be in either order. Keeps at most 3,800 trailing characters. |
 | `/files` | Open the Mini App read-only file browser. |

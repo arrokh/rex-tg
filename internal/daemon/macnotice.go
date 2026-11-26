@@ -277,9 +277,38 @@ func macMarkup(button bool) *telegram.InlineKeyboardMarkup {
 	}}
 }
 
+// lastCommand posts the newest answer held for a Mac turn in this topic.
+func (d *daemon) lastCommand(th store.Thread, updateID int64) {
+	a, ok := d.heldAnswer(th.ID)
+	if !ok {
+		d.replyTopic(th, fmt.Sprintf("%d:last", updateID), "No answer from the Mac yet.")
+		return
+	}
+	if !d.queueHeldAnswer(th, a) {
+		d.replyTopic(th, fmt.Sprintf("%d:last", updateID), "That answer is posted already.")
+	}
+}
+
+// queueHeldAnswer puts a held answer in the outbox with the same stable key
+// used by the notice button, so /last and a button tap cannot post duplicates.
+func (d *daemon) queueHeldAnswer(th store.Thread, a heldAnswer) bool {
+	queued := false
+	for _, it := range d.work(th, []turn.Action{turn.Post{Key: "held:" + a.Key, Kind: "answer", Markdown: a.Markdown}}) {
+		if _, created, err := d.st.Enqueue(d.ctx, it); err != nil {
+			d.log.Warn("enqueue", "thread", th.ID, "kind", it.Kind, "err", err)
+		} else if created {
+			queued = true
+		}
+	}
+	if queued {
+		d.snd.Wake()
+	}
+	return queued
+}
+
 // macAnswerButton is "📄 Last answer": it posts the newest held answer, like
-// any answer. Its outbox key comes from the answer, so a second tap does not
-// post it again.
+// any answer. Its outbox key comes from the answer, so a second tap or /last
+// does not post it again.
 func (d *daemon) macAnswerButton(cb *telegram.CallbackQuery) {
 	th, ok := d.threadOfMessage(cb.Message)
 	if !ok {
@@ -291,18 +320,9 @@ func (d *daemon) macAnswerButton(cb *telegram.CallbackQuery) {
 		d.answerCallback(cb.ID, "No answer from the Mac yet.", false)
 		return
 	}
-	posted := false
-	for _, it := range d.work(th, []turn.Action{turn.Post{Key: "held:" + a.Key, Kind: "answer", Markdown: a.Markdown}}) {
-		if _, created, err := d.st.Enqueue(d.ctx, it); err != nil {
-			d.log.Warn("enqueue", "thread", th.ID, "kind", it.Kind, "err", err)
-		} else if created {
-			posted = true
-		}
-	}
-	if !posted {
+	if !d.queueHeldAnswer(th, a) {
 		d.answerCallback(cb.ID, "That answer is posted already.", false)
 		return
 	}
-	d.snd.Wake()
 	d.answerCallback(cb.ID, "", false)
 }

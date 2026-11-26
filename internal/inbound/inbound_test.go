@@ -23,6 +23,7 @@ func TestRouteText(t *testing.T) {
 		{"main plain ignored", "hello", false, ign},
 		{"empty", "   ", true, ign},
 		{"topic command", "/info", true, cmd("info", "")},
+		{"topic last answer", "/last", true, cmd("last", "")},
 		{"topic command args", "/screen 50", true, cmd("screen", "50")},
 		{"topic command newline args", "/force\nrun tests", true, cmd("force", "run tests")},
 		{"topic command with bot", "/approve@RexBot", true, cmd("approve", "")},
@@ -51,6 +52,7 @@ func TestRouteText(t *testing.T) {
 		{"main other bot", "/status@otherbot", false, ign},
 		{"main help", "/help", false, cmd("help", "")},
 		{"main topic command", "/screen 10", false, cmd(inbound.CmdTopicOnly, "screen")},
+		{"main last answer", "/last", false, cmd(inbound.CmdTopicOnly, "last")},
 		{"main topic command with bot", "/esc@rexbot", false, cmd(inbound.CmdTopicOnly, "esc")},
 		{"main unknown", "/nope arg", false, cmd(inbound.CmdUnknown, "nope")},
 		{"main double slash unknown", "//help", false, cmd(inbound.CmdUnknown, "/help")},
@@ -96,7 +98,7 @@ func TestRouteTextButtons(t *testing.T) {
 }
 
 func TestRouteTextAllCommands(t *testing.T) {
-	for _, c := range []string{"info", "screen", "files", "changes", "approve", "deny", "esc", "interrupt", "key", "force", "mode", "verbose", "reasoning", "resend", "unlink", "mute", "unmute", "queue", "help"} {
+	for _, c := range []string{"info", "screen", "files", "changes", "approve", "deny", "esc", "interrupt", "key", "force", "mode", "verbose", "reasoning", "resend", "unlink", "mute", "unmute", "queue", "last", "help"} {
 		if r := inbound.RouteText("/"+c, true, "b"); r.Kind != inbound.RouteCommand || r.Command != c {
 			t.Errorf("topic /%s: %+v", c, r)
 		}
