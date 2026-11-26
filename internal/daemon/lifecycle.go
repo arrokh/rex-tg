@@ -28,6 +28,7 @@ var botCommands = []telegram.BotCommand{
 	{Command: "rekey", Description: "New key for the keyboard buttons"},
 	{Command: "status", Description: "Daemon health"},
 	{Command: "info", Description: "Topic: session, pane, and state"},
+	{Command: "last", Description: "Topic: post the newest answer held from the Mac"},
 	{Command: "approve", Description: "Topic: answer the open prompt with yes"},
 	{Command: "deny", Description: "Topic: answer the open prompt with no"},
 	{Command: "esc", Description: "Topic: press Escape"},

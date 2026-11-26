@@ -1539,7 +1539,11 @@ func TestReplyKeyboard(t *testing.T) {
 	thread := e.openTopic()
 	wantKeyboard(e.waitText(thread, "Linked"))
 	e.say(thread, "/help")
-	wantKeyboard(e.waitText(thread, "In a topic"))
+	help := e.waitText(thread, "In a topic")
+	wantKeyboard(help)
+	if !strings.Contains(help.Text, "/last - post the newest answer held from the Mac") {
+		t.Errorf("topic help does not list /last: %q", help.Text)
+	}
 	e.say(0, "/help")
 	wantKeyboard(e.waitText(0, "Main chat"))
 	// Other messages carry no reply keyboard.

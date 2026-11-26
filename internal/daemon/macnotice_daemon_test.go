@@ -82,6 +82,54 @@ func TestMacTurnsShowOneNoticeUntilTelegramWrites(t *testing.T) {
 	e.waitFor("the old notice loses its button", func() bool { m, _ := e.message(n.ID); return m.Markup == nil })
 }
 
+func TestLastCommandPostsHeldMacAnswerOnce(t *testing.T) {
+	e, p, thread := macHoldTopic(t, "pi-mac-last")
+	p.User("finish the fix")
+	note := e.waitText(thread, "In use on the Mac")
+	p.Final("the latest answer")
+	e.waitFor("the held answer button", func() bool {
+		m, _ := e.message(note.ID)
+		return m.Markup != nil
+	})
+
+	e.say(thread, "/last")
+	e.waitText(thread, "the latest answer")
+	if got := e.countText(thread, "the latest answer"); got != 1 {
+		t.Fatalf("last answer count after /last = %d, want 1", got)
+	}
+	if len(e.pastes()) != 0 {
+		t.Fatalf("/last was sent to the agent: %q", e.pastes())
+	}
+
+	// The command and notice button share the held answer's idempotency key.
+	e.say(thread, "/last")
+	e.waitText(thread, "posted already")
+	m, _ := e.message(note.ID)
+	e.pressButton(m, m.Markup.InlineKeyboard[0][0].CallbackData)
+	e.never("a duplicate from /last or the button", 400*time.Millisecond, func() bool {
+		return e.countText(thread, "the latest answer") > 1
+	})
+}
+
+func TestLastCommandWithoutHeldAnswerStaysInTelegram(t *testing.T) {
+	e, _, thread := piTopic(t, "pi-last-empty")
+	e.say(thread, "/last")
+	e.waitText(thread, "No answer from the Mac yet")
+	e.say(0, "/last")
+	e.waitText(0, "Use this inside a topic")
+	if len(e.pastes()) != 0 {
+		t.Fatalf("/last was sent to the agent: %q", e.pastes())
+	}
+
+	found := false
+	for _, cmd := range e.tg.Commands() {
+		found = found || cmd.Command == "last"
+	}
+	if !found {
+		t.Fatal("/last is missing from the bot command menu")
+	}
+}
+
 // A Telegram message whose prompt line does not match the typed text (the
 // agent changed it) must not be held: its answer goes to Telegram.
 func TestTypedMessageIsNotHeldWhenItsEchoIsMissed(t *testing.T) {

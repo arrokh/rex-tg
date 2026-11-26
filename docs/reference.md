@@ -113,6 +113,7 @@ Common commands and settings:
 | Command | What it does |
 | --- | --- |
 | `/info` | Shows the session, the pane, the state, and the settings. |
+| `/last` | Posts the newest answer held from the Mac in this topic, once. It shares the Last answer button's at-most-once key. |
 | `/screen [lines]`, `/screen text [lines]` | Sends the pane's screen as a picture, or as text. See [`/screen`](#screen). |
 | `/files`, `/changes` | Opens the read-only file browser or available git comparisons in the Mini App. |
 | `/approve`, `/deny` | Selects a recognized answer to an open permission prompt. |
@@ -251,7 +252,7 @@ In a linked topic, open the **Config** tab inside **📁 Project** to change the
 - When the answer names no image file, the images that the agent looked at during the turn come after it instead: the pictures in its tool results, such as a screenshot that it read with its `read` tool. This works for pi and Claude Code. The last 4 come (`turn_images`, 0 to 10; 0 turns this off), each image once. A photo that you sent from Telegram is never sent back. The pictures are saved for 3 days in the `shown` folder of the state folder, readable only by you.
 - Files go to Telegram only from the agent's folder, your home folder, or a temporary folder, never from a hidden place such as `~/.ssh` or `.env`, or from `~/Library`. A tap checks the place again before the file goes.
 - Other files named in a final answer (`pdf`, `csv`, `tsv`, `html`, `htm`, `xlsx`, `docx`, `pptx`) come only when you ask: a silent `📎 Files in this answer` message lists them with a button each. When Mini App Files is enabled, files inside the agent’s working folder can open directly in the Files viewer. **Attach** sends the file as a Telegram document instead. The attachment button also works without the Mini App. Change the types with `send_files` (`[]` turns the offers off).
-- Work on the Mac: when you type in the pane on the Mac, the topic gets one silent notice, `💻 In use on the Mac`, instead of the prompts and replies. The notice shows the latest prompt and whether the agent is working or done. `📄 Last answer` posts the newest answer. Write in the topic to go on in Telegram: from then on, replies come as usual. Permission prompts still come.
+- Work on the Mac: when you type in the pane on the Mac, the topic gets one silent notice, `💻 In use on the Mac`, instead of the prompts and replies. The notice shows the latest prompt and whether the agent is working or done. `📄 Last answer` or `/last` posts the newest held answer once. Write in the topic to go on in Telegram: from then on, replies come as usual. Permission prompts still come.
 - Set `mac_notice = false` to show Mac turns instead. `💻 You (on Mac)` then shows the prompts typed on the Mac. Prompts that no person typed, such as Claude Code's task notifications, are not shown. Set `show_mac_prompts = false` to hide all of them.
 
 ### Permission prompts

@@ -451,7 +451,7 @@ The user may write in the pane on the Mac for a while, then go on from the phone
 - The topic gets one silent notice: `💻 In use on the Mac · working…`, the latest Mac prompt, and "Replies stay on the Mac. Write here to go on in Telegram."
 - The prompts, progress, typing, and answers of held turns are not posted.
 - The notice is edited as the turns go on: `✅ done`, `⚠️ ended with an error`, or `🔴 agent stopped`, and the next Mac prompt. It is posted once and then only edited, so it makes no sound again.
-- When an answer was held, the notice has a `📄 Last answer` button. It posts the newest held answer, like any answer, once.
+- When an answer was held, the notice has a `📄 Last answer` button. It posts the newest held answer, like any answer, once. `/last` in the linked topic does the same thing; both use the answer's stable outbox key, so the command and button cannot post duplicates.
 - A message from Telegram ends the hold. Its turn is shown as usual. The old notice keeps its text, but loses its button, and the held answer is dropped. The next Mac prompt starts a new hold with a new notice at the bottom of the topic.
 - A turn that Telegram already sees stays shown: a Mac prompt sent into a running Telegram turn only updates the notice, and the turn's end sets it to done.
 - A prompt that does not match the text rex-tg typed (an echo miss, section 9.5) is still taken as from Telegram when rex-tg typed into that pane within 30 seconds before the prompt's own time or since, and the prompt of that message was not seen yet. So a turn that Telegram started is never held.

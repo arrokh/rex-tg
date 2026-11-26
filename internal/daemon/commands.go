@@ -38,6 +38,7 @@ const (
 		"/rename &lt;name&gt; - rename this topic, its Rex pane and its tab; /rename auto names them after the session again\n" +
 		"/unlink - stop mirroring this session\n" +
 		"/queue - see waiting messages and send the eligible FIFO prefix now\n" +
+		"/last - post the newest answer held from the Mac, once\n" +
 		"/attach - choose an unattached Rex agent for this topic\n" +
 		"/rekey - make a new key for the keyboard buttons; the old buttons stop working\n" +
 		"/help - this list"
@@ -399,6 +400,12 @@ func (d *daemon) topicCommand(u telegram.Update, m *telegram.Message, th store.T
 		d.resend(th, upd, r.Args)
 	case "queue":
 		d.queueCommand(th)
+	case "last":
+		if r.Args != "" {
+			reply("last", "Usage: /last")
+			return
+		}
+		d.lastCommand(th, upd)
 	case "unlink":
 		d.unlink(th)
 	case "attach":
