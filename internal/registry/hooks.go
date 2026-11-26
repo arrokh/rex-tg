@@ -161,15 +161,23 @@ func (r *Registry) Hook(ctx context.Context, rep HookReport) ([]Change, error) {
 }
 
 // sessionForBlock finds the Rex session of a block when a hook process has no
-// REX_SESSION environment variable. The store is the fast path; the Rex scan
-// covers the first hook, which can arrive before the daemon's pane scan.
+// REX_SESSION environment variable. The stored session is a fast-path hint,
+// but the block may have moved since the last scan. The Rex scan also covers
+// the first hook, which can arrive before the daemon's pane scan.
 func (r *Registry) sessionForBlock(ctx context.Context, block string) (string, error) {
 	pane, ok, err := r.st.PaneByBlock(ctx, r.opt.Host, block)
 	if err != nil {
 		return "", fmt.Errorf("registry: find pane for hook: %w", err)
 	}
 	if ok && pane.GoneAt.IsZero() && pane.Session != "" {
-		return pane.Session, nil
+		blocks, err := r.rx.Blocks(ctx, pane.Session)
+		if err == nil {
+			for _, b := range blocks {
+				if b.ID == block {
+					return pane.Session, nil
+				}
+			}
+		}
 	}
 	sessions, err := r.rx.Sessions(ctx)
 	if err != nil {
