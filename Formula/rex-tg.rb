@@ -4,8 +4,8 @@ class RexTg < Formula
   # A new release: push a tag, run `make formula-release TAG=<tag>`, and
   # put its URL, tag, and revision here. Homebrew clones the pinned Git tag.
   url "https://github.com/arrokh/rex-tg.git",
-      tag:      "v0.6.24",
-      revision: "b04768bc2e04662a0c69c01f59688b8216009727"
+      tag:      "v0.6.25",
+      revision: "07bf6e0787b16946b1484dab5becb2f75b4d88da"
   license "MIT"
   head "https://github.com/arrokh/rex-tg.git", branch: "main"
 
