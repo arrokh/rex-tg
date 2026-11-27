@@ -25,7 +25,10 @@ import (
 // held answer too ("mac_answer:<thread>"), so a restart keeps both.
 
 // macAnswerData is the callback data of the "📄 Last answer" button.
-const macAnswerData = "ma"
+const (
+	macAnswerData       = "ma"
+	noHeldMacAnswerText = "There is no held Mac answer to post."
+)
 
 func macNoticeKey(thread int64) string { return fmt.Sprintf("mac_notice:%d", thread) }
 func macAnswerKey(thread int64) string { return fmt.Sprintf("mac_answer:%d", thread) }
@@ -281,7 +284,7 @@ func macMarkup(button bool) *telegram.InlineKeyboardMarkup {
 func (d *daemon) lastCommand(th store.Thread, updateID int64) {
 	a, ok := d.heldAnswer(th.ID)
 	if !ok {
-		d.replyTopic(th, fmt.Sprintf("%d:last", updateID), "No answer from the Mac yet.")
+		d.replyTopic(th, fmt.Sprintf("%d:last", updateID), noHeldMacAnswerText)
 		return
 	}
 	if !d.queueHeldAnswer(th, a) {
@@ -317,7 +320,7 @@ func (d *daemon) macAnswerButton(cb *telegram.CallbackQuery) {
 	}
 	a, ok := d.heldAnswer(th.ID)
 	if !ok {
-		d.answerCallback(cb.ID, "No answer from the Mac yet.", false)
+		d.answerCallback(cb.ID, noHeldMacAnswerText, false)
 		return
 	}
 	if !d.queueHeldAnswer(th, a) {
