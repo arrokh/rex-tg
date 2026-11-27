@@ -112,9 +112,15 @@ func TestLastCommandPostsHeldMacAnswerOnce(t *testing.T) {
 }
 
 func TestLastCommandWithoutHeldAnswerStaysInTelegram(t *testing.T) {
-	e, _, thread := piTopic(t, "pi-last-empty")
+	e, p, thread := piTopic(t, "pi-last-empty")
+	p.User("a turn already shown in the topic")
+	p.Final("the answer already in the topic")
+	e.waitText(thread, "the answer already in the topic")
 	e.say(thread, "/last")
-	e.waitText(thread, "No answer from the Mac yet")
+	e.waitText(thread, "There is no held Mac answer to post")
+	if got := e.countText(thread, "the answer already in the topic"); got != 1 {
+		t.Fatalf("/last duplicated an answer already in the topic: %d copies", got)
+	}
 	e.say(0, "/last")
 	e.waitText(0, "Use this inside a topic")
 	if len(e.pastes()) != 0 {
@@ -203,7 +209,7 @@ func TestMacNoticeOffAfterARestartClearsTheHold(t *testing.T) {
 	e.pressButton(old, old.Markup.InlineKeyboard[0][0].CallbackData) // a tap that was on its way
 	e.waitFor("the refusal", func() bool {
 		for _, s := range e.callbackTexts() {
-			if strings.Contains(s, "No answer") {
+			if strings.Contains(s, "no held Mac answer") {
 				return true
 			}
 		}

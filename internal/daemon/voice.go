@@ -17,13 +17,14 @@ import (
 
 const (
 	voiceSetupCallback = "vs"
-	voiceSetupPrompt   = "Hex isn't set up yet. Do you want me to help set it up?"
+	voiceSetupPrompt   = "Hex isn't ready for local speech-to-text. Do you want me to help set it up?"
 	voiceActionItems   = "To set up local speech-to-text, I will:\n" +
 		"1. Check whether Hex and its CLI are already installed.\n" +
 		"2. If needed, install the Hex app and CLI with Homebrew.\n" +
-		"3. Install or prepare Hex's selected speech model.\n" +
-		"4. Verify the model setup.\n\n" +
-		"Nothing is installed until you choose Yes. After setup, send a new voice note to test transcription."
+		"3. Start Hex if needed and enable Labs › Transcribe files.\n" +
+		"4. Install or prepare Hex's selected speech model.\n" +
+		"5. Verify the model setup.\n\n" +
+		"Nothing is installed or enabled until you choose Yes. After setup, send a new voice note to test transcription."
 	voiceSetupTimeout = 30 * time.Minute
 )
 
@@ -106,7 +107,9 @@ func isHexSetupError(err error) bool {
 		return true
 	}
 	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "model-unavailable") ||
+	return strings.Contains(msg, "transcribe files is off") ||
+		(strings.Contains(msg, "transcribe-files") && strings.Contains(msg, "is off")) ||
+		strings.Contains(msg, "model-unavailable") ||
 		strings.Contains(msg, "model-not-ready") ||
 		strings.Contains(msg, "model required") ||
 		strings.Contains(msg, "no speech model") ||
@@ -124,7 +127,7 @@ func (d *daemon) voiceSetupButton(cb *telegram.CallbackQuery, action string) {
 		d.answerCallback(cb.ID, "Here are the setup steps.", false)
 		d.say(th.ChatID, th.MessageThreadID, voiceActionItems, nil)
 	case "n":
-		d.answerCallback(cb.ID, "Okay. Nothing was installed.", false)
+		d.answerCallback(cb.ID, "Okay. Nothing was installed or enabled.", false)
 		d.removeButtons(cb.Message.Chat.ID, cb.Message.MessageID)
 	case "y":
 		d.answerCallback(cb.ID, "Checking Hex setup…", false)
@@ -182,19 +185,26 @@ func (d *daemon) setupHex(chatID, threadID int64) {
 		edit("I couldn't check whether Hex is running. Check Hex, then send another voice note to retry setup.")
 		return
 	}
+	if !running {
+		edit("Starting Hex to configure voice transcription…")
+		if _, err := d.runVoiceCommand(ctx, cli, "start"); err != nil {
+			d.log.Warn("start Hex for voice setup", "err", err)
+			edit("I couldn't start Hex to configure voice transcription. Open Hex, then send another voice note to retry setup.")
+			return
+		}
+		running = true
+	}
+	edit("Enabling Hex Labs › Transcribe files…")
+	if _, err := d.runVoiceCommand(ctx, cli, "labs", "on", "transcribe-files"); err != nil {
+		d.log.Warn("enable Hex file transcription", "err", err)
+		edit("I couldn't enable Hex Labs › Transcribe files. Check Hex, then send another voice note to retry setup.")
+		return
+	}
 	edit("Hex is installed. Downloading and selecting its local speech model…")
 	if _, err := d.runVoiceCommand(ctx, cli, "model", "install"); err != nil {
 		d.log.Warn("install Hex speech model", "err", err)
 		edit("Hex is installed, but its speech model isn't ready. Check the network connection and available disk space, then send another voice note to retry setup.")
 		return
-	}
-	if !running {
-		running, err = d.hexRunning(ctx, cli)
-		if err != nil {
-			d.log.Warn("check Hex status after model install", "err", err)
-			edit("I couldn't confirm that Hex finished setting up its speech model. Check Hex, then send another voice note to retry setup.")
-			return
-		}
 	}
 	if running {
 		edit("Waiting for Hex to finish preparing its speech model…")

@@ -825,8 +825,8 @@ func TestVoiceSetupInstallsHexIdempotentlyThenTranscribes(t *testing.T) {
 	p.User("start")
 	p.Final("ready")
 	var mu sync.Mutex
-	installed := false
-	brewCalls, modelCalls, statusCalls, transcriptionCalls := 0, 0, 0, 0
+	installed, running := false, false
+	brewCalls, startCalls, labsCalls, modelCalls, statusCalls, transcriptionCalls := 0, 0, 0, 0, 0, 0
 	opt := e.options()
 	opt.VoiceLookPath = func(name string) (string, error) {
 		switch name {
@@ -855,10 +855,25 @@ func TestVoiceSetupInstallsHexIdempotentlyThenTranscribes(t *testing.T) {
 		case hex:
 			if len(args) == 2 && args[0] == "status" && args[1] == "--json" {
 				statusCalls++
-				if statusCalls == 1 {
+				if !running {
+					return []byte(`{"code":"not-running"}`), errors.New("Hex is not running")
+				}
+				if statusCalls == 2 {
 					return []byte(`{"model":{"installed":false,"preparing":{"state":"downloading"}},"permissions":{"transcription_model":false}}`), nil
 				}
 				return []byte(`{"model":{"installed":true,"preparing":null},"permissions":{"transcription_model":true}}`), nil
+			}
+			if len(args) == 1 && args[0] == "start" {
+				startCalls++
+				running = true
+				return nil, nil
+			}
+			if len(args) == 3 && args[0] == "labs" && args[1] == "on" && args[2] == "transcribe-files" {
+				labsCalls++
+				if !running {
+					t.Error("setup enabled Transcribe files before starting Hex")
+				}
+				return nil, nil
 			}
 			if len(args) >= 2 && args[0] == "model" && args[1] == "install" {
 				modelCalls++
@@ -915,14 +930,88 @@ func TestVoiceSetupInstallsHexIdempotentlyThenTranscribes(t *testing.T) {
 	e.stop() // wait for the idempotent second setup confirmation to finish
 	mu.Lock()
 	defer mu.Unlock()
-	if brewCalls != 1 || modelCalls != 1 {
-		t.Errorf("setup commands: brew=%d model=%d, want each once", brewCalls, modelCalls)
+	if brewCalls != 1 || startCalls != 1 || labsCalls != 1 || modelCalls != 1 {
+		t.Errorf("setup commands: brew=%d start=%d labs=%d model=%d, want each once", brewCalls, startCalls, labsCalls, modelCalls)
 	}
-	if statusCalls != 2 {
-		t.Errorf("Hex status checks = %d, want one while downloading and one when ready", statusCalls)
+	if statusCalls != 3 {
+		t.Errorf("Hex status checks = %d, want not-running, downloading, and ready", statusCalls)
 	}
 	if transcriptionCalls != 1 {
 		t.Errorf("Hex transcribe calls = %d, want 1", transcriptionCalls)
+	}
+}
+
+func TestVoiceNoteWithDisabledTranscribeLabOffersSetup(t *testing.T) {
+	bin := t.TempDir()
+	hex := filepath.Join(bin, "hex")
+	if err := os.WriteFile(hex, nil, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	e := newEnvSerial(t)
+	e.seedOwner()
+	p := e.newPi("pi-hex-labs-off")
+	p.User("start")
+	p.Final("ready")
+	var mu sync.Mutex
+	labsEnabled := false
+	labsCalls, transcriptionCalls := 0, 0
+	opt := e.options()
+	opt.VoiceLookPath = func(name string) (string, error) {
+		if name == "hex" {
+			return hex, nil
+		}
+		return "", errors.New("not installed")
+	}
+	opt.VoiceCommand = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		switch {
+		case name == hex && len(args) == 2 && args[0] == "status" && args[1] == "--json":
+			return []byte(`{"model":{"installed":true,"preparing":null},"permissions":{"transcription_model":true}}`), nil
+		case name == hex && len(args) == 3 && args[0] == "labs" && args[1] == "on" && args[2] == "transcribe-files":
+			labsEnabled = true
+			labsCalls++
+			return nil, nil
+		case name == hex && len(args) >= 2 && args[0] == "model" && args[1] == "install":
+			return nil, nil
+		case name == hex && len(args) >= 2 && args[0] == "transcribe":
+			transcriptionCalls++
+			if !labsEnabled {
+				return []byte("hex: Labs › Transcribe files is off; turn it on with `hex labs on transcribe-files`"), errors.New("exit status 1")
+			}
+			return []byte("transcribed after setup"), nil
+		}
+		t.Errorf("unexpected Hex command %q %q", name, args)
+		return nil, errors.New("unexpected command")
+	}
+	e.startWith(opt)
+	e.hookPi(p, "startup")
+	thread := e.openTopic()
+	e.waitText(thread, "ready")
+
+	sendVoice := func(messageID int64, fileID string) {
+		e.tg.AddFile(fileID, fmt.Sprintf("voice/%d.oga", messageID), []byte("ogg"))
+		e.tg.PushUpdate(telegram.Update{Message: &telegram.Message{
+			MessageID: messageID, MessageThreadID: thread, IsTopicMessage: true,
+			From: &telegram.User{ID: ownerID}, Chat: telegram.Chat{ID: chatID, Type: "private"},
+			Voice: &telegram.Voice{FileID: fileID, FileSize: 3, Duration: 1},
+		}})
+	}
+	sendVoice(9152, "voice-labs-off")
+	prompt := e.waitText(thread, "Hex isn't ready for local speech-to-text")
+	e.pressButton(prompt, buttonData(prompt, "Yes"))
+	e.waitText(thread, "Send a new voice note to test transcription")
+
+	sendVoice(9153, "voice-labs-on")
+	e.waitText(thread, "🎤 transcribed after setup")
+	e.waitFor("the configured transcript to be typed", func() bool { return len(e.pastes()) == 1 })
+	e.stop()
+
+	mu.Lock()
+	defer mu.Unlock()
+	if !labsEnabled || labsCalls != 1 || transcriptionCalls != 2 {
+		t.Errorf("labs enabled=%v, labs calls=%d, transcriptions=%d; want enabled, 1, and 2", labsEnabled, labsCalls, transcriptionCalls)
 	}
 }
 
