@@ -37,7 +37,7 @@ import (
 // keyboardVersion names the buttons. A new value posts the keyboard note to
 // the main chat and every open topic once more, after an update that changes
 // the buttons.
-const keyboardVersion = "8" // Config is now inside Project, not a separate keyboard button
+const keyboardVersion = "9" // Bookmarks adds a keyboard action
 
 const (
 	keyboardKey = "reply_keyboard" // kv: the version, key generation, and Mini App address that the chats have
@@ -45,7 +45,7 @@ const (
 	kbGenKV     = "kb_gen"         // kv: how often the key was made new (/rekey)
 )
 
-const keyboardTopicNote = "⌨️ Buttons under the message box: 🎛 Panel (/rt), 🖥 Screen, 📁 Project (Config), ✍️ Annotate, and 🧩 Templates. " +
+const keyboardTopicNote = "⌨️ Buttons under the message box: 🎛 Panel (/rt), 🖥 Screen, 📁 Project (Config), ✍️ Annotate, 🔖 Bookmarks, and 🧩 Templates. " +
 	"With the Mini App on, the page buttons open directly. Tap ⊞ in the message box to show or hide them."
 
 const keyboardNote = keyboardTopicNote + " /help brings them back."
@@ -62,12 +62,13 @@ func (d *daemon) tailnetHint() string {
 const rekeyText = "🔑 New key for the buttons. The old buttons stop working; every topic got new ones."
 
 const annotateText = "✍️ Annotate opens from its button under the message box. It needs the Mini App (<code>[miniapp] url</code>)."
+const bookmarksText = "🔖 Bookmarks opens from its button under the message box, or with /bookmarks. It needs the Mini App (<code>[miniapp] url</code>)."
 
 // buttonViews maps a button's command to the page that its web_app button
 // opens.
 var buttonViews = map[string]string{
 	"rt": miniapp.ViewPanel, "screen": miniapp.ViewScreen, "project": miniapp.ViewProject,
-	"config": miniapp.ViewConfig, "annotate": miniapp.ViewAnnotate, "templates": miniapp.ViewTemplates,
+	"config": miniapp.ViewConfig, "annotate": miniapp.ViewAnnotate, "bookmarks": miniapp.ViewBookmarks, "templates": miniapp.ViewTemplates,
 }
 
 // kbSnap is what the keyboard is made from. url is empty when the buttons

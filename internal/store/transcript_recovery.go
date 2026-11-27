@@ -19,7 +19,7 @@ func (s *Store) CommitTranscriptBatch(ctx context.Context, c Cursor, items []Out
 	now := s.now()
 	err := s.tx(ctx, func(tx *sql.Tx) error {
 		for _, it := range items {
-			_, ok, err := insertItem(ctx, tx, it, now)
+			_, ok, err := insertItem(ctx, tx, it, now, s.schemaVersion >= 7)
 			if err != nil {
 				return err
 			}

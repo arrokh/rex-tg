@@ -49,7 +49,7 @@ func (s *Store) CommitBatch(ctx context.Context, c Cursor, items []OutboxItem) (
 	now := s.now()
 	err := s.tx(ctx, func(tx *sql.Tx) error {
 		for _, it := range items {
-			_, ok, err := insertItem(ctx, tx, it, now)
+			_, ok, err := insertItem(ctx, tx, it, now, s.schemaVersion >= 7)
 			if err != nil {
 				return err
 			}
@@ -67,7 +67,7 @@ func (s *Store) CommitBatch(ctx context.Context, c Cursor, items []OutboxItem) (
 
 // ---- Outbox ----
 
-func insertItem(ctx context.Context, tx *sql.Tx, it OutboxItem, now time.Time) (int64, bool, error) {
+func insertItem(ctx context.Context, tx *sql.Tx, it OutboxItem, now time.Time, storeFullText bool) (int64, bool, error) {
 	if !it.Skip && len(it.Parts) == 0 {
 		return 0, false, fmt.Errorf("store: outbox item %q has no parts", it.Key)
 	}
@@ -82,8 +82,15 @@ func insertItem(ctx context.Context, tx *sql.Tx, it OutboxItem, now time.Time) (
 		}
 		body.WriteString(p.Content)
 	}
-	res, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO outbox(thread_id,event_key,kind,body,state,silent,created_at)
-		VALUES(?,?,?,?,?,?,?)`, it.ThreadID, it.Key, it.Kind, body.String(), state, b2i(it.Silent), toMsNN(now))
+	var res sql.Result
+	var err error
+	if storeFullText {
+		res, err = tx.ExecContext(ctx, `INSERT OR IGNORE INTO outbox(thread_id,event_key,kind,body,full_text,state,silent,created_at)
+			VALUES(?,?,?,?,?,?,?,?)`, it.ThreadID, it.Key, it.Kind, body.String(), it.FullText, state, b2i(it.Silent), toMsNN(now))
+	} else {
+		res, err = tx.ExecContext(ctx, `INSERT OR IGNORE INTO outbox(thread_id,event_key,kind,body,state,silent,created_at)
+			VALUES(?,?,?,?,?,?,?)`, it.ThreadID, it.Key, it.Kind, body.String(), state, b2i(it.Silent), toMsNN(now))
+	}
 	if err != nil {
 		return 0, false, fmt.Errorf("store: insert outbox: %w", err)
 	}
@@ -124,7 +131,7 @@ func (s *Store) Enqueue(ctx context.Context, item OutboxItem) (int64, bool, erro
 	now := s.now()
 	err := s.tx(ctx, func(tx *sql.Tx) error {
 		var err error
-		id, ok, err = insertItem(ctx, tx, item, now)
+		id, ok, err = insertItem(ctx, tx, item, now, s.schemaVersion >= 7)
 		return err
 	})
 	if err != nil {
@@ -148,7 +155,7 @@ func (s *Store) EnqueueWithInboundBody(ctx context.Context, updateID int64, body
 		if err := affected(res, fmt.Sprintf("store: inbound %d", updateID)); err != nil {
 			return err
 		}
-		id, ok, err = insertItem(ctx, tx, item, now)
+		id, ok, err = insertItem(ctx, tx, item, now, s.schemaVersion >= 7)
 		return err
 	})
 	if err != nil {
@@ -425,8 +432,8 @@ func (s *Store) OutboxRow(ctx context.Context, id int64) (OutboxRow, error) {
 	var silent int
 	var lastErr sql.NullString
 	var created, sent sql.NullInt64
-	err := s.db.QueryRowContext(ctx, `SELECT id, thread_id, event_key, kind, body, state, silent, attempts, last_error, created_at, sent_at
-		FROM outbox WHERE id=?`, id).Scan(&r.ID, &r.ThreadID, &r.Key, &r.Kind, &r.Body, &r.State, &silent, &r.Attempts, &lastErr, &created, &sent)
+	err := s.db.QueryRowContext(ctx, `SELECT id, thread_id, event_key, kind, body, full_text, state, silent, attempts, last_error, created_at, sent_at
+		FROM outbox WHERE id=?`, id).Scan(&r.ID, &r.ThreadID, &r.Key, &r.Kind, &r.Body, &r.FullText, &r.State, &silent, &r.Attempts, &lastErr, &created, &sent)
 	if err != nil {
 		return OutboxRow{}, notFound(err, fmt.Sprintf("store: outbox row %d", id))
 	}
@@ -436,6 +443,27 @@ func (s *Store) OutboxRow(ctx context.Context, id int64) (OutboxRow, error) {
 		return OutboxRow{}, err
 	}
 	return r, nil
+}
+
+// OutboxRowBySentMessage returns the outbox row containing a sent Telegram
+// message in the given topic. ok is false when no part matches.
+func (s *Store) OutboxRowBySentMessage(ctx context.Context, threadID, messageID int64) (OutboxRow, bool, error) {
+	var id int64
+	err := s.db.QueryRowContext(ctx, `SELECT o.id FROM outbox o
+		JOIN outbox_part p ON p.outbox_id=o.id
+		WHERE o.thread_id=? AND p.tg_message_id=?
+		ORDER BY o.id DESC LIMIT 1`, threadID, messageID).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return OutboxRow{}, false, nil
+	}
+	if err != nil {
+		return OutboxRow{}, false, fmt.Errorf("store: outbox row by sent message: %w", err)
+	}
+	row, err := s.OutboxRow(ctx, id)
+	if err != nil {
+		return OutboxRow{}, false, err
+	}
+	return row, true, nil
 }
 
 // TopicMessageAfter reports whether an observed user message or a delivered
@@ -567,7 +595,7 @@ func (s *Store) MarkPartCheckedWithNotice(ctx context.Context, outboxID int64, p
 		if _, err := tx.ExecContext(ctx, `UPDATE outbox_part SET checked=1 WHERE outbox_id=? AND part=? AND state='unknown'`, outboxID, part); err != nil {
 			return err
 		}
-		if _, _, err := insertItem(ctx, tx, notice, now); err != nil {
+		if _, _, err := insertItem(ctx, tx, notice, now, s.schemaVersion >= 7); err != nil {
 			return err
 		}
 		return nil
@@ -652,7 +680,7 @@ func (s *Store) AnswersBefore(ctx context.Context, threadID, before int64, limit
 	if before <= 0 {
 		before = math.MaxInt64
 	}
-	q := `SELECT id, thread_id, event_key, kind, body, state, silent, attempts, last_error, created_at, sent_at
+	q := `SELECT id, thread_id, event_key, kind, body, full_text, state, silent, attempts, last_error, created_at, sent_at
 		FROM outbox WHERE thread_id=? AND kind IN ('answer','backfill') AND state NOT IN ('skipped','failed') AND id<?`
 	args := []any{threadID, before}
 	if session != "" {
@@ -678,7 +706,7 @@ func (s *Store) AnswersBefore(ctx context.Context, threadID, before int64, limit
 		var silent int
 		var lastErr sql.NullString
 		var created, sent sql.NullInt64
-		if err := rows.Scan(&r.ID, &r.ThreadID, &r.Key, &r.Kind, &r.Body, &r.State, &silent, &r.Attempts, &lastErr, &created, &sent); err != nil {
+		if err := rows.Scan(&r.ID, &r.ThreadID, &r.Key, &r.Kind, &r.Body, &r.FullText, &r.State, &silent, &r.Attempts, &lastErr, &created, &sent); err != nil {
 			rows.Close()
 			return nil, fmt.Errorf("store: answers: %w", err)
 		}

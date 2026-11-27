@@ -986,6 +986,176 @@
     refresh();
   }
 
+  // --- global bookmarks ---
+
+  function bookmarksView() {
+    document.body.classList.remove("fill", "annot");
+    document.body.classList.add("bookmark-body");
+    var v = views();
+    page.className = "bookmarks";
+    var filterLabel = el("label", "bookmark-filter", "Source topic");
+    var filter = el("select", "bookmark-select");
+    filter.setAttribute("aria-label", "Filter bookmarks by source topic");
+    function filterOption(label, value) {
+      var option = document.createElement("option");
+      option.value = value;
+      option.textContent = label;
+      return option;
+    }
+    filter.appendChild(filterOption("All topics", ""));
+    filterLabel.appendChild(filter);
+    var status = el("p", "note bookmark-status", "Loading bookmarks…");
+    status.setAttribute("role", "status");
+    status.setAttribute("aria-live", "polite");
+    var empty = el("p", "note empty bookmark-empty", "No saved messages.");
+    empty.hidden = true;
+    var rows = el("div", "bookmark-list");
+    var retry = button("Try again", "btn small");
+    retry.hidden = true;
+    var moreButton = button("Load older bookmarks", "btn wide");
+    moreButton.hidden = true;
+    v.list.appendChild(filterLabel);
+    v.list.appendChild(status);
+    v.list.appendChild(empty);
+    v.list.appendChild(rows);
+    v.list.appendChild(retry);
+    v.list.appendChild(moreButton);
+
+    var selectedTopic = "", items = [], more = false, requestID = 0, retryReset = true;
+    function bookmarkDate(at) {
+      if (!at) { return ""; }
+      var date = new Date(at);
+      return isNaN(date.getTime()) ? "" : date.toLocaleString();
+    }
+    function setTopics(topics) {
+      var keep = selectedTopic;
+      filter.textContent = "";
+      filter.appendChild(filterOption("All topics", ""));
+      (topics || []).forEach(function (topic) {
+        filter.appendChild(filterOption(topic.name, String(topic.id)));
+      });
+      if (Array.prototype.some.call(filter.options, function (o) { return o.value === keep; })) {
+        filter.value = keep;
+      } else {
+        selectedTopic = "";
+        filter.value = "";
+      }
+    }
+    function drawItems() {
+      rows.textContent = "";
+      items.forEach(function (item) {
+        var row = el("button", "bookmark-row");
+        row.type = "button";
+        row.appendChild(el("span", "bookmark-title", item.title || "Saved message"));
+        var meta = [item.topic || "Main chat", bookmarkDate(item.at)].filter(Boolean).join(" · ");
+        row.appendChild(el("span", "bookmark-meta", meta));
+        if (item.preview) { row.appendChild(el("span", "bookmark-preview", item.preview)); }
+        row.addEventListener("click", function () { showBookmark(item.id); });
+        rows.appendChild(row);
+      });
+    }
+    function fetchList(reset) {
+      var mine = ++requestID;
+      retryReset = reset;
+      var before = reset || !items.length ? 0 : Number(items[items.length - 1].id);
+      if (reset) { items = []; drawItems(); }
+      status.hidden = false;
+      status.textContent = reset ? "Loading bookmarks…" : "Loading older bookmarks…";
+      empty.hidden = true;
+      retry.hidden = true;
+      moreButton.hidden = true;
+      moreButton.disabled = true;
+      v.list.setAttribute("aria-busy", "true");
+      var url = "api/bookmarks?id=" + encodeURIComponent(id);
+      if (selectedTopic !== "") { url += "&topic=" + encodeURIComponent(selectedTopic); }
+      if (before > 0) { url += "&before=" + encodeURIComponent(String(before)); }
+      api(url).then(function (result) {
+        if (mine !== requestID) { return; }
+        setTopics(result.topics);
+        var seen = {};
+        items.forEach(function (item) { seen[String(item.id)] = true; });
+        (result.items || []).forEach(function (item) {
+          if (!seen[String(item.id)]) { items.push(item); seen[String(item.id)] = true; }
+        });
+        more = result.more === true;
+        drawItems();
+        status.hidden = true;
+        empty.hidden = items.length !== 0;
+        if (!items.length) { empty.textContent = selectedTopic === "" ? "No saved messages." : "No saved messages in this topic."; }
+        moreButton.hidden = !more || !items.length;
+        moreButton.disabled = false;
+      }).catch(function (e) {
+        if (mine !== requestID) { return; }
+        status.hidden = false;
+        status.textContent = e.message || "Could not load bookmarks.";
+        status.setAttribute("role", "alert");
+        retry.hidden = false;
+      }).finally(function () {
+        if (mine === requestID) { v.list.setAttribute("aria-busy", "false"); }
+      });
+    }
+    function showBookmark(bookmarkID) {
+      v.showItem(v.showList);
+      v.item.textContent = "";
+      v.item.className = "view bookmark-detail";
+      v.item.setAttribute("aria-busy", "true");
+      var head = el("div", "itembar");
+      var back = button("‹ Back to bookmarks", "backlink");
+      back.addEventListener("click", v.showList);
+      head.appendChild(back);
+      v.item.appendChild(head);
+      var body = el("div", "bookmark-reading");
+      body.appendChild(el("p", "note", "Loading saved message…"));
+      v.item.appendChild(body);
+      function loadDetail() {
+        body.textContent = "";
+        body.appendChild(el("p", "note", "Loading saved message…"));
+        api("api/bookmark?id=" + encodeURIComponent(id) + "&bookmark=" + encodeURIComponent(String(bookmarkID)))
+          .then(function (detail) {
+            if (v.item.hidden || !v.item.contains(body)) { return; }
+            body.textContent = "";
+            var title = detail.title || "Saved message";
+            var meta = [detail.topic || "Main chat", bookmarkDate(detail.at)].filter(Boolean).join(" · ");
+            if (meta) { body.appendChild(el("p", "bookmark-meta", meta)); }
+            var content = el("div", "content bookmark-answer");
+            content.innerHTML = detail.html || ""; // rendered safely on the server
+            var first = content.firstElementChild;
+            var firstText = first ? first.textContent.trim() : "";
+            var titlePrefix = title.trim().replace(/…$/, "").trim();
+            if (!firstText || !titlePrefix || firstText.indexOf(titlePrefix) !== 0) {
+              body.insertBefore(el("h2", "bookmark-detail-title", title), body.firstChild);
+            }
+            scrollTables(content);
+            body.appendChild(content);
+            v.item.setAttribute("aria-busy", "false");
+          })
+          .catch(function (e) {
+            if (v.item.hidden || !v.item.contains(body)) { return; }
+            body.textContent = "";
+            var error = el("p", "note", e.message || "This saved message could not be loaded.");
+            error.setAttribute("role", "alert");
+            body.appendChild(error);
+            var again = button("Try again", "btn small");
+            again.addEventListener("click", loadDetail);
+            body.appendChild(again);
+            v.item.setAttribute("aria-busy", "false");
+          });
+      }
+      loadDetail();
+    }
+    filter.addEventListener("change", function () {
+      selectedTopic = filter.value;
+      status.setAttribute("role", "status");
+      fetchList(true);
+    });
+    retry.addEventListener("click", function () {
+      status.setAttribute("role", "status");
+      fetchList(retryReset);
+    });
+    moreButton.addEventListener("click", function () { fetchList(false); });
+    fetchList(true);
+  }
+
   // --- the combined project view ---
 
   function projectView(pg) {
@@ -2218,7 +2388,7 @@
 
   // --- the keyboard's buttons: launch ---
 
-  var viewName = { panel: "Panel", screen: "Screen", files: "Files", changes: "Changes", config: "Config", annotate: "Annotate", templates: "Templates" };
+  var viewName = { panel: "Panel", screen: "Screen", files: "Files", changes: "Changes", config: "Config", annotate: "Annotate", templates: "Templates", bookmarks: "Bookmarks" };
 
   function skeletons(n, cls) {
     page.className = "";
@@ -3675,6 +3845,7 @@
       if (p.kind === "control") { controlPanel(); return; }
       if (p.kind === "annotate") { annotatePage(p, false); return; }
       if (p.kind === "templates") { templatesPage(p); return; }
+      if (p.kind === "bookmarks") { bookmarksView(); return; }
       page.className = "";
       page.innerHTML = p.html; // rendered and escaped by rex-tg
       scrollTables(page);

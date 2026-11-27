@@ -24,6 +24,13 @@ func TestRouteText(t *testing.T) {
 		{"empty", "   ", true, ign},
 		{"topic command", "/info", true, cmd("info", "")},
 		{"topic last answer", "/last", true, cmd("last", "")},
+		{"topic bookmark", "/bookmark", true, cmd("bookmark", "")},
+		{"topic bookmark shortcut", "/b", true, cmd("b", "")},
+		{"topic bookmarks", "/bookmarks", true, cmd("bookmarks", "")},
+		{"topic bookmarks command args", "/bookmark 17", true, cmd("bookmark", "17")},
+		{"main bookmark", "/bookmark", false, cmd("bookmark", "")},
+		{"main bookmark shortcut", "/b", false, cmd("b", "")},
+		{"main bookmarks", "/bookmarks", false, cmd("bookmarks", "")},
 		{"topic command args", "/screen 50", true, cmd("screen", "50")},
 		{"topic command newline args", "/force\nrun tests", true, cmd("force", "run tests")},
 		{"topic command with bot", "/approve@RexBot", true, cmd("approve", "")},
@@ -98,12 +105,12 @@ func TestRouteTextButtons(t *testing.T) {
 }
 
 func TestRouteTextAllCommands(t *testing.T) {
-	for _, c := range []string{"info", "screen", "files", "changes", "approve", "deny", "esc", "interrupt", "key", "force", "mode", "verbose", "reasoning", "resend", "unlink", "mute", "unmute", "queue", "last", "help"} {
+	for _, c := range []string{"info", "screen", "files", "changes", "approve", "deny", "esc", "interrupt", "key", "force", "mode", "verbose", "reasoning", "resend", "unlink", "mute", "unmute", "queue", "last", "bookmark", "b", "bookmarks", "help"} {
 		if r := inbound.RouteText("/"+c, true, "b"); r.Kind != inbound.RouteCommand || r.Command != c {
 			t.Errorf("topic /%s: %+v", c, r)
 		}
 	}
-	for _, c := range []string{"start", "agents", "new", "topics", "status", "pause", "unpause", "rt", "help"} {
+	for _, c := range []string{"start", "agents", "new", "topics", "status", "pause", "unpause", "rt", "bookmark", "b", "bookmarks", "help"} {
 		if r := inbound.RouteText("/"+c, false, "b"); r.Kind != inbound.RouteCommand || r.Command != c {
 			t.Errorf("main /%s: %+v", c, r)
 		}

@@ -131,6 +131,7 @@ func (d *daemon) serveMiniApp(ctx context.Context) {
 			WithControl(newControlPanel(d), d.home).
 			WithConfig(d).
 			WithTemplates(miniAppTemplates{st: d.st}).
+			WithBookmarks(miniAppBookmarks{st: d.st, chatID: func() int64 { return d.kvInt("owner_chat_id") }}).
 			WithLaunch(d, d.keyOK).
 			WithAnnotate(d).
 			WithTailnetOnly(d.cfg.MiniApp.TailnetOnly).
@@ -246,12 +247,12 @@ func quickHash(text string) string {
 	return hex.EncodeToString(h[:4])
 }
 
-// answerMarkup is the sender's hook for the buttons under an answer: the
-// Mini App's pages of that answer, and the quick replies. Only the answer's
-// last text message gets them. It runs in the sender (any goroutine).
+// answerMarkup is the sender's hook for answer buttons. An answer's last text
+// message or answer.md document gets its Mini App pages, Bookmark action, and
+// quick replies; a backfilled answer gets only Bookmark. It runs in the sender.
 func answerMarkup(st *store.Store, quick []string, base string) func(store.Part) *telegram.InlineKeyboardMarkup {
 	return func(p store.Part) *telegram.InlineKeyboardMarkup {
-		if p.Kind != "answer" {
+		if p.Kind != "answer" && p.Kind != "backfill" {
 			return nil
 		}
 		row, err := st.OutboxRow(context.Background(), p.OutboxID)
@@ -263,17 +264,24 @@ func answerMarkup(st *store.Store, quick []string, base string) func(store.Part)
 			switch q.Format {
 			case store.FormatHTML, store.FormatPlain, store.FormatRich:
 				last = q.Part
+			case store.FormatDocument:
+				if q.Filename == "answer.md" {
+					last = q.Part
+				}
 			}
 		}
 		if p.Part != last {
 			return nil
 		}
-		return answerButtons(st, quick, base, p.ThreadID, p.Key)
+		if p.Kind == "backfill" {
+			return answerButtons(st, nil, "", p.ThreadID, p.Key, p.OutboxID)
+		}
+		return answerButtons(st, quick, base, p.ThreadID, p.Key, p.OutboxID)
 	}
 }
 
 // answerButtons builds the keyboard of an answer (any goroutine).
-func answerButtons(st *store.Store, quick []string, base string, thread int64, key string) *telegram.InlineKeyboardMarkup {
+func answerButtons(st *store.Store, quick []string, base string, thread int64, key string, outboxID int64) *telegram.InlineKeyboardMarkup {
 	var rows [][]telegram.InlineKeyboardButton
 	if strings.TrimSpace(base) != "" {
 		var pages []telegram.InlineKeyboardButton
@@ -290,6 +298,9 @@ func answerButtons(st *store.Store, quick []string, base string, thread int64, k
 			// for a phone.
 			rows = append(rows, []telegram.InlineKeyboardButton{b})
 		}
+	}
+	if outboxID > 0 {
+		rows = append(rows, []telegram.InlineKeyboardButton{{Text: "🔖 Bookmark", CallbackData: fmt.Sprintf("%s:%d", bookmarkCallback, outboxID)}})
 	}
 	var row []telegram.InlineKeyboardButton
 	for i, q := range quick {
@@ -507,7 +518,7 @@ func (d *daemon) refreshAnswerButtons(thread int64, key string, try int) {
 		}
 		return
 	}
-	markup := answerButtons(d.st, d.cfg.Display.QuickReplies, miniBase(d.cfg), thread, key)
+	markup := answerButtons(d.st, d.cfg.Display.QuickReplies, miniBase(d.cfg), thread, key, last.OutboxID)
 	chat, msg := last.ChatID, last.TGMessageID
 	d.spawn(func() {
 		_ = d.snd.Call(sender.PriorityEdit, func(ctx context.Context, tg *telegram.Client) error {

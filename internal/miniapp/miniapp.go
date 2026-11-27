@@ -1,9 +1,9 @@
 // Package miniapp serves rex-tg's Telegram Mini App: pages that are too big
 // for a chat message, such as an agent's long answer or the changes of a
 // turn, the live screen of a topic's pane, the files of its folder, the
-// changes of its repository, and the control panel (control.go). The
-// daemon keeps the pages and reads the screens; this package checks who
-// asks and renders them.
+// changes of its repository, global bookmarks, and the control panel
+// (control.go). The daemon keeps the pages and reads the screens; this package
+// checks who asks and renders them.
 //
 // Mini App API requests carry either Telegram-signed init data or the current
 // keyboard key. External HTML and video previews instead check the owner's
@@ -42,7 +42,7 @@ import (
 // Page is what the Mini App shows.
 type Page struct {
 	InitialFile string `json:"initial_file,omitempty"` // a path relative to the Files browser root
-	Kind        string `json:"kind"`                   // answer, diff, screen, files, changes, project, control, config, annotate, or templates
+	Kind        string `json:"kind"`                   // answer, diff, screen, files, changes, project, control, config, annotate, templates, or bookmarks
 	Title       string `json:"title"`                  // a short title
 	Text        string `json:"text"`                   // Markdown (an answer) or a unified diff
 	Thread      int64  `json:"thread,omitempty"`       // the topic of a topic-bound page
@@ -98,6 +98,7 @@ type Server struct {
 	annot     Annotations          // the Annotate page (nil: off)
 	config    Configurator         // topic/session settings (nil: off)
 	templates TemplateRepository   // shared message templates (nil: off)
+	bookmarks Bookmarks            // global saved messages (nil: off)
 	tailnet   bool                 // refuse a request that did not come from the tailnet
 	logins    Logins               // allowed Tailscale logins (nil: no identity checks)
 	reads     reads                // folder and file reads that may wait for macOS (slowread.go)
@@ -277,9 +278,10 @@ var (
 // Handler serves /app (the page shell), /app.js, the terminal library,
 // /api/page?id=…, /api/screen?id=…, /api/files?id=…&path=…,
 // /external/file?id=…&path=… (owner-authenticated HTML or video),
-// /api/changes?id=…&base=…[&path=…][&new=1], and the control panel's
-// /api/control?id=…, /api/control/folders?id=…&path=…[&hidden=1],
-// POST /api/control/do?id=…, /api/templates?id=…, and /api/templates/send?id=…
+// /api/changes?id=…&base=…[&path=…][&new=1], /api/bookmarks?id=…&topic=…&before=…,
+// /api/bookmark?id=…&bookmark=…, and the control panel's /api/control?id=…,
+// /api/control/folders?id=…&path=…[&hidden=1], POST /api/control/do?id=…,
+// /api/templates?id=…, and /api/templates/send?id=…
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /app", func(w http.ResponseWriter, r *http.Request) {
@@ -315,6 +317,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/annotate", s.annotateList)
 	mux.HandleFunc("POST /api/annotate/draft", s.annotateDraft)
 	mux.HandleFunc("POST /api/annotate/send", s.annotateSend)
+	mux.HandleFunc("GET /api/bookmarks", s.bookmarksList)
+	mux.HandleFunc("GET /api/bookmark", s.bookmarkDetail)
 	mux.HandleFunc("GET /api/templates", s.templateList)
 	mux.HandleFunc("POST /api/templates", s.templateAction)
 	mux.HandleFunc("POST /api/templates/send", s.templateSend)
@@ -447,7 +451,7 @@ func (s *Server) page(w http.ResponseWriter, r *http.Request) {
 	switch p.Kind {
 	case KindDiff:
 		body = RenderDiff(p.Text)
-	case KindScreen, KindFiles, KindChanges, KindProject, KindControl, KindConfig, KindAnnotate, KindTemplates: // the page asks for its content itself
+	case KindScreen, KindFiles, KindChanges, KindProject, KindControl, KindConfig, KindAnnotate, KindTemplates, KindBookmarks: // the page asks for its content itself
 	default:
 		body = RenderAnswer(p.Text)
 	}

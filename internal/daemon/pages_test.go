@@ -51,8 +51,8 @@ func TestPrunePages(t *testing.T) {
 	}
 }
 
-// Each Mini App button has its own row, then the quick replies come two to
-// a row: on a phone, longer rows cut the labels.
+// Mini App and Bookmark buttons each have their own row; quick replies come
+// two to a row: on a phone, longer rows cut the labels.
 func TestAnswerButtonsRows(t *testing.T) {
 	st, err := store.Open(filepath.Join(t.TempDir(), "db"))
 	if err != nil {
@@ -62,7 +62,7 @@ func TestAnswerButtonsRows(t *testing.T) {
 	ctx := context.Background()
 	_ = st.Set(ctx, pageForKey(1, miniapp.KindAnswer, "k"), "a1")
 	_ = st.Set(ctx, pageForKey(1, miniapp.KindDiff, "k"), "d1|2 files · +40 −12")
-	m := answerButtons(st, []string{"Continue", "Yes", "Commit"}, "https://mac.example:8443", 1, "k")
+	m := answerButtons(st, []string{"Continue", "Yes", "Commit"}, "https://mac.example:8443", 1, "k", 42)
 	var got []string
 	for _, row := range m.InlineKeyboard {
 		var labels []string
@@ -71,9 +71,76 @@ func TestAnswerButtonsRows(t *testing.T) {
 		}
 		got = append(got, strings.Join(labels, "|"))
 	}
-	want := []string{"📄 Whole answer", "📝 2 files · +40 −12", "Continue|Yes", "Commit"}
+	want := []string{"📄 Whole answer", "📝 2 files · +40 −12", "🔖 Bookmark", "Continue|Yes", "Commit"}
 	if strings.Join(got, " / ") != strings.Join(want, " / ") {
 		t.Errorf("rows = %q, want %q", got, want)
+	}
+	if m.InlineKeyboard[2][0].CallbackData != "bm:42" {
+		t.Errorf("bookmark callback = %q, want bm:42", m.InlineKeyboard[2][0].CallbackData)
+	}
+}
+
+func TestLongAnswerDocumentGetsBookmarkButton(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	ctx := context.Background()
+	c, err := st.UpsertConversation(ctx, store.Conversation{Runtime: "claude", NativeID: "s1", Transcript: "/tmp/s1.jsonl", FirstSeenAt: time.Unix(1, 0)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	th, err := st.LinkTopic(ctx, 100, 7, c.ID, "topic", time.Unix(1, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, _, err := st.Enqueue(ctx, store.OutboxItem{ThreadID: th.ID, Key: "long:k", Kind: "answer", Parts: []store.PartContent{{Content: "# Complete answer", Format: store.FormatDocument, Filename: "answer.md"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.MarkPartSent(ctx, id, 0, 500); err != nil {
+		t.Fatal(err)
+	}
+	markup := answerMarkup(st, nil, "")(store.Part{
+		OutboxID: id, Part: 0, ThreadID: th.ID, Key: "long:k", Kind: "answer",
+	})
+	if markup == nil || len(markup.InlineKeyboard) != 1 || markup.InlineKeyboard[0][0].CallbackData != fmt.Sprintf("%s:%d", bookmarkCallback, id) {
+		t.Fatalf("long answer keyboard = %#v, want Bookmark button", markup)
+	}
+}
+
+func TestBackfillAnswerGetsOnlyBookmarkButton(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	ctx := context.Background()
+	c, err := st.UpsertConversation(ctx, store.Conversation{Runtime: "claude", NativeID: "s1", Transcript: "/tmp/s1.jsonl", FirstSeenAt: time.Unix(1, 0)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	th, err := st.LinkTopic(ctx, 100, 7, c.ID, "topic", time.Unix(1, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, _, err := st.Enqueue(ctx, store.OutboxItem{ThreadID: th.ID, Key: "backfill:k", Kind: "backfill", Parts: []store.PartContent{{Content: "A missed answer", Format: store.FormatPlain}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.MarkPartSent(ctx, id, 0, 501); err != nil {
+		t.Fatal(err)
+	}
+	markup := answerMarkup(st, []string{"Yes"}, "https://mac.example:8443")(store.Part{
+		OutboxID: id, Part: 0, ThreadID: th.ID, Key: "backfill:k", Kind: "backfill",
+	})
+	if markup == nil || len(markup.InlineKeyboard) != 1 || len(markup.InlineKeyboard[0]) != 1 {
+		t.Fatalf("backfill keyboard = %#v, want one Bookmark button", markup)
+	}
+	button := markup.InlineKeyboard[0][0]
+	if button.Text != "🔖 Bookmark" || button.CallbackData != fmt.Sprintf("%s:%d", bookmarkCallback, id) {
+		t.Errorf("backfill button = %#v", button)
 	}
 }
 

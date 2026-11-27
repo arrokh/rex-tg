@@ -172,8 +172,8 @@ func TestOnlyAnswersAndAlertsMakeASound(t *testing.T) {
 	}
 }
 
-// An answer with a whole-answer page and quick replies has both rows, the
-// Mini App row first.
+// An answer with a whole-answer page, Bookmark, and quick replies keeps the
+// Mini App row first and the Bookmark action before the quick replies.
 func TestMiniAppRowComesBeforeQuickReplies(t *testing.T) {
 	e, p, thread := piTopicCfg(t, "pi-rows", func(e *env) {
 		e.cfg.MiniApp.URL = "https://mac.example.ts.net:8443"
@@ -187,14 +187,17 @@ func TestMiniAppRowComesBeforeQuickReplies(t *testing.T) {
 	e.waitFor("both rows", func() bool {
 		m, _ := e.message(answer.ID)
 		answer = m
-		return len(buttonTexts(m)) == 2
+		return len(buttonTexts(m)) == 3
 	})
 	rows := buttonTexts(answer)
 	if len(rows[0]) != 1 || rows[0][0] != "📄 Whole answer" {
 		t.Errorf("first row = %v, want the Mini App row", rows[0])
 	}
-	if got := strings.Join(rows[1], "|"); got != "Continue|Yes" {
-		t.Errorf("second row = %q, want the quick replies", got)
+	if len(rows[1]) != 1 || rows[1][0] != "🔖 Bookmark" {
+		t.Errorf("second row = %v, want the Bookmark action", rows[1])
+	}
+	if got := strings.Join(rows[2], "|"); got != "Continue|Yes" {
+		t.Errorf("third row = %q, want the quick replies", got)
 	}
 	if answer.Markup.InlineKeyboard[0][0].WebApp == nil {
 		t.Error("the first button is no web_app button")
@@ -216,8 +219,8 @@ func TestQuickReplyTypesItsText(t *testing.T) {
 		t.Fatalf("the answer has no quick replies: %+v", answer.Markup)
 	}
 	// Two to a row, so a phone shows the labels whole.
-	if rows := buttonTexts(answer); len(rows) != 2 || strings.Join(rows[0], "|") != "Continue|Yes" || strings.Join(rows[1], "|") != "Run tests|Commit" {
-		t.Errorf("rows = %v, want two of two", rows)
+	if rows := buttonTexts(answer); len(rows) != 3 || strings.Join(rows[0], "|") != "🔖 Bookmark" || strings.Join(rows[1], "|") != "Continue|Yes" || strings.Join(rows[2], "|") != "Run tests|Commit" {
+		t.Errorf("rows = %v, want Bookmark then two quick-reply rows", rows)
 	}
 	e.pressButton(answer, data)
 	e.waitFor("the quick reply typed", func() bool { return len(e.pastes()) == 1 })
@@ -290,8 +293,8 @@ func TestSingleParagraphStaysInOneHTMLMessage(t *testing.T) {
 			count++
 		}
 	}
-	if count != 1 || len(buttonTexts(answer)) != 0 {
-		t.Errorf("answer messages = %d; markup = %+v, want one message without a page button", count, answer.Markup)
+	if count != 1 || len(buttonTexts(answer)) != 1 || buttonData(answer, "Bookmark") == "" {
+		t.Errorf("answer messages = %d; markup = %+v, want one message with only Bookmark", count, answer.Markup)
 	}
 }
 

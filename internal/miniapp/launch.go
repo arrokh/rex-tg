@@ -23,6 +23,7 @@ const (
 	ViewConfig    = "config"
 	ViewAnnotate  = "annotate"
 	ViewTemplates = "templates"
+	ViewBookmarks = "bookmarks"
 )
 
 // KindAnnotate is a topic's Annotate page: the agent's answers, to add notes
