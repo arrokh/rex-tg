@@ -133,6 +133,10 @@ func (d *daemon) mainMessage(u telegram.Update, m *telegram.Message) {
 	if r.Kind != inbound.RouteCommand {
 		return
 	}
+	if isBookmarkSaveCommand(r.Command) {
+		d.bookmarkMessage(u, m, 0)
+		return
+	}
 	if !d.recorded(u, m, "command", m.Text, 0, store.InboundDone) {
 		return
 	}
@@ -151,7 +155,9 @@ func (d *daemon) topicMessage(u telegram.Update, m *telegram.Message) {
 				return
 			}
 			if r := inbound.RouteText(m.Text, false, d.botUser); r.Kind == inbound.RouteCommand {
-				if d.recorded(u, m, "command", m.Text, 0, store.InboundDone) {
+				if isBookmarkSaveCommand(r.Command) {
+					d.bookmarkMessage(u, m, 0)
+				} else if d.recorded(u, m, "command", m.Text, 0, store.InboundDone) {
 					d.mainCommand(r, m.Chat.ID, m.MessageThreadID, false)
 				}
 				return
@@ -176,7 +182,9 @@ func (d *daemon) topicMessage(u telegram.Update, m *telegram.Message) {
 	r := inbound.RouteText(m.Text, true, d.botUser)
 	switch r.Kind {
 	case inbound.RouteCommand:
-		if d.recorded(u, m, "command", m.Text, th.ID, store.InboundDone) {
+		if isBookmarkSaveCommand(r.Command) {
+			d.bookmarkMessage(u, m, th.ID)
+		} else if d.recorded(u, m, "command", m.Text, th.ID, store.InboundDone) {
 			d.topicCommand(u, m, th, r)
 		}
 	case inbound.RouteAgentText:
@@ -213,6 +221,12 @@ func (d *daemon) onCallback(u telegram.Update) {
 	if cb.Message == nil || !d.fromOwner(&cb.From, cb.Message.Chat.ID) {
 		d.answerCallback(cb.ID, "", false)
 		return
+	}
+	if parts := strings.Split(cb.Data, ":"); len(parts) == 2 && parts[0] == bookmarkCallback {
+		if id, err := strconv.ParseInt(parts[1], 10, 64); err == nil && id > 0 {
+			d.bookmarkButton(u, cb, id)
+			return
+		}
 	}
 	ok, err := d.st.InsertInbound(d.ctx, store.Inbound{
 		UpdateID: u.UpdateID, ChatID: cb.Message.Chat.ID, MessageThreadID: cb.Message.MessageThreadID,

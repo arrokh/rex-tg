@@ -74,6 +74,12 @@ func (d *daemon) Launch(ctx context.Context, view string, thread int64) miniapp.
 			return fail("Could not open the control panel.")
 		}
 		return miniapp.LaunchResult{Page: id}
+	case miniapp.ViewBookmarks:
+		id, err := d.livePage(miniapp.KindBookmarks, 0, "global", "🔖 Bookmarks", "")
+		if err != nil {
+			return fail("Could not open Bookmarks.")
+		}
+		return miniapp.LaunchResult{Page: id}
 	case miniapp.ViewScreen, miniapp.ViewConfig, miniapp.ViewAnnotate, miniapp.ViewTemplates:
 	case miniapp.ViewProject:
 		if !d.cfg.MiniApp.Files && !d.cfg.MiniApp.Changes {

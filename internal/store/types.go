@@ -156,12 +156,14 @@ type PartContent struct {
 }
 
 // OutboxItem is an outgoing message to enqueue. Skip stores it as skipped,
-// without parts (for echoes).
+// without parts (for echoes). FullText is the complete redacted answer Markdown
+// when available; Parts remain the sendable Telegram output.
 type OutboxItem struct {
 	ThreadID int64
 	Key      string
 	Kind     string
 	Parts    []PartContent
+	FullText string
 	Silent   bool
 	Skip     bool
 }
@@ -195,6 +197,7 @@ type OutboxRow struct {
 	Key       string
 	Kind      string
 	Body      string
+	FullText  string
 	State     string
 	Silent    bool
 	Attempts  int
@@ -232,6 +235,35 @@ type Alert struct {
 	TGMessageID int64
 	State       string
 	CreatedAt   time.Time
+}
+
+// Bookmark text formats.
+const (
+	BookmarkTextPlain    = "plain"
+	BookmarkTextMarkdown = "markdown"
+)
+
+// Bookmark is a saved Telegram message. Its source identifiers and snapshot
+// fields are independent of thread and conversation lifetimes.
+type Bookmark struct {
+	ID              int64
+	ChatID          int64
+	MessageID       int64
+	MessageThreadID int64 // 0 is the main chat
+	SourceTopicName string
+	MessageDate     time.Time
+	SavedAt         time.Time
+	Title           string
+	FullText        string
+	TextFormat      string // BookmarkTextPlain or BookmarkTextMarkdown
+	ContentKind     string
+	ContentLabel    string
+}
+
+// BookmarkTopic is a source topic represented in a chat's saved bookmarks.
+type BookmarkTopic struct {
+	MessageThreadID int64 // 0 is the main chat
+	Name            string
 }
 
 // Inbound is an incoming Telegram update.

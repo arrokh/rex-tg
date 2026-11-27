@@ -32,15 +32,21 @@ func TestBotCommandMenuHidesRequestedCommands(t *testing.T) {
 		"model": true, "effort": true, "mode": true, "verbose": true, "reasoning": true,
 		"resend": true, "at": true, "interrupt": true, "key": true,
 	}
-	foundEsc := false
+	foundEsc, foundBookmark, foundShortcut, foundBookmarks := false, false, false, false
 	for _, cmd := range BotCommands() {
 		if hidden[cmd.Command] {
 			t.Errorf("/%s is still in the Telegram command menu", cmd.Command)
 		}
 		foundEsc = foundEsc || cmd.Command == "esc"
+		foundBookmark = foundBookmark || cmd.Command == "bookmark"
+		foundShortcut = foundShortcut || cmd.Command == "b"
+		foundBookmarks = foundBookmarks || cmd.Command == "bookmarks"
 	}
 	if !foundEsc {
 		t.Fatal("/esc is missing from the Telegram command menu")
+	}
+	if !foundBookmark || !foundShortcut || !foundBookmarks {
+		t.Fatalf("bookmark commands missing from menu: bookmark=%v b=%v bookmarks=%v", foundBookmark, foundShortcut, foundBookmarks)
 	}
 }
 

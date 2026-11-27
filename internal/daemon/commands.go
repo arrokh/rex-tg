@@ -26,6 +26,8 @@ const (
 		"/attach - choose an unattached Rex agent for this topic (use inside a topic)\n" +
 		"/status - daemon health\n" +
 		"/rt - the control panel: agents, topics, new agents (Mini App)\n" +
+		"/bookmarks - open saved messages\n" +
+		"/bookmark or /b - save the message you are replying to\n" +
 		"/rekey - make a new key for the keyboard buttons; the old buttons stop working\n" +
 		"/help - this list"
 	topicHelp = "<b>In a topic</b>\n" +
@@ -39,6 +41,8 @@ const (
 		"/unlink - stop mirroring this session\n" +
 		"/queue - see waiting messages and send the eligible FIFO prefix now\n" +
 		"/last - post the newest answer held from the Mac, once\n" +
+		"/bookmark or /b - save the message you are replying to\n" +
+		"/bookmarks - open saved messages\n" +
 		"/attach - choose an unattached Rex agent for this topic\n" +
 		"/rekey - make a new key for the keyboard buttons; the old buttons stop working\n" +
 		"/help - this list"
@@ -65,6 +69,8 @@ func (d *daemon) mainCommand(r inbound.Route, chat, thread int64, inTopic bool) 
 		d.say(chat, thread, annotateText, nil)
 	case "templates":
 		d.templatesCommand(chat, thread)
+	case "bookmarks":
+		d.bookmarksCommand(chat, thread)
 	case "rekey":
 		if !d.rekey(d.ctx) {
 			d.say(chat, thread, "🔑 Could not make a new key: the store did not keep it. The old buttons still work. Try again.", nil)

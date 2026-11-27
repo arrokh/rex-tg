@@ -233,14 +233,12 @@ func queryInbound(ctx context.Context, q querier, where string, args ...any) ([]
 	return out, rows.Err()
 }
 
-// InsertInbound stores an update. It returns false when the update_id exists.
-// An empty State is queued.
-func (s *Store) InsertInbound(ctx context.Context, in Inbound) (bool, error) {
+func insertInbound(ctx context.Context, q querier, in Inbound) (bool, error) {
 	state := in.State
 	if state == "" {
 		state = InboundQueued
 	}
-	res, err := s.db.ExecContext(ctx, `INSERT OR IGNORE INTO inbound(`+inboundCols+`) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+	res, err := q.ExecContext(ctx, `INSERT OR IGNORE INTO inbound(`+inboundCols+`) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		in.UpdateID, in.ChatID, nullInt(in.MessageThreadID), nullInt(in.TGMessageID), in.FromID, in.Kind, in.Body,
 		nullStr(in.BodyHash), nullInt(in.ThreadID), state, nullStr(in.Reason), toMsNN(in.CreatedAt),
 		toMs(in.DeliveredAt), nullStr(in.AckedEventKey))
@@ -249,6 +247,12 @@ func (s *Store) InsertInbound(ctx context.Context, in Inbound) (bool, error) {
 	}
 	n, err := res.RowsAffected()
 	return n > 0, err
+}
+
+// InsertInbound stores an update. It returns false when the update_id exists.
+// An empty State is queued.
+func (s *Store) InsertInbound(ctx context.Context, in Inbound) (bool, error) {
+	return insertInbound(ctx, s.db, in)
 }
 
 // JoinInbound stores the row of a joined message and marks the queued updates

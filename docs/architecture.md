@@ -348,7 +348,7 @@ flowchart TD
     Conv -->|occupant| Pane
 ```
 
-SQLite tables also hold outbox items/parts, inbound updates, transcript cursors, progress, alerts, and seen message numbers. Key-value entries hold tracker snapshots, pause, schedules, action claims, pages, and other bounded/retained state. A pane is not the conversation identity: session takeover/resume changes that association.
+SQLite tables also hold outbox items/parts, inbound updates, transcript cursors, progress, alerts, bookmarks, and seen message numbers. Bookmark snapshots have no foreign key to a topic or outbox row and are not removed by ordinary message retention. Key-value entries hold tracker snapshots, pause, schedules, action claims, pages, and other bounded/retained state. A pane is not the conversation identity: session takeover/resume changes that association.
 
 | Location | Contents |
 | --- | --- |
@@ -408,7 +408,7 @@ For deeper behavior use [design.md](design.md); for exported APIs use [implement
 | Completion summary | A short successful turn leaves its answer; longer turns, failures, and stopped turns can retain a summary. |
 | Verbose / reasoning | Per-topic tool calls/output and stored reasoning can be shown. Reasoning is available only when the agent records it. |
 | Live draft text | Optional `[display] stream`; off by default. Drafts are previews, not durable delivered answers. |
-| Answers | Markdown rendered through the shared Telegram HTML formatter; long answers use documents or Mini App whole-answer pages. Previously queued rich-message parts remain supported. |
+| Answers | Markdown rendered through the shared Telegram HTML formatter; long answers use documents or Mini App whole-answer pages. Agent answers include a one-tap Bookmark callback. Previously queued rich-message parts remain supported. |
 | Receipts and reply context | Reactions reflect delivery/acknowledgment. Replies and selected quotes carry context; compatible long input parts are joined. Commands do not receive appended quotes. |
 | Work on the Mac | Mac-originated turns can stay on the Mac behind one notice. Send a Telegram message to return to Telegram; the notice can offer the latest answer. |
 | Quick replies | Configurable one-tap answer buttons; off until `[display] quick_replies` is set. |
@@ -430,6 +430,7 @@ Requires `[miniapp] url` and HTTPS via Tailscale Serve. Keep the listener on loo
 | File browser | Read-only folder tree; redacted text/Markdown, supported image and video previews. HTML/video browser links require the owner's Tailscale identity. Path containment, ignored-file filtering, and credential-name filtering apply. |
 | Changes | Uncommitted, branch, and last-turn views; file tree, diffs, wrapping, next/previous files, and supported image previews. |
 | Whole answer | Large answer page with formatted text, tables, and code. Older pages without a session binding may be copy-only. |
+| Bookmarks | Global saved-message list, source-topic filter, and full-detail view. Durable snapshots remain after source-topic or outbox cleanup. |
 | Annotate | Select text or paragraphs, add notes, and send them to the page's bound agent session; copy or prefill chat as alternatives. Keyboard launches need the verified owner Tailscale login; signed launches need fresh Telegram init data. |
 | Appearance | Per-device text scale and light/dark choice. |
 | Authorization | Telegram-signed owner data or a keyboard key with the configured tailnet login checks. Keyed actions are page-bound and deduplicated; the key cannot unpause typing. |
@@ -507,6 +508,8 @@ An unlinked Threaded Mode topic acts as the main chat. These commands also work 
 | `/attach` | List available agents to link to this existing Telegram topic. Requires a topic; unlink a live topic before attaching a different agent. |
 | `/new [agent [folder]]` | Start an agent. Without arguments, pick agent/folder interactively. Example: `/new pi ~/work/app`. Agent arguments are a **CLI** feature, not free-form Telegram `/new` flags. |
 | `/rt` | Open the Mini App control panel, if configured. |
+| `/bookmarks` | Open the global saved-messages page in the Mini App. |
+| `/bookmark`, `/b` | Save the message being replied to; these work in the main chat and topics. |
 | `/annotate` | Explain how to open Annotate from its keyboard button; the command itself does not submit notes. |
 | `/templates` | Explain how to open Templates from its keyboard button; the command itself does not send a prompt. |
 | `/topics` | List known topics and states. |
@@ -522,6 +525,8 @@ An unlinked Threaded Mode topic acts as the main chat. These commands also work 
 | --- | --- |
 | `/info` | Show session, pane, state, folder, and settings. |
 | `/last` | Post the newest answer held from the Mac in this topic, once. |
+| `/bookmark`, `/b` | Save the message being replied to; repeated saves do not duplicate it. |
+| `/bookmarks` | Open the global saved-messages page in the Mini App. |
 | `/screen [lines]` | Send a redacted screen picture. Default 30 requested lines; maximum 80 requested, picture limited to 60 lines/200 columns. |
 | `/screen text [lines]` | Send redacted text; `text` and count can be in either order. Keeps at most 3,800 trailing characters. |
 | `/files` | Open the Mini App read-only file browser. |
@@ -560,7 +565,8 @@ An unlinked Threaded Mode topic acts as the main chat. These commands also work 
 
 | Surface | Actions |
 | --- | --- |
-| Reply keyboard | 🎛 Panel, 🖥 Screen, 📁 Project, ✍️ Annotate, and 🧩 Templates. Project groups Files, Changes, and session-bound Config. Buttons never route as agent prompt text. |
+| Reply keyboard | 🎛 Panel, 🖥 Screen, 📁 Project, ✍️ Annotate, 🔖 Bookmarks, and 🧩 Templates. Bookmarks is global; Project groups Files, Changes, and session-bound Config. Buttons never route as agent prompt text. |
+| Bookmark interaction | Reply `/bookmark` or `/b` to any message, or tap 🔖 Bookmark under an agent answer. The Mini App lists cross-topic snapshots, filters by source topic, and shows full saved text. Telegram reactions are not a usable trigger in the private owner chat because the Bot API sends reaction updates only to bot administrators. |
 | Waiting notice | Send now / Send all now, Cancel / Cancel all. Sending stops at the first non-steerable command or note and never bypasses prompt checks. |
 | Permission / question | Options from the supported prompt, Escape, and where supported tick/next/text-answer flows. Read the full prompt. |
 | Startup question | Checked cursor movement and Enter; buttons are bound to the question's process. |

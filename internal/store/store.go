@@ -162,6 +162,30 @@ DROP INDEX template_updated;
 CREATE INDEX template_order ON template (position, updated_at DESC, id);
 `
 
+// schemaV7 adds standalone durable bookmarks and preserves the complete
+// redacted Markdown answer for new outbox rows. Existing rows keep an empty
+// full_text and remain available through their parts.
+const schemaV7 = `
+ALTER TABLE outbox ADD COLUMN full_text TEXT NOT NULL DEFAULT '';
+CREATE TABLE bookmark (
+  id                    INTEGER PRIMARY KEY,
+  chat_id               INTEGER NOT NULL,
+  message_id            INTEGER NOT NULL,
+  message_thread_id     INTEGER NOT NULL DEFAULT 0,
+  source_topic_name     TEXT NOT NULL DEFAULT '',
+  message_date          INTEGER NOT NULL,
+  saved_at              INTEGER NOT NULL,
+  title                 TEXT NOT NULL,
+  full_text             TEXT NOT NULL,
+  text_format           TEXT NOT NULL CHECK (text_format IN ('plain', 'markdown')),
+  content_kind          TEXT NOT NULL,
+  content_label         TEXT NOT NULL,
+  UNIQUE (chat_id, message_id)
+) STRICT;
+CREATE INDEX bookmark_chat_order ON bookmark (chat_id, id DESC);
+CREATE INDEX bookmark_chat_topic_order ON bookmark (chat_id, message_thread_id, id DESC);
+`
+
 // migrations is the numbered list of schema steps. Append only.
 var migrations = []migration{
 	{version: 1, sql: schemaV1},
@@ -170,13 +194,15 @@ var migrations = []migration{
 	{version: 4, sql: schemaV4},
 	{version: 5, sql: schemaV5},
 	{version: 6, sql: schemaV6},
+	{version: 7, sql: schemaV7},
 }
 
 // Store is an open database.
 type Store struct {
-	db  *sql.DB
-	ro  bool
-	now func() time.Time // used where an API has no time parameter
+	db            *sql.DB
+	ro            bool
+	schemaVersion int
+	now           func() time.Time // used where an API has no time parameter
 }
 
 // Open opens (and creates, if needed) the database at path and applies
@@ -204,6 +230,7 @@ func open(path string, migs []migration) (*Store, error) {
 		_ = s.db.Close()
 		return nil, err
 	}
+	s.schemaVersion = migs[len(migs)-1].version
 	return s, nil
 }
 

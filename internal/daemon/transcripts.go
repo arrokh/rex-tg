@@ -182,7 +182,7 @@ func (d *daemon) onTailScan(e evTailScan) {
 		for _, f := range e.finals {
 			it := store.OutboxItem{
 				ThreadID: e.thread, Key: "backfill:" + f.Key, Kind: "backfill", Silent: true,
-				Parts: d.markdownParts(f.Text, "backfill"),
+				FullText: format.Redact(f.Text), Parts: d.markdownParts(f.Text, "backfill"),
 			}
 			if len(it.Parts) > 0 {
 				items = append(items, it)
@@ -426,7 +426,11 @@ func (d *daemon) work(th store.Thread, acts []turn.Action) []store.OutboxItem {
 			}
 			// Only the agent's answer makes a sound; its other posts (block
 			// mode text, prompts typed on the Mac, tool rows) are progress.
-			items = append(items, store.OutboxItem{ThreadID: th.ID, Key: a.Key, Kind: a.Kind, Parts: parts, Silent: a.Silent || a.Kind != "answer"})
+			fullText := ""
+			if a.Kind == "answer" && a.HTML == "" {
+				fullText = format.Redact(a.Markdown)
+			}
+			items = append(items, store.OutboxItem{ThreadID: th.ID, Key: a.Key, Kind: a.Kind, Parts: parts, FullText: fullText, Silent: a.Silent || a.Kind != "answer"})
 			if a.Kind == "answer" && a.HTML == "" {
 				if img, ok := d.imageItem(th, a); ok {
 					items = append(items, img)
