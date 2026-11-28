@@ -38,10 +38,10 @@ var ErrUpdated = errors.New("daemon: the rex-tg binary was replaced; restarting 
 // Options configures Run. Nil test seams use the real implementations.
 type Options struct {
 	Config config.Config
-	// VoiceCommand runs Hex or Homebrew commands for local speech-to-text.
+	// VoiceCommand runs Hex, FFmpeg, or Homebrew commands for local speech-to-text.
 	// Nil uses exec.CommandContext. Tests inject a fake to avoid installing software.
 	VoiceCommand func(context.Context, string, ...string) ([]byte, error)
-	// VoiceLookPath resolves Hex and Homebrew executables. Nil uses exec.LookPath.
+	// VoiceLookPath resolves Hex, FFmpeg, and Homebrew executables. Nil uses exec.LookPath.
 	VoiceLookPath func(string) (string, error)
 	Token         string
 	Home          string

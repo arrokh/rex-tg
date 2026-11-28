@@ -813,10 +813,9 @@ func TestVoiceSetupInstallsHexIdempotentlyThenTranscribes(t *testing.T) {
 	bin := t.TempDir()
 	brew := filepath.Join(bin, "brew")
 	hex := filepath.Join(bin, "hex")
-	for _, path := range []string{brew, hex} {
-		if err := os.WriteFile(path, nil, 0o700); err != nil {
-			t.Fatal(err)
-		}
+	ffmpeg := filepath.Join(bin, "ffmpeg")
+	for _, path := range []string{brew, hex, ffmpeg} {
+		linkTestExecutable(t, path)
 	}
 
 	e := newEnvSerial(t)
@@ -825,8 +824,9 @@ func TestVoiceSetupInstallsHexIdempotentlyThenTranscribes(t *testing.T) {
 	p.User("start")
 	p.Final("ready")
 	var mu sync.Mutex
-	installed, running := false, false
-	brewCalls, startCalls, labsCalls, modelCalls, statusCalls, transcriptionCalls := 0, 0, 0, 0, 0, 0
+	installed, ffmpegInstalled, running := false, false, false
+	brewCalls, ffmpegCalls, startCalls, labsCalls, modelCalls, statusCalls, transcriptionCalls := 0, 0, 0, 0, 0, 0, 0
+	ffmpegInstallCalls := 0
 	opt := e.options()
 	opt.VoiceLookPath = func(name string) (string, error) {
 		switch name {
@@ -838,6 +838,12 @@ func TestVoiceSetupInstallsHexIdempotentlyThenTranscribes(t *testing.T) {
 			if installed {
 				return hex, nil
 			}
+		case "ffmpeg":
+			mu.Lock()
+			defer mu.Unlock()
+			if ffmpegInstalled {
+				return ffmpeg, nil
+			}
 		}
 		return "", errors.New("not installed")
 	}
@@ -846,11 +852,26 @@ func TestVoiceSetupInstallsHexIdempotentlyThenTranscribes(t *testing.T) {
 		defer mu.Unlock()
 		switch name {
 		case brew:
-			if strings.Join(args, " ") != "install --cask anomalyco/tap/hex" {
+			brewCalls++
+			switch strings.Join(args, " ") {
+			case "install --cask anomalyco/tap/hex":
+				installed = true
+			case "install ffmpeg":
+				ffmpegInstallCalls++
+				ffmpegInstalled = true
+			default:
 				t.Errorf("Homebrew args = %q", args)
 			}
-			brewCalls++
-			installed = true
+			return nil, nil
+		case ffmpeg:
+			ffmpegCalls++
+			if len(args) != 17 || !strings.HasSuffix(args[5], ".oga") || args[14] != "-fs" || args[15] != fmt.Sprint(128<<20) || !strings.HasSuffix(args[16], ".wav") {
+				t.Errorf("FFmpeg arguments = %q", args)
+				return nil, errors.New("invalid ffmpeg arguments")
+			}
+			if err := os.WriteFile(args[16], []byte("wav-test"), 0o600); err != nil {
+				return nil, err
+			}
 			return nil, nil
 		case hex:
 			if len(args) == 2 && args[0] == "status" && args[1] == "--json" {
@@ -881,11 +902,11 @@ func TestVoiceSetupInstallsHexIdempotentlyThenTranscribes(t *testing.T) {
 			}
 			if len(args) >= 2 && args[0] == "transcribe" {
 				transcriptionCalls++
-				if !strings.HasSuffix(args[1], ".oga") {
-					t.Errorf("Hex did not receive the original Ogg voice file: %q", args[1])
+				if !strings.HasSuffix(args[1], ".wav") {
+					t.Errorf("Hex did not receive a WAV file: %q", args[1])
 				}
 				data, err := os.ReadFile(args[1])
-				if err != nil || string(data) != "voice-test" {
+				if err != nil || string(data) != "wav-test" {
 					t.Errorf("voice file = %q, %v", data, err)
 				}
 				return []byte("the   test transcript"), nil
@@ -908,11 +929,12 @@ func TestVoiceSetupInstallsHexIdempotentlyThenTranscribes(t *testing.T) {
 	prompt := e.waitText(thread, "Do you want me to help set it up?")
 	e.pressButton(prompt, buttonData(prompt, "Read the action items"))
 	e.waitText(thread, "To set up local speech-to-text")
+	e.waitText(thread, "FFmpeg")
 	e.pressButton(prompt, buttonData(prompt, "Yes"))
 	e.waitText(thread, "Send a new voice note to test transcription")
 
 	// A second confirmation that was already in flight does not reinstall the
-	// cask or repeat the model setup in this daemon process.
+	// tools or repeat model setup in this daemon process.
 	e.pressButton(prompt, buttonData(prompt, "Yes"))
 	e.waitFor("the duplicate setup choice to be acknowledged", func() bool { return len(e.callbackTexts()) >= 3 })
 
@@ -930,8 +952,8 @@ func TestVoiceSetupInstallsHexIdempotentlyThenTranscribes(t *testing.T) {
 	e.stop() // wait for the idempotent second setup confirmation to finish
 	mu.Lock()
 	defer mu.Unlock()
-	if brewCalls != 1 || startCalls != 1 || labsCalls != 1 || modelCalls != 1 {
-		t.Errorf("setup commands: brew=%d start=%d labs=%d model=%d, want each once", brewCalls, startCalls, labsCalls, modelCalls)
+	if brewCalls != 2 || ffmpegInstallCalls != 1 || ffmpegCalls != 1 || startCalls != 1 || labsCalls != 1 || modelCalls != 1 {
+		t.Errorf("setup commands: brew=%d ffmpeg-install=%d ffmpeg=%d start=%d labs=%d model=%d", brewCalls, ffmpegInstallCalls, ffmpegCalls, startCalls, labsCalls, modelCalls)
 	}
 	if statusCalls != 3 {
 		t.Errorf("Hex status checks = %d, want not-running, downloading, and ready", statusCalls)
@@ -944,8 +966,9 @@ func TestVoiceSetupInstallsHexIdempotentlyThenTranscribes(t *testing.T) {
 func TestVoiceNoteWithDisabledTranscribeLabOffersSetup(t *testing.T) {
 	bin := t.TempDir()
 	hex := filepath.Join(bin, "hex")
-	if err := os.WriteFile(hex, nil, 0o700); err != nil {
-		t.Fatal(err)
+	ffmpeg := filepath.Join(bin, "ffmpeg")
+	for _, path := range []string{hex, ffmpeg} {
+		linkTestExecutable(t, path)
 	}
 
 	e := newEnvSerial(t)
@@ -958,15 +981,21 @@ func TestVoiceNoteWithDisabledTranscribeLabOffersSetup(t *testing.T) {
 	labsCalls, transcriptionCalls := 0, 0
 	opt := e.options()
 	opt.VoiceLookPath = func(name string) (string, error) {
-		if name == "hex" {
+		switch name {
+		case "hex":
 			return hex, nil
+		case "ffmpeg":
+			return ffmpeg, nil
+		default:
+			return "", errors.New("not installed")
 		}
-		return "", errors.New("not installed")
 	}
 	opt.VoiceCommand = func(_ context.Context, name string, args ...string) ([]byte, error) {
 		mu.Lock()
 		defer mu.Unlock()
 		switch {
+		case name == ffmpeg && len(args) == 17 && strings.HasSuffix(args[5], ".oga") && args[14] == "-fs" && args[15] == fmt.Sprint(128<<20) && strings.HasSuffix(args[16], ".wav"):
+			return nil, os.WriteFile(args[16], []byte("wav-test"), 0o600)
 		case name == hex && len(args) == 2 && args[0] == "status" && args[1] == "--json":
 			return []byte(`{"model":{"installed":true,"preparing":null},"permissions":{"transcription_model":true}}`), nil
 		case name == hex && len(args) == 3 && args[0] == "labs" && args[1] == "on" && args[2] == "transcribe-files":
@@ -977,6 +1006,9 @@ func TestVoiceNoteWithDisabledTranscribeLabOffersSetup(t *testing.T) {
 			return nil, nil
 		case name == hex && len(args) >= 2 && args[0] == "transcribe":
 			transcriptionCalls++
+			if !strings.HasSuffix(args[1], ".wav") {
+				t.Errorf("Hex did not receive WAV: %q", args[1])
+			}
 			if !labsEnabled {
 				return []byte("hex: Labs › Transcribe files is off; turn it on with `hex labs on transcribe-files`"), errors.New("exit status 1")
 			}
@@ -999,7 +1031,7 @@ func TestVoiceNoteWithDisabledTranscribeLabOffersSetup(t *testing.T) {
 		}})
 	}
 	sendVoice(9152, "voice-labs-off")
-	prompt := e.waitText(thread, "Hex isn't ready for local speech-to-text")
+	prompt := e.waitText(thread, "Local voice transcription isn't ready")
 	e.pressButton(prompt, buttonData(prompt, "Yes"))
 	e.waitText(thread, "Send a new voice note to test transcription")
 
@@ -2022,8 +2054,9 @@ func TestCodexAlertUsesConfiguredAnswersAndDenyIsNo(t *testing.T) {
 func TestVoiceNoteUsesHexTranscribe(t *testing.T) {
 	bin := t.TempDir()
 	hex := filepath.Join(bin, "hex")
-	if err := os.WriteFile(hex, nil, 0o700); err != nil {
-		t.Fatal(err)
+	ffmpeg := filepath.Join(bin, "ffmpeg")
+	for _, path := range []string{hex, ffmpeg} {
+		linkTestExecutable(t, path)
 	}
 	e := newEnvSerial(t)
 	e.cfg.Voice.HexCLI = hex
@@ -2033,16 +2066,40 @@ func TestVoiceNoteUsesHexTranscribe(t *testing.T) {
 	p.User("start")
 	p.Final("ready")
 	opt := e.options()
-	var args []string
+	opt.VoiceLookPath = func(name string) (string, error) {
+		if name == hex || name == "ffmpeg" {
+			if name == "ffmpeg" {
+				return ffmpeg, nil
+			}
+			return hex, nil
+		}
+		return "", errors.New("not installed")
+	}
+	var args, ffmpegArgs []string
 	opt.VoiceCommand = func(_ context.Context, name string, got ...string) ([]byte, error) {
-		if name != hex {
-			t.Fatalf("voice command = %q, want %q", name, hex)
+		switch name {
+		case ffmpeg:
+			ffmpegArgs = append([]string(nil), got...)
+			if len(got) != 17 || got[0] != "-nostdin" || got[1] != "-v" || got[2] != "error" || got[3] != "-y" || got[4] != "-i" || !strings.HasSuffix(got[5], ".oga") || got[6] != "-ac" || got[7] != "1" || got[8] != "-ar" || got[9] != "16000" || got[10] != "-c:a" || got[11] != "pcm_s16le" || got[12] != "-f" || got[13] != "wav" || got[14] != "-fs" || got[15] != fmt.Sprint(128<<20) || !strings.HasSuffix(got[16], ".wav") {
+				return []byte("invalid FFmpeg arguments"), errors.New("invalid FFmpeg arguments")
+			}
+			if err := os.WriteFile(got[16], []byte("wav-bytes"), 0o600); err != nil {
+				return nil, err
+			}
+			return nil, nil
+		case hex:
+			args = append([]string(nil), got...)
+			if len(got) != 4 || got[0] != "transcribe" || !strings.HasSuffix(got[1], ".wav") || got[2] != "--language" || got[3] != "en" {
+				return []byte("isn't a WAV file Hex can read"), errors.New("exit status 1")
+			}
+			data, err := os.ReadFile(got[1])
+			if err != nil || string(data) != "wav-bytes" {
+				return nil, errors.New("unexpected WAV contents")
+			}
+			return []byte(" run the   tests \n"), nil
+		default:
+			return nil, errors.New("unexpected voice command")
 		}
-		args = append([]string(nil), got...)
-		if len(got) < 2 || got[0] != "transcribe" {
-			t.Fatalf("Hex arguments = %q", got)
-		}
-		return []byte(" run the   tests \n"), nil
 	}
 	e.startWith(opt)
 	e.hookPi(p, "startup")
@@ -2055,13 +2112,76 @@ func TestVoiceNoteUsesHexTranscribe(t *testing.T) {
 		From: &telegram.User{ID: ownerID}, Chat: telegram.Chat{ID: chatID, Type: "private"},
 		Voice: &telegram.Voice{FileID: "voice-2", FileSize: 9, Duration: 1},
 	}})
-	e.waitText(thread, "🎤 run the tests")
+	e.waitFor("voice transcription result", func() bool {
+		return e.hasText(thread, "🎤 run the tests") || e.hasText(thread, "❌ Could not turn the voice note into text.")
+	})
+	if e.hasText(thread, "❌ Could not turn the voice note into text.") {
+		t.Fatalf("voice transcription failed\n%s", e.dump())
+	}
 	e.waitFor("the transcript to be typed", func() bool { return len(e.pastes()) == 1 })
 	if got := e.pastes()[0]; got != "run the tests" {
 		t.Errorf("pasted %q", got)
 	}
-	if len(args) != 4 || args[0] != "transcribe" || !strings.HasSuffix(args[1], ".oga") || args[2] != "--language" || args[3] != "en" {
+	if len(args) != 4 || args[0] != "transcribe" || !strings.HasSuffix(args[1], ".wav") || args[2] != "--language" || args[3] != "en" {
 		t.Errorf("Hex arguments = %q", args)
+	}
+	if len(ffmpegArgs) != 17 {
+		t.Errorf("ffmpeg arguments = %q", ffmpegArgs)
+	}
+}
+
+func TestExpandedVoiceNoteGetsSpecificSizeNotice(t *testing.T) {
+	bin := t.TempDir()
+	hex := filepath.Join(bin, "hex")
+	ffmpeg := filepath.Join(bin, "ffmpeg")
+	linkTestExecutable(t, hex)
+	linkTestExecutable(t, ffmpeg)
+
+	e := newEnvSerial(t)
+	e.cfg.Voice.HexCLI = hex
+	e.seedOwner()
+	p := e.newPi("pi-voice-size")
+	p.User("start")
+	p.Final("ready")
+	opt := e.options()
+	opt.VoiceLookPath = func(name string) (string, error) {
+		switch name {
+		case hex:
+			return hex, nil
+		case "ffmpeg":
+			return ffmpeg, nil
+		default:
+			return "", errors.New("not installed")
+		}
+	}
+	opt.VoiceCommand = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		if name == hex {
+			t.Errorf("Hex was called for oversized WAV: %q", args)
+			return nil, errors.New("unexpected Hex call")
+		}
+		if name != ffmpeg || len(args) != 17 || args[14] != "-fs" || args[15] != fmt.Sprint(128<<20) {
+			t.Errorf("FFmpeg command = %q %q", name, args)
+			return nil, errors.New("unexpected FFmpeg call")
+		}
+		return nil, os.Truncate(args[16], int64(128<<20))
+	}
+	e.startWith(opt)
+	e.hookPi(p, "startup")
+	thread := e.openTopic()
+	e.waitText(thread, "ready")
+
+	e.tg.AddFile("voice-large", "voice/large.oga", []byte("synthetic ogg"))
+	update := e.tg.PushUpdate(telegram.Update{Message: &telegram.Message{
+		MessageID: 9210, MessageThreadID: thread, IsTopicMessage: true,
+		From: &telegram.User{ID: ownerID}, Chat: telegram.Chat{ID: chatID, Type: "private"},
+		Voice: &telegram.Voice{FileID: "voice-large", FileSize: 12, Duration: 1},
+	}})
+	e.waitText(thread, "❌ This audio is too long to transcribe. Send a shorter clip.")
+	e.stop()
+
+	in, found, err := e.peek().InboundByID(context.Background(), update.UpdateID)
+	if err != nil || !found || in.Body != "" {
+		t.Fatalf("oversized voice still has recovery marker: %+v, %v, %v", in, found, err)
 	}
 }
 

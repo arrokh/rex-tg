@@ -17,18 +17,23 @@ import (
 
 const (
 	voiceSetupCallback = "vs"
-	voiceSetupPrompt   = "Hex isn't ready for local speech-to-text. Do you want me to help set it up?"
+	voiceSetupPrompt   = "Local voice transcription isn't ready. Do you want me to help set it up?"
 	voiceActionItems   = "To set up local speech-to-text, I will:\n" +
-		"1. Check whether Hex and its CLI are already installed.\n" +
-		"2. If needed, install the Hex app and CLI with Homebrew.\n" +
+		"1. Check whether Hex, FFmpeg, and their command-line tools are installed.\n" +
+		"2. If needed, install Hex and FFmpeg with Homebrew.\n" +
 		"3. Start Hex if needed and enable Labs › Transcribe files.\n" +
 		"4. Install or prepare Hex's selected speech model.\n" +
 		"5. Verify the model setup.\n\n" +
 		"Nothing is installed or enabled until you choose Yes. After setup, send a new voice note to test transcription."
-	voiceSetupTimeout = 30 * time.Minute
+	voiceSetupTimeout       = 30 * time.Minute
+	maxVoiceWAVBytes  int64 = 128 << 20 // bounds expanded audio output
 )
 
-var errHexUnavailable = errors.New("hex CLI is not available")
+var (
+	errHexUnavailable    = errors.New("hex CLI is not available")
+	errFFmpegUnavailable = errors.New("ffmpeg CLI is not available")
+	errVoiceWAVTooLarge  = errors.New("converted voice WAV exceeds the size limit")
+)
 
 func voiceSetupMarkup() *telegram.InlineKeyboardMarkup {
 	return &telegram.InlineKeyboardMarkup{InlineKeyboard: [][]telegram.InlineKeyboardButton{
@@ -68,6 +73,23 @@ func (d *daemon) hexCLI() string {
 	return ""
 }
 
+func (d *daemon) ffmpegCLI() string {
+	candidates := []string{"ffmpeg"}
+	if d.voiceLookPath == nil {
+		candidates = append(candidates, "/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg")
+	}
+	for _, candidate := range candidates {
+		if candidate == "" {
+			continue
+		}
+		path, err := d.lookVoicePath(candidate)
+		if err == nil && executable(path) {
+			return path
+		}
+	}
+	return ""
+}
+
 func (d *daemon) brewCLI() string {
 	for _, candidate := range []string{"brew", "/opt/homebrew/bin/brew", "/usr/local/bin/brew"} {
 		path, err := d.lookVoicePath(candidate)
@@ -90,6 +112,42 @@ func (d *daemon) runVoiceCommand(ctx context.Context, executable string, args ..
 	return exec.CommandContext(ctx, executable, args...).CombinedOutput()
 }
 
+func (d *daemon) transcodeVoiceToWAV(ctx context.Context, ffmpeg, source string) (string, error) {
+	f, err := os.CreateTemp(filepath.Dir(source), ".rex-tg-voice-*.wav")
+	if err != nil {
+		return "", fmt.Errorf("create WAV file: %w", err)
+	}
+	wav := f.Name()
+	if err := f.Close(); err != nil {
+		_ = os.Remove(wav)
+		return "", fmt.Errorf("close WAV file: %w", err)
+	}
+	args := []string{
+		"-nostdin", "-v", "error", "-y", "-i", source,
+		"-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", "-f", "wav",
+		"-fs", fmt.Sprint(maxVoiceWAVBytes), wav,
+	}
+	out, err := d.runVoiceCommand(ctx, ffmpeg, args...)
+	if err != nil {
+		_ = os.Remove(wav)
+		return "", fmt.Errorf("ffmpeg convert voice note: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	info, err := os.Stat(wav)
+	if err != nil {
+		_ = os.Remove(wav)
+		return "", fmt.Errorf("stat WAV file: %w", err)
+	}
+	if info.Size() == 0 {
+		_ = os.Remove(wav)
+		return "", errors.New("ffmpeg produced an empty WAV file")
+	}
+	if info.Size() >= maxVoiceWAVBytes {
+		_ = os.Remove(wav)
+		return "", fmt.Errorf("%w: %d MiB maximum", errVoiceWAVTooLarge, maxVoiceWAVBytes>>20)
+	}
+	return wav, nil
+}
+
 func (d *daemon) transcribeHex(ctx context.Context, cli, file string) (string, error) {
 	args := []string{"transcribe", file}
 	if language := strings.TrimSpace(d.cfg.Voice.Language); language != "" {
@@ -102,8 +160,8 @@ func (d *daemon) transcribeHex(ctx context.Context, cli, file string) (string, e
 	return strings.Join(strings.Fields(string(out)), " "), nil
 }
 
-func isHexSetupError(err error) bool {
-	if errors.Is(err, errHexUnavailable) {
+func isVoiceSetupError(err error) bool {
+	if errors.Is(err, errHexUnavailable) || errors.Is(err, errFFmpegUnavailable) {
 		return true
 	}
 	msg := strings.ToLower(err.Error())
@@ -143,7 +201,7 @@ func (d *daemon) setupHex(chatID, threadID int64) {
 	d.voiceSetupMu.Lock()
 	defer d.voiceSetupMu.Unlock()
 
-	msg, sendErr := d.sendNow(chatID, threadID, "Checking for Hex and its speech model…", nil)
+	msg, sendErr := d.sendNow(chatID, threadID, "Checking Hex and FFmpeg for local speech-to-text…", nil)
 	edit := func(text string) {
 		if msg.MessageID != 0 {
 			d.editMessage(chatID, msg.MessageID, text, nil)
@@ -153,7 +211,7 @@ func (d *daemon) setupHex(chatID, threadID int64) {
 		d.log.Warn("voice setup progress", "err", sendErr)
 	}
 	if d.voiceSetupReady.Load() {
-		edit("Hex is ready for local speech-to-text. Send a new voice note to test it.")
+		edit("Local speech-to-text is ready. Send a new voice note to test transcription.")
 		return
 	}
 
@@ -175,6 +233,24 @@ func (d *daemon) setupHex(chatID, threadID int64) {
 		cli = d.hexCLI()
 		if cli == "" {
 			edit("Homebrew finished, but I couldn't find the Hex CLI. Check the Hex app installation, then send another voice note.")
+			return
+		}
+	}
+
+	if d.ffmpegCLI() == "" {
+		brew := d.brewCLI()
+		if brew == "" {
+			edit("I couldn't find FFmpeg or Homebrew. Install FFmpeg on this Mac, then send a new voice note to try again.")
+			return
+		}
+		edit("FFmpeg isn't installed yet. Installing FFmpeg with Homebrew…")
+		if _, err := d.runVoiceCommand(ctx, brew, "install", "ffmpeg"); err != nil {
+			d.log.Warn("install FFmpeg", "err", err)
+			edit("FFmpeg installation did not finish. Check that this Mac can reach Homebrew, then send another voice note to try setup again.")
+			return
+		}
+		if d.ffmpegCLI() == "" {
+			edit("Homebrew finished, but I couldn't find FFmpeg. Check the FFmpeg installation, then send another voice note.")
 			return
 		}
 	}
@@ -215,7 +291,7 @@ func (d *daemon) setupHex(chatID, threadID int64) {
 		}
 	}
 	d.voiceSetupReady.Store(true)
-	edit("Hex is ready for local speech-to-text. Send a new voice note to test transcription.")
+	edit("Local speech-to-text is ready. Send a new voice note to test transcription.")
 }
 
 // hexRunning reports whether the status command reached a running Hex app.

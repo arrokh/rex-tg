@@ -413,7 +413,7 @@ For deeper behavior use [design.md](design.md); for exported APIs use [implement
 | Work on the Mac | Mac-originated turns can stay on the Mac behind one notice. Send a Telegram message to return to Telegram; the notice can offer the latest answer. |
 | Quick replies | Configurable one-tap answer buttons; off until `[display] quick_replies` is set. |
 | Incoming photos/documents | Download to private local storage; type caption and path. Explicit retry after failure/interruption; successful queue insertion is deduplicated. |
-| Voice / audio | Local Hex `transcribe` using Hex's selected speech model; setup requires explicit Yes and enables Labs › Transcribe files, starts Hex if needed, and prepares the model. Hex is checked until the model is ready. Failure/interruption is reported; no cloud speech service is built in. |
+| Voice / audio | FFmpeg converts voice/audio to mono 16 kHz PCM WAV, capped at 128 MiB, before local Hex `transcribe` uses its selected speech model. Setup requires explicit Yes, installs missing Hex or FFmpeg with Homebrew, enables Labs › Transcribe files, starts Hex if needed, and prepares the model. Hex is checked until the model is ready. Failure/interruption is reported; no cloud speech service is built in. |
 | Outgoing images | Images named by answers can be sent. Images viewed in tool results are also supported for pi and Claude Code, not Codex. |
 | Outgoing file offers | Configured paths in answers get download buttons. Default extensions: `pdf`, `csv`, `tsv`, `html`, `htm`, `xlsx`, `docx`, `pptx`. |
 | Mute | Per-topic answer sound setting; permission alerts still notify. |

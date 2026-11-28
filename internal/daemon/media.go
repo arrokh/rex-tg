@@ -19,6 +19,7 @@ const (
 	voiceDisabledText = "Voice transcription is disabled in the [voice] config."
 	voicePausedText   = "Automatic voice transcription is disabled in the [voice] config."
 	voiceFailText     = "❌ Could not turn the voice note into text."
+	voiceTooLargeText = "❌ This audio is too long to transcribe. Send a shorter clip."
 	fileFailText      = "❌ Could not download the file."
 	mediaTimeout      = 2 * time.Minute
 	defaultMaxMB      = 20
@@ -120,7 +121,7 @@ func (d *daemon) media(u telegram.Update, m *telegram.Message, th store.Thread) 
 			if err != nil || strings.TrimSpace(text) == "" {
 				if d.ctx.Err() == nil {
 					d.log.Warn("voice note", "thread", th.ID, "err", err)
-					if err != nil && isHexSetupError(err) {
+					if err != nil && isVoiceSetupError(err) {
 						d.voiceSetupReady.Store(false)
 						if clearErr := d.st.SetInboundBody(d.ctx, update, ""); clearErr != nil {
 							d.log.Warn("clear interrupted voice marker", "update", update, "err", clearErr)
@@ -128,6 +129,15 @@ func (d *daemon) media(u telegram.Update, m *telegram.Message, th store.Thread) 
 							return
 						}
 						d.promptHexSetup(th)
+						return
+					}
+					if errors.Is(err, errVoiceWAVTooLarge) {
+						if clearErr := d.st.SetInboundBody(d.ctx, update, ""); clearErr != nil {
+							d.log.Warn("clear oversized voice marker", "update", update, "err", clearErr)
+							d.mediaWorkNotice(th, update, fmt.Sprintf("reply:voice:%d", update), voiceFailText)
+							return
+						}
+						d.mediaWorkNotice(th, update, fmt.Sprintf("reply:voice:%d", update), voiceTooLargeText)
 						return
 					}
 					d.mediaWorkNotice(th, update, fmt.Sprintf("reply:voice:%d", update), voiceFailText)
@@ -247,8 +257,8 @@ func (d *daemon) download(fileID, dir, name string) (string, error) {
 	return path, nil
 }
 
-// transcribe downloads a Telegram voice note and asks Hex to transcribe the
-// original Ogg/Opus file locally. Hex decodes it without ffmpeg.
+// transcribe downloads Telegram audio. Hex requires WAV input, so FFmpeg
+// converts the file to mono 16 kHz PCM before local transcription.
 func (d *daemon) transcribe(fileID, dir, name, cli string) (string, error) {
 	src, err := d.download(fileID, dir, name)
 	if err != nil {
@@ -260,7 +270,16 @@ func (d *daemon) transcribe(fileID, dir, name, cli string) (string, error) {
 	if !executable(cli) {
 		return "", errHexUnavailable
 	}
-	return d.transcribeHex(ctx, cli, src)
+	ffmpeg := d.ffmpegCLI()
+	if ffmpeg == "" {
+		return "", errFFmpegUnavailable
+	}
+	wav, err := d.transcodeVoiceToWAV(ctx, ffmpeg, src)
+	if err != nil {
+		return "", err
+	}
+	defer os.Remove(wav)
+	return d.transcribeHex(ctx, cli, wav)
 }
 
 // voiceFile returns the file of a voice note, or of an audio file.
