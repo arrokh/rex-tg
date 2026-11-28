@@ -293,6 +293,20 @@ var videoTypes = map[string]string{
 // ordinary browser preview, this rejects symlink components so a later stream
 // request cannot use a link to redirect the file after validation.
 func openExternalVideo(ctx context.Context, root, rel, offeredFile string) (*os.File, os.FileInfo, error) {
+	return openExternalMedia(ctx, root, rel, offeredFile)
+}
+
+// openExternalPDF opens only a PDF, using the same root, hidden-file, ignored-
+// file, and no-symlink checks as external video streams.
+func openExternalPDF(ctx context.Context, root, rel, offeredFile string) (*os.File, os.FileInfo, error) {
+	rel = cleanFilePath(rel)
+	if rel == "" || !strings.EqualFold(path.Ext(rel), ".pdf") {
+		return nil, nil, ErrNoFile
+	}
+	return openExternalMedia(ctx, root, rel, offeredFile)
+}
+
+func openExternalMedia(ctx context.Context, root, rel, offeredFile string) (*os.File, os.FileInfo, error) {
 	rel = cleanFilePath(rel)
 	if rel == "" {
 		return nil, nil, ErrNoFile
@@ -384,6 +398,10 @@ func showFile(real, rel string, redact func(string) string) (View, error) {
 	}
 	size := fi.Size()
 	ext := strings.ToLower(path.Ext(rel))
+	if ext == ".pdf" {
+		v.Note = fmt.Sprintf("PDF file, %s.", Size(size))
+		return v, nil
+	}
 	if mime, ok := imageTypes[ext]; ok {
 		if size > maxImageBytes {
 			v.Note = fmt.Sprintf("Image, %s: too big to show.", Size(size))

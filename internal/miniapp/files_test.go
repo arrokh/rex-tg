@@ -130,6 +130,40 @@ func TestOpenExternalVideoHonorsIgnoredFileOffer(t *testing.T) {
 	}
 }
 
+func TestOpenExternalPDFHonorsIgnoredOffersAndPathSafety(t *testing.T) {
+	root, outside := newRepo(t)
+	write(t, filepath.Join(root, ".gitignore"), "node_modules/\nbuild.log\nignored/\n")
+	write(t, filepath.Join(root, "visible.pdf"), "%PDF synthetic visible")
+	write(t, filepath.Join(root, "ignored", "offered.pdf"), "%PDF synthetic offered")
+	write(t, filepath.Join(root, "ignored", "other.pdf"), "%PDF synthetic other")
+	write(t, filepath.Join(outside, "secret.pdf"), "%PDF synthetic outside")
+	if err := os.Symlink(filepath.Join(root, "visible.pdf"), filepath.Join(root, "link.pdf")); err != nil {
+		t.Fatal(err)
+	}
+
+	f, info, err := openExternalPDF(context.Background(), root, "ignored/offered.pdf", "ignored/offered.pdf")
+	if err != nil {
+		t.Fatalf("explicitly offered ignored PDF: %v", err)
+	}
+	f.Close()
+	if info.Size() == 0 {
+		t.Fatal("offered PDF has no content")
+	}
+	for _, rel := range []string{
+		"visible.txt", "ignored/offered.pdf", "ignored/other.pdf", "link.pdf", "out/secret.pdf",
+		".env.pdf", "../../outside/secret.pdf",
+	} {
+		if f, _, err := openExternalPDF(context.Background(), root, rel, ""); err == nil {
+			f.Close()
+			t.Errorf("opened invalid PDF path %q", rel)
+		}
+	}
+	if f, _, err := openExternalPDF(context.Background(), root, "ignored/other.pdf", "ignored/offered.pdf"); err == nil {
+		f.Close()
+		t.Error("another ignored PDF was allowed by a different offer")
+	}
+}
+
 func TestBrowseCanExplicitlyReadOneIgnoredRegularFile(t *testing.T) {
 	root, _ := newRepo(t)
 	write(t, filepath.Join(root, ".gitignore"), "node_modules/\nbuild.log\nresults/\n")
@@ -155,6 +189,17 @@ func TestBrowseCanExplicitlyReadOneIgnoredRegularFile(t *testing.T) {
 
 // A file's content is escaped, or rendered when it is Markdown; it is
 // redacted first; a binary file shows only its size.
+func TestBrowseDoesNotEmbedPDFContent(t *testing.T) {
+	root := t.TempDir()
+	data := "%PDF-1.4\nsynthetic, readable PDF bytes\n"
+	write(t, filepath.Join(root, "report.pdf"), data)
+
+	v, err := Browse(context.Background(), root, "report.pdf", nil)
+	if err != nil || v.HTML != "" || v.Note != fmt.Sprintf("PDF file, %s.", Size(int64(len(data)))) {
+		t.Fatalf("PDF was previewed in the Mini App: %+v, %v", v, err)
+	}
+}
+
 func TestBrowseShowsFiles(t *testing.T) {
 	root, _ := newRepo(t)
 	redact := func(s string) string { return strings.ReplaceAll(s, "token", "[redacted]") }

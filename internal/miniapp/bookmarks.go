@@ -3,9 +3,11 @@ package miniapp
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -46,6 +48,7 @@ type BookmarkDetail struct {
 type Bookmarks interface {
 	List(context.Context, int64, int64, int) ([]BookmarkItem, []BookmarkTopic, bool, error) // topicID, beforeID, limit
 	Get(context.Context, int64) (BookmarkDetail, bool, error)
+	Delete(context.Context, int64) error
 }
 
 const (
@@ -175,12 +178,64 @@ func (s *Server) bookmarkDetail(w http.ResponseWriter, r *http.Request) {
 	}
 	body := RenderAnswer(detail.Text)
 	if detail.Plain {
-		body = RenderPlain(detail.Text)
+		body = renderPlainLinks(detail.Text)
 	}
 	_ = json.NewEncoder(w).Encode(bookmarkDetailResponse{
 		ID: detail.ID, TopicID: detail.TopicID, Topic: detail.Topic, Title: detail.Title,
 		Kind: detail.Kind, At: detail.At, HTML: body,
 	})
+}
+
+// bookmarkDelete removes one bookmark from the owner's collection. It is
+// scoped again by the repository's owner chat and is harmless when the ID is
+// already gone, so stale pages and retries cannot affect another snapshot.
+func (s *Server) bookmarkDelete(w http.ResponseWriter, r *http.Request) {
+	if !s.allowed(w, r) {
+		return
+	}
+	q, ok := bookmarkQuery(w, r, "bookmark")
+	if !ok {
+		return
+	}
+	if _, ok := s.loadKind(w, r, KindBookmarks); !ok {
+		return
+	}
+	if s.bookmarks == nil {
+		http.Error(w, `{"error":"Bookmarks are off."}`, http.StatusNotFound)
+		return
+	}
+	bookmarkID, ok := positive(q.Get("bookmark"))
+	if !ok {
+		http.Error(w, `{"error":"This bookmark is not valid."}`, http.StatusBadRequest)
+		return
+	}
+	if ct := r.Header.Get("Content-Type"); !strings.HasPrefix(ct, "application/json") {
+		http.Error(w, `{"error":"Send JSON."}`, http.StatusUnsupportedMediaType)
+		return
+	}
+	var body struct {
+		Op string `json:"op"`
+	}
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1024))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&body); err != nil {
+		http.Error(w, `{"error":"This bookmark action is not valid."}`, http.StatusBadRequest)
+		return
+	}
+	var extra any
+	if err := dec.Decode(&extra); err != io.EOF || body.Op != "delete" {
+		http.Error(w, `{"error":"This bookmark action is not valid."}`, http.StatusBadRequest)
+		return
+	}
+	if !s.canSendBoundMessage(r) {
+		http.Error(w, `{"error":"Removing bookmarks requires fresh Telegram data, or a verified owner Tailscale login for keyboard launches."}`, http.StatusForbidden)
+		return
+	}
+	if err := s.bookmarks.Delete(r.Context(), bookmarkID); err != nil {
+		http.Error(w, `{"error":"Could not remove this bookmark. Try again."}`, http.StatusServiceUnavailable)
+		return
+	}
+	_ = json.NewEncoder(w).Encode(map[string]bool{"deleted": true})
 }
 
 // bookmarkQuery validates the page id and named query parameters before the

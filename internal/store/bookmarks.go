@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 )
@@ -135,4 +136,16 @@ func (s *Store) Bookmark(ctx context.Context, id int64) (Bookmark, error) {
 		return Bookmark{}, notFound(err, fmt.Sprintf("store: bookmark %d", id))
 	}
 	return b, nil
+}
+
+// DeleteBookmark removes one bookmark belonging to chatID. A missing ID is
+// harmless, so a repeated request or a deletion from another device is safe.
+func (s *Store) DeleteBookmark(ctx context.Context, chatID, id int64) error {
+	if chatID <= 0 || id <= 0 {
+		return errors.New("store: invalid bookmark identity")
+	}
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM bookmark WHERE chat_id=? AND id=?`, chatID, id); err != nil {
+		return fmt.Errorf("store: delete bookmark: %w", err)
+	}
+	return nil
 }

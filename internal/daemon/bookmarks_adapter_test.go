@@ -10,6 +10,54 @@ import (
 	"rex-tg/internal/store"
 )
 
+func TestMiniAppBookmarksDeleteUsesOwnerChatScope(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	ctx := context.Background()
+	for i, chatID := range []int64{100, 200} {
+		in := store.Inbound{UpdateID: int64(i + 1), ChatID: chatID, FromID: 1, Kind: "command", CreatedAt: time.Unix(200, 0)}
+		bookmark := store.Bookmark{ChatID: chatID, MessageID: 700, SourceTopicName: "Main chat",
+			MessageDate: time.Unix(100, 0), SavedAt: time.Unix(200, 0), Title: "synthetic", FullText: "snapshot",
+			ContentKind: "text", ContentLabel: "Text"}
+		if _, created, err := st.InsertBookmarkWithInbound(ctx, in, bookmark); err != nil || !created {
+			t.Fatalf("insert chat %d bookmark = created %v, err %v", chatID, created, err)
+		}
+	}
+	ownerRows := mustAdapterBookmarks(t, st, 100)
+	otherRows := mustAdapterBookmarks(t, st, 200)
+	if len(ownerRows) != 1 || len(otherRows) != 1 {
+		t.Fatalf("setup bookmarks: owner=%+v other=%+v", ownerRows, otherRows)
+	}
+	repo := miniAppBookmarks{st: st, chatID: func() int64 { return 100 }}
+	if err := repo.Delete(ctx, otherRows[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	if got := mustAdapterBookmarks(t, st, 200); len(got) != 1 || got[0].ID != otherRows[0].ID {
+		t.Fatalf("owner adapter deleted another chat's row: %+v", got)
+	}
+	if err := repo.Delete(ctx, ownerRows[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	if got := mustAdapterBookmarks(t, st, 100); len(got) != 0 {
+		t.Fatalf("owner's deleted row remains: %+v", got)
+	}
+	if err := (miniAppBookmarks{st: st}).Delete(ctx, ownerRows[0].ID); err == nil {
+		t.Fatal("unpaired owner chat accepted a deletion")
+	}
+}
+
+func mustAdapterBookmarks(t *testing.T, st *store.Store, chatID int64) []store.Bookmark {
+	t.Helper()
+	rows, err := st.ListBookmarks(context.Background(), chatID, nil, 0, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return rows
+}
+
 func TestMiniAppBookmarksMapsGlobalAndMainChatFilters(t *testing.T) {
 	st, err := store.Open(filepath.Join(t.TempDir(), "db"))
 	if err != nil {

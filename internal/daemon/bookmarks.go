@@ -105,6 +105,17 @@ func (b miniAppBookmarks) Get(ctx context.Context, id int64) (miniapp.BookmarkDe
 	}, true, nil
 }
 
+func (b miniAppBookmarks) Delete(ctx context.Context, id int64) error {
+	chat := int64(0)
+	if b.chatID != nil {
+		chat = b.chatID()
+	}
+	if chat == 0 {
+		return errors.New("bookmarks: owner chat is not paired")
+	}
+	return b.st.DeleteBookmark(ctx, chat, id)
+}
+
 func bookmarkTopicName(topicID int64, name string) string {
 	if topicID == 0 {
 		return "Main chat"
