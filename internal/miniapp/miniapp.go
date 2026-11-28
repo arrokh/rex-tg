@@ -6,11 +6,10 @@
 // checks who asks and renders them.
 //
 // Mini App API requests carry either Telegram-signed init data or the current
-// keyboard key. External HTML, video, and PDF previews instead check the
-// owner's Tailscale login and never accept the Mini App key in their URLs. Keyboard-key
-// Annotate
-// sends additionally require the owner's verified Tailscale login. The page
-// shell itself holds no data.
+// keyboard key. External bookmarks and HTML, video, and PDF previews instead
+// check the owner's Tailscale login and never accept the Mini App key in their
+// URLs. Keyboard-key Annotate sends additionally require the owner's verified
+// Tailscale login. The page shell itself holds no data.
 package miniapp
 
 import (
@@ -73,6 +72,8 @@ type Screen struct {
 	At    string `json:"at,omitempty"` // when it was read, "15:04:05"
 	Error string `json:"error,omitempty"`
 }
+
+const externalBookmarksHeader = "X-Rex-External-Bookmarks"
 
 // maxSkew is how far in the future a signature's time may be (clocks differ).
 const maxSkew = 5 * time.Minute
@@ -171,8 +172,8 @@ func (s *Server) WithTailnetOnly(on bool) *Server {
 
 // Logins decides which Tailscale logins may open pages with the buttons'
 // key, so that in a shared tailnet another person's device cannot use a key
-// that leaked (the daemon keeps them). It also authorizes external HTML,
-// video, and PDF previews without putting the key in the URL. Used with WithTailnetOnly.
+// that leaked (the daemon keeps them). It also authorizes external bookmarks,
+// HTML, video, and PDF previews without putting the key in the URL. Used with WithTailnetOnly.
 type Logins interface {
 	// Owner notes a login whose request carried the owner's own Telegram
 	// signature: that login is the owner's.
@@ -187,7 +188,7 @@ type Logins interface {
 }
 
 // WithLogins checks owner Tailscale identities for button-key requests and
-// external HTML, video, and PDF previews.
+// external bookmarks, HTML, video, and PDF previews.
 func (s *Server) WithLogins(l Logins) *Server {
 	s.logins = l
 	return s
@@ -277,6 +278,7 @@ var (
 
 // Handler serves /app (the page shell), /app.js, the terminal library,
 // /api/page?id=…, /api/screen?id=…, /api/files?id=…&path=…,
+// /external/bookmarks (owner-authenticated Bookmarks page),
 // /external/file?id=…&path=… (owner-authenticated HTML, video, or PDF),
 // /api/changes?id=…&base=…[&path=…][&new=1], /api/bookmarks?id=…&topic=…&before=…,
 // GET and POST /api/bookmark?id=…&bookmark=…, and the control panel's /api/control?id=…,
@@ -286,6 +288,10 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /app", func(w http.ResponseWriter, r *http.Request) {
 		s.headers(w, "text/html; charset=utf-8")
+		if r.URL.Query().Get("from") == "external-bookmarks" {
+			w.Header().Set("X-Frame-Options", "DENY")
+			w.Header().Set("Content-Security-Policy", w.Header().Get("Content-Security-Policy")+"; frame-ancestors 'none'")
+		}
 		_, _ = w.Write(appHTML)
 	})
 	mux.HandleFunc("GET /app.js", func(w http.ResponseWriter, r *http.Request) {
@@ -306,6 +312,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/page", s.page)
 	mux.HandleFunc("GET /api/screen", s.liveScreen)
 	mux.HandleFunc("GET /api/files", s.fileView)
+	mux.HandleFunc("GET /external/bookmarks", s.externalBookmarks)
 	mux.HandleFunc("GET /external/file", s.externalFile)
 	mux.HandleFunc("GET /api/changes", s.changesView)
 	mux.HandleFunc("GET /api/control", s.controlState)
@@ -367,6 +374,17 @@ func (s *Server) headers(w http.ResponseWriter, ctype string) {
 // in keyCanSendBoundMessage. It answers a refused request itself.
 func (s *Server) allowed(w http.ResponseWriter, r *http.Request) bool {
 	s.headers(w, "application/json")
+	if mode := r.Header.Get(externalBookmarksHeader); mode != "" {
+		if mode == "1" &&
+			r.Header.Get("X-Telegram-Init-Data") == "" &&
+			r.Header.Get("X-Rex-Key") == "" &&
+			s.externalBookmarksRequestOK(r) {
+			return true
+		}
+		s.noteRefusal("external bookmarks request from an unverified Tailscale login")
+		http.Error(w, `{"error":"Bookmarks open only on your own Tailscale account."}`, http.StatusForbidden)
+		return false
+	}
 	if r.Header.Get("X-Telegram-Init-Data") == "" && r.Header.Get("X-Rex-Key") != "" {
 		if !s.keyed(r) {
 			s.noteRefusal("wrong key")
@@ -408,6 +426,9 @@ func (s *Server) keyCanSendBoundMessage(r *http.Request) bool {
 }
 
 func (s *Server) canSendBoundMessage(r *http.Request) bool {
+	if r.Header.Get(externalBookmarksHeader) == "1" {
+		return s.externalBookmarksRequestOK(r)
+	}
 	if s.keyed(r) {
 		return s.keyCanSendBoundMessage(r)
 	}
@@ -470,6 +491,7 @@ func (s *Server) page(w http.ResponseWriter, r *http.Request) {
 	out["can_open_external_html"] = s.externalFileAvailable(p)
 	out["can_open_external_video"] = s.externalFileAvailable(p)
 	out["can_open_external_pdf"] = s.externalFileAvailable(p)
+	out["can_open_external_bookmarks"] = p.Kind == KindBookmarks && s.externalBookmarksAvailable(tailnetLogin(r))
 
 	if s.annot != nil && s.control != nil && (p.Kind == KindAnnotate || p.Kind == KindAnswer) && p.Thread > 0 && p.Conv > 0 {
 		out["can_send_notes"] = s.canSendBoundMessage(r)
@@ -569,6 +591,49 @@ func (s *Server) readFile(r *http.Request, root, rel, offeredFile string) (View,
 		return View{}, ErrNoFile
 	}
 	return v, nil
+}
+
+func (s *Server) externalBookmarksAvailable(login string) bool {
+	return s.tailnet && s.bookmarks != nil && s.launch != nil && s.logins != nil && s.logins.OwnerLoginOK(login)
+}
+
+func (s *Server) externalBookmarksRequestOK(r *http.Request) bool {
+	switch r.Method {
+	case http.MethodGet:
+		if r.URL.Path != "/api/page" && r.URL.Path != "/api/bookmarks" && r.URL.Path != "/api/bookmark" {
+			return false
+		}
+	case http.MethodPost:
+		if r.URL.Path != "/api/bookmark" {
+			return false
+		}
+	default:
+		return false
+	}
+	if !fromTailnet(r) || !s.externalBookmarksAvailable(tailnetLogin(r)) {
+		return false
+	}
+	p, ok := s.load(r.URL.Query().Get("id"))
+	return ok && p.Kind == KindBookmarks
+}
+
+// externalBookmarks opens a fresh global Bookmarks page for an authenticated
+// owner device. Its URL carries neither the keyboard key nor Telegram init data.
+func (s *Server) externalBookmarks(w http.ResponseWriter, r *http.Request) {
+	if !fromTailnet(r) || !s.externalBookmarksAvailable(tailnetLogin(r)) {
+		s.noteRefusal("external bookmarks from an unverified Tailscale login")
+		http.NotFound(w, r)
+		return
+	}
+	launched := s.launch.Launch(r.Context(), ViewBookmarks, 0)
+	if launched.Page == "" {
+		s.headers(w, "text/plain; charset=utf-8")
+		http.Error(w, "Bookmarks are unavailable right now.", http.StatusServiceUnavailable)
+		return
+	}
+	s.headers(w, "text/html; charset=utf-8")
+	location := "/app?p=" + url.QueryEscape(launched.Page) + "&from=external-bookmarks"
+	http.Redirect(w, r, location, http.StatusSeeOther)
 }
 
 func (s *Server) externalFileAvailable(p Page) bool {

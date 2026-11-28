@@ -117,6 +117,12 @@ func TestPageOnlyForTheOwner(t *testing.T) {
 	if err != nil || res.StatusCode != http.StatusOK || !strings.Contains(res.Header.Get("Content-Security-Policy"), "default-src 'none'") {
 		t.Fatalf("shell: %v %v", res, err)
 	}
+	res.Body.Close()
+	res, err = http.Get(srv.URL + "/app?from=external-bookmarks")
+	if err != nil || res.StatusCode != http.StatusOK || res.Header.Get("X-Frame-Options") != "DENY" || !strings.Contains(res.Header.Get("Content-Security-Policy"), "frame-ancestors 'none'") {
+		t.Fatalf("external Bookmarks shell lacks frame protection: %v %v", res, err)
+	}
+	res.Body.Close()
 	// The terminal library comes from the same address, without a signature.
 	for _, p := range []string{"/xterm-5.5.0.js", "/xterm-5.5.0.css"} {
 		res, err := http.Get(srv.URL + p)

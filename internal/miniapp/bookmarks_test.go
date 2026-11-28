@@ -330,3 +330,156 @@ func TestBookmarkDetailRendersMarkdownAndEscapesPlainText(t *testing.T) {
 		}
 	})
 }
+
+type bookmarksLauncher struct {
+	page   string
+	view   string
+	thread int64
+	calls  int
+}
+
+func (f *bookmarksLauncher) Launch(_ context.Context, view string, thread int64) LaunchResult {
+	f.calls++
+	f.view, f.thread = view, thread
+	return LaunchResult{Page: f.page}
+}
+
+func TestExternalBookmarksRedirectRequiresOwnerTailscaleLogin(t *testing.T) {
+	launch := &bookmarksLauncher{page: "bookmark-page"}
+	s := New(fakeToken, func() int64 { return 42 }, func(string) (Page, bool) { return Page{}, false }, nil).
+		WithBookmarks(&fakeBookmarks{}).
+		WithLaunch(launch, func(string) bool { return false }).
+		WithTailnetOnly(true).
+		WithLogins(&fakeLogins{allow: map[string]bool{"me@example.com": true}})
+	server := httptest.NewServer(s.Handler())
+	defer server.Close()
+	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	request, err := http.NewRequest(http.MethodGet, server.URL+"/external/bookmarks", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Tailscale-User-Login", "me@example.com")
+	response, err := client.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if response.StatusCode != http.StatusSeeOther || response.Header.Get("Location") != "/app?p=bookmark-page&from=external-bookmarks" {
+		t.Fatalf("owner redirect: status=%d location=%q", response.StatusCode, response.Header.Get("Location"))
+	}
+	if launch.calls != 1 || launch.view != ViewBookmarks || launch.thread != 0 {
+		t.Fatalf("external route launched wrong page: %+v", launch)
+	}
+
+	c := caller{t: t, url: server.URL}
+	if code, _ := c.doText("GET", "/external/bookmarks", map[string]string{"Tailscale-User-Login": "other@example.com"}); code != http.StatusNotFound {
+		t.Errorf("unverified login: %d, want 404", code)
+	}
+	if code, _ := c.doText("GET", "/external/bookmarks", nil); code != http.StatusForbidden {
+		t.Errorf("request outside tailnet: %d, want 403", code)
+	}
+	if launch.calls != 1 {
+		t.Errorf("refused request launched a page: %d calls", launch.calls)
+	}
+
+	disabledLaunch := &bookmarksLauncher{page: "disabled-page"}
+	disabled := New(fakeToken, func() int64 { return 42 }, func(string) (Page, bool) { return Page{}, false }, nil).
+		WithBookmarks(&fakeBookmarks{}).
+		WithLaunch(disabledLaunch, func(string) bool { return false }).
+		WithLogins(&fakeLogins{allow: map[string]bool{"me@example.com": true}})
+	disabledServer := httptest.NewServer(disabled.Handler())
+	defer disabledServer.Close()
+	if code, _ := (caller{t: t, url: disabledServer.URL}).doText("GET", "/external/bookmarks", map[string]string{"Tailscale-User-Login": "me@example.com"}); code != http.StatusNotFound || disabledLaunch.calls != 0 {
+		t.Errorf("external route without tailnet_only: status=%d calls=%d", code, disabledLaunch.calls)
+	}
+}
+
+func TestExternalBookmarksAPIsRequireOwnerAndBookmarksPage(t *testing.T) {
+	repo := &fakeBookmarks{found: true, detail: BookmarkDetail{ID: 7, Text: "Saved"}}
+	launch := &bookmarksLauncher{page: "bm"}
+	pages := map[string]Page{
+		"bm":     {Kind: KindBookmarks},
+		"screen": {Kind: KindScreen},
+	}
+	s := New(fakeToken, func() int64 { return 42 }, func(id string) (Page, bool) { p, ok := pages[id]; return p, ok }, nil).
+		WithBookmarks(repo).
+		WithLaunch(launch, func(string) bool { return false }).
+		WithTailnetOnly(true).
+		WithLogins(&fakeLogins{allow: map[string]bool{"me@example.com": true}})
+	server := httptest.NewServer(s.Handler())
+	defer server.Close()
+	c := caller{t: t, url: server.URL}
+	externalOwner := map[string]string{
+		"Tailscale-User-Login":     "me@example.com",
+		"X-Rex-External-Bookmarks": "1",
+	}
+	if code, page := c.do("GET", "/api/page?id=bm", externalOwner, ""); code != http.StatusOK || page["can_open_external_bookmarks"] != true {
+		t.Fatalf("external bookmark page capability: %d %v", code, page)
+	}
+	if code, _ := c.do("GET", "/api/bookmarks?id=bm", externalOwner, ""); code != http.StatusOK || repo.listCalls != 1 {
+		t.Fatalf("external list: status=%d calls=%d", code, repo.listCalls)
+	}
+	if code, _ := c.do("GET", "/api/bookmark?id=bm&bookmark=7", externalOwner, ""); code != http.StatusOK || repo.gotID != 7 {
+		t.Fatalf("external detail: status=%d id=%d", code, repo.gotID)
+	}
+	deleteHeaders := map[string]string{
+		"Tailscale-User-Login":     "me@example.com",
+		"X-Rex-External-Bookmarks": "1",
+		"Content-Type":             "application/json",
+	}
+	if code, body := c.do("POST", "/api/bookmark?id=bm&bookmark=7", deleteHeaders, `{"op":"delete"}`); code != http.StatusOK || body["deleted"] != true || repo.deleteID != 7 {
+		t.Fatalf("external delete: status=%d body=%v id=%d", code, body, repo.deleteID)
+	}
+
+	for _, tc := range []struct {
+		name string
+		path string
+		head map[string]string
+	}{
+		{"unverified Tailscale login", "/api/bookmarks?id=bm", map[string]string{"Tailscale-User-Login": "other@example.com", "X-Rex-External-Bookmarks": "1"}},
+		{"wrong page kind", "/api/bookmarks?id=screen", externalOwner},
+		{"launch endpoint is outside external scope", "/api/launch?id=bm&go=panel", externalOwner},
+		{"marker mixed with key", "/api/bookmarks?id=bm", map[string]string{"Tailscale-User-Login": "me@example.com", "X-Rex-External-Bookmarks": "1", "X-Rex-Key": testKey}},
+		{"marker mixed with Telegram data", "/api/bookmarks?id=bm", map[string]string{"Tailscale-User-Login": "me@example.com", "X-Rex-External-Bookmarks": "1", "X-Telegram-Init-Data": sign(t, fakeToken, fields(42, time.Now()))}},
+	} {
+		if code, _ := c.do("GET", tc.path, tc.head, ""); code != http.StatusForbidden {
+			t.Errorf("%s: status %d, want 403", tc.name, code)
+		}
+	}
+	if repo.listCalls != 1 || repo.gotID != 7 || repo.deleteCalls != 1 {
+		t.Errorf("refused external request reached repository: %+v", repo)
+	}
+	if launch.calls != 0 {
+		t.Errorf("external auth reached the unrelated launch endpoint: %+v", launch)
+	}
+}
+
+func TestExternalBookmarksUIUsesTailnetRouteWithoutMiniAppCredentials(t *testing.T) {
+	js, html := string(appJS), string(appHTML)
+	for _, want := range []string{
+		`var externalBookmarksMode = params.get("from") === "external-bookmarks";`,
+		`if (externalBookmarksMode) { document.body.classList.add("external-bookmarks"); }`,
+		`var initData = externalBookmarksMode ? "" : (tg ? tg.initData : "");`,
+		`var key = externalBookmarksMode ? "" : (params.get("k") || "");`,
+		`} else if (!externalBookmarksMode) {`,
+		`var keyMode = !externalBookmarksMode && !initData && !!key;`,
+		`{ "X-Rex-External-Bookmarks": "1" }`,
+		`new URL("/external/bookmarks", window.location.href).href`,
+		`openBrowser.hidden = !canOpenExternalBookmarks || externalBookmarksMode;`,
+		`button("Open in browser", "btn wide")`,
+		`canOpenExternalBookmarks = p.can_open_external_bookmarks === true;`,
+	} {
+		if !strings.Contains(js, want) {
+			t.Errorf("app.js lacks external Bookmarks behavior %q", want)
+		}
+	}
+	for _, want := range []string{
+		`body.external-bookmarks .bookmark-detail a,`,
+		`body.external-bookmarks .bookmark-detail .btn.danger { color: #b42318; }`,
+		`:root[data-theme="dark"] body.external-bookmarks .bookmark-detail .btn.danger { color: #ff6b63; }`,
+	} {
+		if !strings.Contains(html, want) {
+			t.Errorf("app.html lacks accessible external Bookmarks styling %q", want)
+		}
+	}
+}

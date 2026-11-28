@@ -430,10 +430,10 @@ Requires `[miniapp] url` and HTTPS via Tailscale Serve. Keep the listener on loo
 | File browser | Read-only folder tree; redacted text/Markdown and supported image/video previews. HTML/video/PDF browser links require the owner's Tailscale identity; PDFs open externally as `application/pdf` with byte-range support. Path containment, ignored-file filtering, and credential-name filtering apply. |
 | Changes | Uncommitted, branch, and last-turn views; file tree, diffs, wrapping, next/previous files, and supported image previews. |
 | Whole answer | Large answer page with formatted text, tables, and code. Older pages without a session binding may be copy-only. |
-| Bookmarks | Global saved-message list, source-topic filter, and full-detail view. Durable snapshots remain after source-topic or outbox cleanup. |
+| Bookmarks | Global saved-message list, source-topic filter, and full-detail view. **Open in browser** serves the same page through the verified owner Tailscale login. Durable snapshots remain after source-topic or outbox cleanup. |
 | Annotate | Select text or paragraphs, add notes, and send them to the page's bound agent session; copy or prefill chat as alternatives. Keyboard launches need the verified owner Tailscale login; signed launches need fresh Telegram init data. |
 | Appearance | Per-device text scale and light/dark choice. |
-| Authorization | Telegram-signed owner data or a keyboard key with the configured tailnet login checks. Keyed actions are page-bound and deduplicated; the key cannot unpause typing. |
+| Authorization | Telegram-signed owner data or a keyboard key with the configured tailnet login checks; external Bookmarks use only the verified owner Tailscale login. Keyed actions are page-bound and deduplicated; the key cannot unpause typing. |
 
 #### Operations and recovery
 
@@ -566,7 +566,7 @@ An unlinked Threaded Mode topic acts as the main chat. These commands also work 
 | Surface | Actions |
 | --- | --- |
 | Reply keyboard | 🎛 Panel, 🖥 Screen, 📁 Project, ✍️ Annotate, 🔖 Bookmarks, and 🧩 Templates. Bookmarks is global; Project groups Files, Changes, and session-bound Config. Buttons never route as agent prompt text. |
-| Bookmark interaction | Reply `/bookmark` or `/b` to any message, or tap 🔖 Bookmark under an agent answer. The Mini App lists cross-topic snapshots, filters by source topic, and shows full saved text. Telegram reactions are not a usable trigger in the private owner chat because the Bot API sends reaction updates only to bot administrators. |
+| Bookmark interaction | Reply `/bookmark` or `/b` to any message, or tap 🔖 Bookmark under an agent answer. The Mini App lists cross-topic snapshots, filters by source topic, and shows full saved text. When the owner Tailscale login is verified, **Open in browser** opens the same Bookmarks page outside Telegram. Telegram reactions are not a usable trigger in the private owner chat because the Bot API sends reaction updates only to bot administrators. |
 | Waiting notice | Send now / Send all now, Cancel / Cancel all. Sending stops at the first non-steerable command or note and never bypasses prompt checks. |
 | Permission / question | Options from the supported prompt, Escape, and where supported tick/next/text-answer flows. Read the full prompt. |
 | Startup question | Checked cursor movement and Enter; buttons are bound to the question's process. |
