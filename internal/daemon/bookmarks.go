@@ -4,8 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
+	"sort"
 	"strings"
 	"time"
+	"unicode/utf16"
 
 	"rex-tg/internal/format"
 	"rex-tg/internal/inbound"
@@ -362,12 +365,158 @@ func bookmarkMessageContent(m *telegram.Message) (text, textFormat, kind, label 
 	case m.ForumTopicCreated != nil:
 		kind, label = "topic", "Topic created"
 	}
-	text = strings.TrimSpace(m.Text)
-	if text == "" {
-		text = strings.TrimSpace(m.Caption)
+	rawText := m.Text
+	entities := m.Entities
+	if strings.TrimSpace(rawText) == "" {
+		rawText = m.Caption
+		entities = m.CaptionEntities
 	}
-	if text == "" {
-		text = label
+	if strings.TrimSpace(rawText) == "" {
+		return label, store.BookmarkTextPlain, kind, label
 	}
-	return text, store.BookmarkTextPlain, kind, label
+	if linked, ok := bookmarkTextLinks(rawText, entities); ok {
+		return strings.TrimSpace(linked), store.BookmarkTextMarkdown, kind, label
+	}
+	return strings.TrimSpace(rawText), store.BookmarkTextPlain, kind, label
+}
+
+type bookmarkTextLink struct {
+	start, end int
+	url        string
+	autolink   bool
+}
+
+// bookmarkTextLinks preserves Telegram link entities as the same safe Markdown
+// links used by Whole answer. Other text is escaped so literal punctuation
+// cannot become Markdown when the snapshot switches from plain text.
+func bookmarkTextLinks(text string, entities []telegram.MessageEntity) (string, bool) {
+	links := make([]bookmarkTextLink, 0, len(entities))
+	for _, entity := range entities {
+		if entity.Type != "text_link" && entity.Type != "url" && entity.Type != "email" {
+			continue
+		}
+		start, end, ok := bookmarkUTF16Range(text, entity.Offset, entity.Length)
+		if !ok {
+			continue
+		}
+		rawURL := entity.URL
+		autolink := entity.Type == "url"
+		switch entity.Type {
+		case "url":
+			rawURL = text[start:end]
+		case "email":
+			rawURL = "mailto:" + text[start:end]
+		}
+		linkURL, ok := bookmarkLinkURL(rawURL)
+		if !ok {
+			continue
+		}
+		links = append(links, bookmarkTextLink{start: start, end: end, url: linkURL, autolink: autolink})
+	}
+	if len(links) == 0 {
+		return text, false
+	}
+	sort.SliceStable(links, func(i, j int) bool {
+		if links[i].start == links[j].start {
+			return links[i].end > links[j].end
+		}
+		return links[i].start < links[j].start
+	})
+
+	var b strings.Builder
+	last, added := 0, false
+	for _, link := range links {
+		if link.start < last {
+			continue
+		}
+		b.WriteString(escapeBookmarkMarkdownText(text[last:link.start]))
+		if link.autolink {
+			b.WriteByte('<')
+			b.WriteString(link.url)
+			b.WriteByte('>')
+		} else {
+			b.WriteByte('[')
+			b.WriteString(escapeBookmarkMarkdownText(text[link.start:link.end]))
+			b.WriteString("](<")
+			b.WriteString(link.url)
+			b.WriteString(">)")
+		}
+		last, added = link.end, true
+	}
+	if !added {
+		return text, false
+	}
+	b.WriteString(escapeBookmarkMarkdownText(text[last:]))
+	return b.String(), true
+}
+
+// bookmarkUTF16Range maps Telegram's UTF-16 entity span to UTF-8 byte offsets.
+// It refuses ranges that split a surrogate pair or fall outside the text.
+func bookmarkUTF16Range(text string, offset, length int) (int, int, bool) {
+	total := 0
+	for _, r := range text {
+		total += utf16.RuneLen(r)
+	}
+	if offset < 0 || length <= 0 || offset > total || length > total-offset {
+		return 0, 0, false
+	}
+	start, ok := bookmarkUTF16ByteOffset(text, offset)
+	if !ok {
+		return 0, 0, false
+	}
+	end, ok := bookmarkUTF16ByteOffset(text, offset+length)
+	if !ok || start >= end {
+		return 0, 0, false
+	}
+	return start, end, true
+}
+
+func bookmarkUTF16ByteOffset(text string, offset int) (int, bool) {
+	units := 0
+	for byteOffset, r := range text {
+		if units == offset {
+			return byteOffset, true
+		}
+		runeUnits := utf16.RuneLen(r)
+		if offset < units+runeUnits {
+			return 0, false
+		}
+		units += runeUnits
+	}
+	return len(text), units == offset
+}
+
+// bookmarkLinkURL matches the schemes allowed by the shared Markdown renderer.
+func bookmarkLinkURL(raw string) (string, bool) {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return "", false
+	}
+	switch strings.ToLower(u.Scheme) {
+	case "http", "https":
+		if u.Host == "" {
+			return "", false
+		}
+	case "mailto":
+		if u.Opaque == "" && u.Path == "" {
+			return "", false
+		}
+	default:
+		return "", false
+	}
+	return u.String(), true
+}
+
+// escapeBookmarkMarkdownText keeps non-link text literal inside a Markdown snapshot.
+func escapeBookmarkMarkdownText(text string) string {
+	const punctuation = "!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~"
+	var b strings.Builder
+	b.Grow(len(text))
+	for _, r := range text {
+		if strings.ContainsRune(punctuation, r) {
+			b.WriteByte('\\')
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
 }

@@ -6,9 +6,127 @@ import (
 	"testing"
 	"time"
 
+	"rex-tg/internal/format"
 	"rex-tg/internal/miniapp"
 	"rex-tg/internal/store"
+	"rex-tg/internal/telegram"
 )
+
+func TestBookmarkMessageContentPreservesTextLinkEntities(t *testing.T) {
+	const label = "Read the guide"
+	const url = "https://example.test/guide"
+	prefix := "See 🧭 "
+	entity := telegram.MessageEntity{
+		Type: "text_link", Offset: format.UTF16Len(prefix), Length: format.UTF16Len(label), URL: url,
+	}
+	for _, tc := range []struct {
+		name       string
+		message    telegram.Message
+		wantText   string
+		wantFormat string
+	}{
+		{
+			name: "text",
+			message: telegram.Message{
+				Text: prefix + label, Entities: []telegram.MessageEntity{entity},
+			},
+			wantText:   prefix + "[" + label + "](<" + url + ">)",
+			wantFormat: store.BookmarkTextMarkdown,
+		},
+		{
+			name: "caption",
+			message: telegram.Message{
+				Caption: prefix + label, CaptionEntities: []telegram.MessageEntity{entity},
+			},
+			wantText:   prefix + "[" + label + "](<" + url + ">)",
+			wantFormat: store.BookmarkTextMarkdown,
+		},
+		{
+			name: "text link and bare URL stay clickable",
+			message: telegram.Message{
+				Text: prefix + label + " and https://example.test/plain.",
+				Entities: []telegram.MessageEntity{
+					entity,
+					{Type: "url", Offset: format.UTF16Len(prefix + label + " and "), Length: format.UTF16Len("https://example.test/plain")},
+				},
+			},
+			wantText:   prefix + "[" + label + "](<" + url + ">) and <https://example.test/plain>\\.",
+			wantFormat: store.BookmarkTextMarkdown,
+		},
+		{
+			name: "email entity stays clickable",
+			message: telegram.Message{
+				Text: "Contact person@example.test",
+				Entities: []telegram.MessageEntity{{
+					Type: "email", Offset: format.UTF16Len("Contact "), Length: format.UTF16Len("person@example.test"),
+				}},
+			},
+			wantText:   "Contact [person\\@example\\.test](<mailto:person@example.test>)",
+			wantFormat: store.BookmarkTextMarkdown,
+		},
+		{
+			name: "escaped punctuation in link label",
+			message: telegram.Message{
+				Text: prefix + "Read [the] *guide*",
+				Entities: []telegram.MessageEntity{{
+					Type: "text_link", Offset: format.UTF16Len(prefix), Length: format.UTF16Len("Read [the] *guide*"), URL: url,
+				}},
+			},
+			wantText:   prefix + "[Read \\[the\\] \\*guide\\*](<" + url + ">)",
+			wantFormat: store.BookmarkTextMarkdown,
+		},
+		{
+			name: "malformed UTF-16 range stays plain",
+			message: telegram.Message{
+				Text:     prefix + label,
+				Entities: []telegram.MessageEntity{{Type: "text_link", Offset: format.UTF16Len("See ") + 1, Length: 3, URL: url}},
+			},
+			wantText:   prefix + label,
+			wantFormat: store.BookmarkTextPlain,
+		},
+		{
+			name: "unsafe URL stays plain",
+			message: telegram.Message{
+				Text: prefix + label,
+				Entities: []telegram.MessageEntity{{
+					Type: "text_link", Offset: format.UTF16Len(prefix), Length: format.UTF16Len(label), URL: "javascript:alert(1)",
+				}},
+			},
+			wantText:   prefix + label,
+			wantFormat: store.BookmarkTextPlain,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, textFormat, _, _ := bookmarkMessageContent(&tc.message)
+			if got != tc.wantText || textFormat != tc.wantFormat {
+				t.Fatalf("bookmark content = %q (%q), want %q (%q)", got, textFormat, tc.wantText, tc.wantFormat)
+			}
+		})
+	}
+}
+
+func TestMiniAppBookmarkListPreviewIncludesTextLinkURL(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	ctx := context.Background()
+	bookmark := store.Bookmark{
+		ChatID: 100, MessageID: 701, SourceTopicName: "Main chat", MessageDate: time.Unix(100, 0),
+		SavedAt: time.Unix(200, 0), Title: "Read the guide",
+		FullText: "[Read the guide](<https://example.test/guide>)", TextFormat: store.BookmarkTextMarkdown,
+		ContentKind: "text", ContentLabel: "Message",
+	}
+	in := store.Inbound{UpdateID: 1, ChatID: 100, FromID: 1, Kind: "command", CreatedAt: bookmark.SavedAt}
+	if _, _, err := st.InsertBookmarkWithInbound(ctx, in, bookmark); err != nil {
+		t.Fatal(err)
+	}
+	items, _, _, err := (miniAppBookmarks{st: st, chatID: func() int64 { return 100 }}).List(ctx, -1, 0, 10)
+	if err != nil || len(items) != 1 || items[0].Preview != "Read the guide (https://example.test/guide)" {
+		t.Fatalf("bookmark list preview = %+v, err=%v", items, err)
+	}
+}
 
 func TestMiniAppBookmarksDeleteUsesOwnerChatScope(t *testing.T) {
 	st, err := store.Open(filepath.Join(t.TempDir(), "db"))

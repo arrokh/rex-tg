@@ -19,6 +19,7 @@ type Message struct {
 	Text            string          `json:"text,omitempty"`
 	Caption         string          `json:"caption,omitempty"`
 	Entities        []MessageEntity `json:"entities,omitempty"`
+	CaptionEntities []MessageEntity `json:"caption_entities,omitempty"`
 	Photo           []PhotoSize     `json:"photo,omitempty"`
 	Document        *Document       `json:"document,omitempty"`
 	Voice           *Voice          `json:"voice,omitempty"`

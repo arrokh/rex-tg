@@ -6,7 +6,9 @@ import (
 	"testing"
 	"time"
 
+	"rex-tg/internal/format"
 	"rex-tg/internal/store"
+	"rex-tg/internal/telegram"
 )
 
 func TestBookmarkShortcutSavesReplyAndDeduplicates(t *testing.T) {
@@ -36,6 +38,38 @@ func TestBookmarkShortcutSavesReplyAndDeduplicates(t *testing.T) {
 	rows, err = st.ListBookmarks(context.Background(), chatID, nil, 0, 10)
 	if err != nil || len(rows) != 1 {
 		t.Fatalf("duplicate save created a second bookmark: rows=%+v err=%v", rows, err)
+	}
+}
+
+func TestBookmarkShortcutPreservesTelegramTextLink(t *testing.T) {
+	e, _, thread := piTopicCfg(t, "pi-bookmark-link", func(*env) {})
+	const label = "Read the guide"
+	const url = "https://example.test/guide"
+	e.tg.PushUpdate(telegram.Update{Message: &telegram.Message{
+		MessageID: 9701, MessageThreadID: thread, IsTopicMessage: true,
+		From: &telegram.User{ID: ownerID}, Chat: telegram.Chat{ID: chatID, Type: "private"},
+		Text: "/bookmark",
+		ReplyToMessage: &telegram.Message{
+			MessageID: 9700, MessageThreadID: thread, IsTopicMessage: true,
+			Chat: telegram.Chat{ID: chatID, Type: "private"}, Text: label,
+			Entities: []telegram.MessageEntity{{Type: "text_link", Offset: 0, Length: len(label), URL: url}},
+		},
+	}})
+	e.waitText(thread, "Saved to Bookmarks")
+
+	rows, err := e.peek().ListBookmarks(context.Background(), chatID, nil, 0, 10)
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("bookmarks = %+v, err=%v", rows, err)
+	}
+	if rows[0].FullText != "["+label+"](<"+url+">)" || rows[0].TextFormat != store.BookmarkTextMarkdown {
+		t.Fatalf("bookmark lost Telegram text link: text=%q format=%q", rows[0].FullText, rows[0].TextFormat)
+	}
+	gotHTML, wantHTML := format.RenderHTML(rows[0].FullText), format.RenderHTML("["+label+"]("+url+")")
+	if gotHTML != wantHTML {
+		t.Fatalf("bookmark link render = %q, want Whole answer render %q", gotHTML, wantHTML)
+	}
+	if gotPreview, wantPreview := format.Plain(rows[0].FullText), label+" ("+url+")"; gotPreview != wantPreview {
+		t.Fatalf("bookmark preview = %q, want Whole answer preview %q", gotPreview, wantPreview)
 	}
 }
 

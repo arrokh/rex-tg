@@ -228,7 +228,7 @@ func TestBookmarksValidateFilterAndCursor(t *testing.T) {
 }
 
 func TestBookmarkDetailsRenderLinksLikeWholeAnswers(t *testing.T) {
-	text := "Read [the guide](https://docs.example.test/guide) and [unsafe](javascript:alert(1))."
+	text := "Read [the guide](<https://docs.example.test/guide>) and [unsafe](javascript:alert(1))."
 	plainURL := "Read https://docs.example.test/plain."
 	repo := &fakeBookmarks{found: true, detail: BookmarkDetail{ID: 7, Text: text}}
 	pages := map[string]Page{
