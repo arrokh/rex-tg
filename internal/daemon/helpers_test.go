@@ -31,6 +31,17 @@ const (
 	piPID          = 4242
 )
 
+func linkTestExecutable(t testing.TB, path string) {
+	t.Helper()
+	target, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, path); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // env is one daemon under test: a fake Telegram, a fake Rex, a temporary
 // home folder, and the state folder.
 type env struct {
