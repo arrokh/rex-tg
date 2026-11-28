@@ -6,8 +6,8 @@
 // checks who asks and renders them.
 //
 // Mini App API requests carry either Telegram-signed init data or the current
-// keyboard key. External HTML and video previews instead check the owner's
-// Tailscale login and never accept the Mini App key in their URLs. Keyboard-key
+// keyboard key. External HTML, video, and PDF previews instead check the
+// owner's Tailscale login and never accept the Mini App key in their URLs. Keyboard-key
 // Annotate
 // sends additionally require the owner's verified Tailscale login. The page
 // shell itself holds no data.
@@ -171,8 +171,8 @@ func (s *Server) WithTailnetOnly(on bool) *Server {
 
 // Logins decides which Tailscale logins may open pages with the buttons'
 // key, so that in a shared tailnet another person's device cannot use a key
-// that leaked (the daemon keeps them). It also authorizes external HTML
-// previews without putting the key in the URL. Used with WithTailnetOnly.
+// that leaked (the daemon keeps them). It also authorizes external HTML,
+// video, and PDF previews without putting the key in the URL. Used with WithTailnetOnly.
 type Logins interface {
 	// Owner notes a login whose request carried the owner's own Telegram
 	// signature: that login is the owner's.
@@ -187,7 +187,7 @@ type Logins interface {
 }
 
 // WithLogins checks owner Tailscale identities for button-key requests and
-// external HTML previews.
+// external HTML, video, and PDF previews.
 func (s *Server) WithLogins(l Logins) *Server {
 	s.logins = l
 	return s
@@ -277,9 +277,9 @@ var (
 
 // Handler serves /app (the page shell), /app.js, the terminal library,
 // /api/page?id=…, /api/screen?id=…, /api/files?id=…&path=…,
-// /external/file?id=…&path=… (owner-authenticated HTML or video),
+// /external/file?id=…&path=… (owner-authenticated HTML, video, or PDF),
 // /api/changes?id=…&base=…[&path=…][&new=1], /api/bookmarks?id=…&topic=…&before=…,
-// /api/bookmark?id=…&bookmark=…, and the control panel's /api/control?id=…,
+// GET and POST /api/bookmark?id=…&bookmark=…, and the control panel's /api/control?id=…,
 // /api/control/folders?id=…&path=…[&hidden=1], POST /api/control/do?id=…,
 // /api/templates?id=…, and /api/templates/send?id=…
 func (s *Server) Handler() http.Handler {
@@ -319,6 +319,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/annotate/send", s.annotateSend)
 	mux.HandleFunc("GET /api/bookmarks", s.bookmarksList)
 	mux.HandleFunc("GET /api/bookmark", s.bookmarkDetail)
+	mux.HandleFunc("POST /api/bookmark", s.bookmarkDelete)
 	mux.HandleFunc("GET /api/templates", s.templateList)
 	mux.HandleFunc("POST /api/templates", s.templateAction)
 	mux.HandleFunc("POST /api/templates/send", s.templateSend)
@@ -468,6 +469,7 @@ func (s *Server) page(w http.ResponseWriter, r *http.Request) {
 	}
 	out["can_open_external_html"] = s.externalFileAvailable(p)
 	out["can_open_external_video"] = s.externalFileAvailable(p)
+	out["can_open_external_pdf"] = s.externalFileAvailable(p)
 
 	if s.annot != nil && s.control != nil && (p.Kind == KindAnnotate || p.Kind == KindAnswer) && p.Thread > 0 && p.Conv > 0 {
 		out["can_send_notes"] = s.canSendBoundMessage(r)
@@ -576,11 +578,10 @@ func (s *Server) externalFileAvailable(p Page) bool {
 	return p.Kind == KindFiles || p.Kind == KindProject || p.Kind == KindAnswer || p.Kind == KindAnnotate
 }
 
-// externalFile opens one HTML or video file for an authenticated owner
+// externalFile opens one HTML, video, or PDF file for an authenticated owner
 // device. It deliberately does not accept the Mini App key or Telegram init
 // data in the URL; Tailscale Serve supplies the login identity.
 func (s *Server) externalFile(w http.ResponseWriter, r *http.Request) {
-	externalHTMLHeaders(w)
 	login := tailnetLogin(r)
 	if !s.tailnet || !fromTailnet(r) || s.logins == nil || !s.logins.OwnerLoginOK(login) {
 		s.noteRefusal("external file preview from an unverified Tailscale login")
@@ -599,7 +600,12 @@ func (s *Server) externalFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if ext == ".html" || ext == ".htm" {
+		externalHTMLHeaders(w)
 		s.externalHTMLFile(w, r, p, rel)
+		return
+	}
+	if ext == ".pdf" {
+		s.externalPDFFile(w, r, p, rel)
 		return
 	}
 	if _, ok := videoTypes[ext]; !ok {
@@ -621,6 +627,25 @@ func (s *Server) externalFile(w http.ResponseWriter, r *http.Request) {
 	h.Set("Referrer-Policy", "no-referrer")
 	h.Set("X-Frame-Options", "DENY")
 	h.Set("Content-Security-Policy", "default-src 'none'; media-src 'self'; frame-ancestors 'none'; sandbox")
+	http.ServeContent(w, r, filepath.Base(rel), info.ModTime(), f)
+}
+
+func (s *Server) externalPDFFile(w http.ResponseWriter, r *http.Request, p Page, rel string) {
+	f, info, err := openExternalPDF(r.Context(), p.Dir, rel, offeredFileForPage(p, rel))
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	defer f.Close()
+	h := w.Header()
+	h.Set("Content-Type", "application/pdf")
+	h.Set("Content-Disposition", mime.FormatMediaType("inline", map[string]string{"filename": filepath.Base(rel)}))
+	h.Set("Accept-Ranges", "bytes")
+	h.Set("Cache-Control", "no-store")
+	h.Set("X-Content-Type-Options", "nosniff")
+	h.Set("Referrer-Policy", "no-referrer")
+	h.Set("X-Frame-Options", "DENY")
+	h.Set("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'; sandbox")
 	http.ServeContent(w, r, filepath.Base(rel), info.ModTime(), f)
 }
 

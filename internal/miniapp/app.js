@@ -85,7 +85,7 @@
   setTheme(load("rex-tg.theme"));
   var params = new URLSearchParams(location.search);
   var id = params.get("p") || "";
-  var canOpenExternalHTML = false, canOpenExternalVideo = false;
+  var canOpenExternalHTML = false, canOpenExternalVideo = false, canOpenExternalPDF = false;
   var goView = params.get("go") || "";
   var initData = tg ? tg.initData : "";
   // The keyboard's buttons open this page with a key (k): it authorizes reads
@@ -552,8 +552,34 @@
       openFile(a.getAttribute("data-file-path"));
     });
   }
+  function safeWebURL(raw) {
+    if (typeof raw !== "string" || !/^https?:\/\//i.test(raw.trim())) { return ""; }
+    var u;
+    try { u = new URL(raw.trim()); } catch (e) { return ""; }
+    if ((u.protocol !== "http:" && u.protocol !== "https:") || !u.hostname || u.username || u.password) { return ""; }
+    return u.href;
+  }
+  function wireSafeWebLinks(root) {
+    if (!root || root._safeWebLinksWired) { return; }
+    root._safeWebLinksWired = true;
+    root.addEventListener("click", function (ev) {
+      var a = ev.target.closest && ev.target.closest("a[href]");
+      if (!a || !root.contains(a)) { return; }
+      var href = a.getAttribute("href") || "";
+      if (!/^https?:\/\//i.test(href.trim())) { return; }
+      var url = safeWebURL(href);
+      ev.preventDefault();
+      ev.stopPropagation();
+      if (!url) { return; }
+      if (tg && typeof tg.openLink === "function") {
+        try { tg.openLink(url); return; } catch (e) { /* use the browser fallback */ }
+      }
+      window.open(url, "_blank", "noopener,noreferrer");
+    });
+  }
   function isHTMLFile(path) { return /\.html?$/i.test(path); }
   function isVideoFile(path) { return /\.(?:mp4|m4v|mov|webm|ogv|mpeg|mpg|3gp)$/i.test(path); }
+  function isPDFFile(path) { return /\.pdf$/i.test(path); }
   function externalFileURL(path) {
     return new URL("/external/file?id=" + encodeURIComponent(id) + "&path=" + encodeURIComponent(path), window.location.href).href;
   }
@@ -563,10 +589,11 @@
     else { window.open(url, "_blank", "noopener,noreferrer"); }
   }
   function addExternalFileButton(box, path) {
-    if (!(canOpenExternalHTML && isHTMLFile(path)) && !(canOpenExternalVideo && isVideoFile(path))) { return; }
+    if (!(canOpenExternalHTML && isHTMLFile(path)) && !(canOpenExternalVideo && isVideoFile(path)) && !(canOpenExternalPDF && isPDFFile(path))) { return null; }
     var open = button("Open in browser", "btn small");
     open.addEventListener("click", function () { openExternalFile(path); });
     box.appendChild(open);
+    return open;
   }
   function addVideoPreview(box, path) {
     if (!canOpenExternalVideo || !isVideoFile(path)) { return; }
@@ -590,10 +617,14 @@
       back.disabled = true;
       back.addEventListener("click", function () { if (history.length) { showFile(history.pop(), false); } });
       dismiss.addEventListener("click", close);
-      nav.appendChild(back); addExternalFileButton(nav, path); nav.appendChild(pathLabel); nav.appendChild(dismiss);
+      nav.appendChild(back); nav.appendChild(pathLabel); nav.appendChild(dismiss);
       box.appendChild(nav); box.appendChild(body);
+      var externalButton = null;
       function showFile(next, push) {
         if (push && current) { history.push(current); }
+        if (externalButton && externalButton.parentNode) { externalButton.parentNode.removeChild(externalButton); }
+        externalButton = addExternalFileButton(nav, next);
+        if (externalButton) { nav.insertBefore(externalButton, pathLabel); }
         current = next; pathLabel.textContent = next; back.disabled = history.length === 0;
         body.textContent = "";
         body.appendChild(el("p", "note", "Loading…"));
@@ -1027,14 +1058,29 @@
       var date = new Date(at);
       return isNaN(date.getTime()) ? "" : date.toLocaleString();
     }
+    function focusFilter() {
+      var y = window.scrollY;
+      if (filter.focus) {
+        try { filter.focus({ preventScroll: true }); } catch (e) { filter.focus(); }
+      }
+      window.scrollTo(0, y);
+    }
     function setTopics(topics) {
-      var keep = selectedTopic;
+      var keep = selectedTopic, keepLabel = "";
+      for (var i = 0; i < filter.options.length; i++) {
+        if (filter.options[i].value === keep) { keepLabel = filter.options[i].textContent; break; }
+      }
       filter.textContent = "";
       filter.appendChild(filterOption("All topics", ""));
       (topics || []).forEach(function (topic) {
         filter.appendChild(filterOption(topic.name, String(topic.id)));
       });
-      if (Array.prototype.some.call(filter.options, function (o) { return o.value === keep; })) {
+      var hasKeep = Array.prototype.some.call(filter.options, function (o) { return o.value === keep; });
+      if (!hasKeep && keep !== "" && keepLabel) {
+        filter.appendChild(filterOption(keepLabel, keep));
+        hasKeep = true;
+      }
+      if (hasKeep) {
         filter.value = keep;
       } else {
         selectedTopic = "";
@@ -1054,13 +1100,14 @@
         rows.appendChild(row);
       });
     }
-    function fetchList(reset) {
+    function fetchList(reset, loadingMessage, successMessage) {
       var mine = ++requestID;
       retryReset = reset;
       var before = reset || !items.length ? 0 : Number(items[items.length - 1].id);
       if (reset) { items = []; drawItems(); }
       status.hidden = false;
-      status.textContent = reset ? "Loading bookmarks…" : "Loading older bookmarks…";
+      status.setAttribute("role", "status");
+      status.textContent = loadingMessage || (reset ? "Loading bookmarks…" : "Loading older bookmarks…");
       empty.hidden = true;
       retry.hidden = true;
       moreButton.hidden = true;
@@ -1079,7 +1126,8 @@
         });
         more = result.more === true;
         drawItems();
-        status.hidden = true;
+        status.hidden = !successMessage;
+        if (successMessage) { status.textContent = successMessage; }
         empty.hidden = items.length !== 0;
         if (!items.length) { empty.textContent = selectedTopic === "" ? "No saved messages." : "No saved messages in this topic."; }
         moreButton.hidden = !more || !items.length;
@@ -1115,7 +1163,8 @@
             if (v.item.hidden || !v.item.contains(body)) { return; }
             body.textContent = "";
             var title = detail.title || "Saved message";
-            var meta = [detail.topic || "Main chat", bookmarkDate(detail.at)].filter(Boolean).join(" · ");
+            var source = detail.topic || "Main chat";
+            var meta = [source, bookmarkDate(detail.at)].filter(Boolean).join(" · ");
             if (meta) { body.appendChild(el("p", "bookmark-meta", meta)); }
             var content = el("div", "content bookmark-answer");
             content.innerHTML = detail.html || ""; // rendered safely on the server
@@ -1126,11 +1175,57 @@
               body.insertBefore(el("h2", "bookmark-detail-title", title), body.firstChild);
             }
             scrollTables(content);
+            wireSafeWebLinks(content);
             body.appendChild(content);
+            var actionStatus = el("p", "note bookmark-status", "");
+            actionStatus.setAttribute("role", "status");
+            actionStatus.setAttribute("aria-live", "polite");
+            actionStatus.hidden = true;
+            body.appendChild(actionStatus);
+            var remove = button("Delete bookmark", "btn danger wide", "Delete bookmark: " + title);
+            remove.addEventListener("click", function () {
+              confirmAsk({
+                title: "Delete this bookmark?",
+                message: "Remove “" + title + "” from " + source + "? Only the saved copy will be removed; the original Telegram message will not be deleted.",
+                ok: "Delete bookmark", danger: true,
+              }, deleteBookmark);
+            });
+            body.appendChild(remove);
             v.item.setAttribute("aria-busy", "false");
+
+            function deleteBookmark() {
+              if (v.item.hidden || !v.item.contains(body)) { return; }
+              remove.disabled = true;
+              remove.textContent = "Removing…";
+              actionStatus.hidden = false;
+              actionStatus.setAttribute("role", "status");
+              actionStatus.textContent = "Removing bookmark…";
+              v.item.setAttribute("aria-busy", "true");
+              api("api/bookmark?id=" + encodeURIComponent(id) + "&bookmark=" + encodeURIComponent(String(bookmarkID)), { op: "delete" })
+                .then(function () {
+                  if (v.item.hidden || !v.item.contains(body)) { fetchList(true); return; }
+                  v.showList();
+                  focusFilter();
+                  fetchList(true, "Bookmark deleted. Refreshing the list…", "Bookmark deleted.");
+                })
+                .catch(function (e) {
+                  if (v.item.hidden || !v.item.contains(body)) { return; }
+                  remove.disabled = false;
+                  remove.textContent = "Delete bookmark";
+                  actionStatus.setAttribute("role", "alert");
+                  actionStatus.textContent = e.message || "Could not delete bookmark. Try again.";
+                  v.item.setAttribute("aria-busy", "false");
+                });
+            }
           })
           .catch(function (e) {
             if (v.item.hidden || !v.item.contains(body)) { return; }
+            if (e.status === 404 && e.message === "This bookmark is no longer available.") {
+              v.showList();
+              focusFilter();
+              fetchList(true, "This bookmark was removed elsewhere. Refreshing the list…", "This bookmark was removed elsewhere.");
+              return;
+            }
             body.textContent = "";
             var error = el("p", "note", e.message || "This saved message could not be loaded.");
             error.setAttribute("role", "alert");
@@ -3820,6 +3915,7 @@
       setTitle(p.title);
       canOpenExternalHTML = p.can_open_external_html === true;
       canOpenExternalVideo = p.can_open_external_video === true;
+      canOpenExternalPDF = p.can_open_external_pdf === true;
       var from = params.get("from");
       if (p.kind !== "control" && from === "panel") {
         rootBack = backToPanel;

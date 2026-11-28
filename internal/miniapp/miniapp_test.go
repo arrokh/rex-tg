@@ -312,6 +312,158 @@ func TestExternalVideoRequiresOwnerAndSupportsRangePreview(t *testing.T) {
 	}
 }
 
+func TestExternalPDFRequiresOwnerAndSupportsRange(t *testing.T) {
+	root, outside := newRepo(t)
+	pdf := []byte("%PDF-1.4\nsynthetic PDF content\n")
+	write(t, filepath.Join(root, "visible.pdf"), string(pdf))
+	write(t, filepath.Join(root, ".gitignore"), "node_modules/\nbuild.log\nignored/\n")
+	write(t, filepath.Join(root, "notes.txt"), "not a PDF")
+	write(t, filepath.Join(root, ".env.pdf"), "hidden PDF")
+	write(t, filepath.Join(root, "ignored", "offered.pdf"), "%PDF offered")
+	write(t, filepath.Join(root, "ignored", "other.pdf"), "%PDF not offered")
+	write(t, filepath.Join(outside, "secret.pdf"), "%PDF outside")
+	if err := os.Symlink(filepath.Join(root, "visible.pdf"), filepath.Join(root, "link.pdf")); err != nil {
+		t.Fatal(err)
+	}
+	pages := map[string]Page{
+		"files":  {Kind: KindFiles, Title: "Files", Dir: root},
+		"offer":  {Kind: KindFiles, Title: "Offer", Dir: root, InitialFile: "ignored/offered.pdf"},
+		"answer": {Kind: KindAnswer, Title: "Answer", Dir: root},
+		"screen": {Kind: KindScreen, Title: "Screen", Dir: root},
+	}
+	s := New(fakeToken, func() int64 { return 42 }, func(id string) (Page, bool) { p, ok := pages[id]; return p, ok }, nil).
+		WithFiles(func() bool { return true }, nil).
+		WithTailnetOnly(true).
+		WithLogins(&fakeLogins{allow: map[string]bool{"me@example.com": true}})
+	server := httptest.NewServer(s.Handler())
+	defer server.Close()
+	c := caller{t, server.URL}
+	owner := map[string]string{"Tailscale-User-Login": "me@example.com"}
+	stranger := map[string]string{"Tailscale-User-Login": "other@example.com"}
+	signedOwner := map[string]string{
+		"Tailscale-User-Login": "me@example.com",
+		"X-Telegram-Init-Data": sign(t, fakeToken, fields(42, time.Now())),
+	}
+	if code, page := c.do("GET", "/api/page?id=files", signedOwner, ""); code != http.StatusOK || page["can_open_external_pdf"] != true {
+		t.Fatalf("external PDF capability: %d %v", code, page)
+	}
+
+	check := func(target string, headers map[string]string) (int, http.Header, []byte) {
+		t.Helper()
+		req, err := http.NewRequest(http.MethodGet, server.URL+target, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for name, value := range headers {
+			req.Header.Set(name, value)
+		}
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer res.Body.Close()
+		data, err := io.ReadAll(res.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return res.StatusCode, res.Header, data
+	}
+
+	code, headers, body := check("/external/file?id=files&path=visible.pdf", owner)
+	if code != http.StatusOK || string(body) != string(pdf) {
+		t.Fatalf("owner PDF: status=%d body=%q", code, body)
+	}
+	if headers.Get("Content-Type") != "application/pdf" || !strings.HasPrefix(headers.Get("Content-Disposition"), "inline") || !strings.Contains(headers.Get("Content-Disposition"), "visible.pdf") ||
+		headers.Get("Cache-Control") != "no-store" || headers.Get("X-Content-Type-Options") != "nosniff" ||
+		headers.Get("Referrer-Policy") != "no-referrer" || headers.Get("Accept-Ranges") != "bytes" {
+		t.Fatalf("PDF response headers: %v", headers)
+	}
+	csp := headers.Get("Content-Security-Policy")
+	if headers.Get("X-Frame-Options") != "DENY" || !strings.Contains(csp, "default-src 'none'") || !strings.Contains(csp, "frame-ancestors 'none'") || !strings.Contains(csp, "sandbox") {
+		t.Errorf("PDF response lacks restrictive browser headers: %v", headers)
+	}
+	code, headers, body = check("/external/file?id=files&path=visible.pdf", map[string]string{
+		"Tailscale-User-Login": "me@example.com", "Range": "bytes=2-6",
+	})
+	if code != http.StatusPartialContent || string(body) != string(pdf[2:7]) || headers.Get("Content-Range") != fmt.Sprintf("bytes 2-6/%d", len(pdf)) {
+		t.Fatalf("PDF range response: status=%d headers=%v body=%q", code, headers, body)
+	}
+	code, headers, _ = check("/external/file?id=files&path=visible.pdf", map[string]string{
+		"Tailscale-User-Login": "me@example.com", "Range": fmt.Sprintf("bytes=%d-", len(pdf)+1),
+	})
+	if code != http.StatusRequestedRangeNotSatisfiable || headers.Get("Content-Range") != fmt.Sprintf("bytes */%d", len(pdf)) {
+		t.Errorf("invalid PDF range: status=%d headers=%v", code, headers)
+	}
+	headReq, err := http.NewRequest(http.MethodHead, server.URL+"/external/file?id=files&path=visible.pdf", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, value := range owner {
+		headReq.Header.Set(name, value)
+	}
+	headRes, err := http.DefaultClient.Do(headReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	headBody, err := io.ReadAll(headRes.Body)
+	headRes.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if headRes.StatusCode != http.StatusOK || len(headBody) != 0 || headRes.Header.Get("Content-Type") != "application/pdf" || headRes.Header.Get("Content-Length") != fmt.Sprint(len(pdf)) {
+		t.Errorf("PDF HEAD response: status=%d headers=%v body=%q", headRes.StatusCode, headRes.Header, headBody)
+	}
+	if code, body := c.doText("GET", "/external/file?id=offer&path=ignored/offered.pdf", owner); code != http.StatusOK || body != "%PDF offered" {
+		t.Fatalf("page-bound ignored PDF offer: %d %q", code, body)
+	}
+	if code, body := c.doText("GET", "/external/file?id=answer&path=visible.pdf", owner); code != http.StatusOK || body != string(pdf) {
+		t.Fatalf("linked answer PDF: %d %q", code, body)
+	}
+
+	for _, tc := range []struct {
+		name    string
+		target  string
+		headers map[string]string
+	}{
+		{"missing Tailscale identity; URL key is not auth", "/external/file?id=files&path=visible.pdf&key=not-auth", nil},
+		{"other Tailscale login", "/external/file?id=files&path=visible.pdf", stranger},
+		{"wrong page kind", "/external/file?id=screen&path=visible.pdf", owner},
+		{"missing page", "/external/file?id=missing&path=visible.pdf", owner},
+		{"wrong file type", "/external/file?id=files&path=notes.txt", owner},
+		{"missing file", "/external/file?id=files&path=missing.pdf", owner},
+		{"hidden file", "/external/file?id=files&path=.env.pdf", owner},
+		{"ignored file", "/external/file?id=files&path=ignored/offered.pdf", owner},
+		{"different ignored file than offer", "/external/file?id=offer&path=ignored/other.pdf", owner},
+		{"symlink file", "/external/file?id=files&path=link.pdf", owner},
+		{"symlink directory", "/external/file?id=files&path=out/secret.pdf", owner},
+		{"outside path", "/external/file?id=files&path=../../outside/secret.pdf", owner},
+	} {
+		if code, _, _ := check(tc.target, tc.headers); code != http.StatusNotFound && code != http.StatusForbidden {
+			t.Errorf("%s: status %d, want refusal", tc.name, code)
+		}
+	}
+
+	disabled := New(fakeToken, func() int64 { return 42 }, func(id string) (Page, bool) { p, ok := pages[id]; return p, ok }, nil).
+		WithFiles(func() bool { return false }, nil).
+		WithTailnetOnly(true).
+		WithLogins(&fakeLogins{allow: map[string]bool{"me@example.com": true}})
+	disabledServer := httptest.NewServer(disabled.Handler())
+	defer disabledServer.Close()
+	disabledReq, err := http.NewRequest(http.MethodGet, disabledServer.URL+"/external/file?id=files&path=visible.pdf", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	disabledReq.Header.Set("Tailscale-User-Login", "me@example.com")
+	disabledRes, err := http.DefaultClient.Do(disabledReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	disabledRes.Body.Close()
+	if disabledRes.StatusCode != http.StatusNotFound {
+		t.Errorf("PDF opened while file browser was disabled: %d", disabledRes.StatusCode)
+	}
+}
+
 func TestAnswerAndAnnotatePagesCanOnlyOpenLinkedFiles(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "README.md"), []byte("# Project"), 0o644); err != nil {

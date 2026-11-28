@@ -36,7 +36,7 @@ This guide is the contract between the packages of rex-tg. [design.md](design.md
 | `internal/inbound` | Safety checks, waiting queue policy, echo matching | `agents` |
 | `internal/sender` | The only writer to Telegram: outbox, parts, rate limits, progress messages | `format`, `store`, `telegram` |
 | `internal/keychain` | The bot token in the macOS Keychain, through `security` | stdlib |
-| `internal/miniapp` | Mini App server: page signature check, the buttons' key (reads and validated panel actions), Tailscale-owner check for page-bound sends, page rendering, live screen, read-only file browser, changes view, control panel (`Control`, `ControlAction.Check`, `ListFolders`), keyboard pages (`Launcher`, `/api/launch`), Annotate, and shared Templates (`TemplateRepository`, `/api/templates`, `/api/templates/send`, shared ordering) | goldmark |
+| `internal/miniapp` | Mini App server: page signature check, the buttons' key (reads and validated panel actions), Tailscale-owner check for page-bound sends, page rendering, live screen, read-only file browser, changes view, control panel (`Control`, `ControlAction.Check`, `ListFolders`), keyboard pages (`Launcher`, `/api/launch`), Annotate, shared Templates (`TemplateRepository`, `/api/templates`, `/api/templates/send`, shared ordering), and owner-scoped Bookmarks (`/api/bookmarks`, `/api/bookmark`) | goldmark |
 | `internal/termimg` | The `/screen` picture (PNG), from terminal lines | `golang.org/x/image` |
 | `internal/daemon` | Wiring: core loop, sender, router, alerts, housekeeping | everything |
 | `cmd/rex-tg` | CLI: `daemon`, `hook`, `login`, `new`, `install`, `uninstall`, `status`, `doctor` | everything |

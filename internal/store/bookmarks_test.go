@@ -146,6 +146,57 @@ func TestBookmarkListPaginationAndTopics(t *testing.T) {
 	}
 }
 
+func TestDeleteBookmarkIsChatScopedAndSafeToRepeat(t *testing.T) {
+	s := newStore(t)
+	insert := func(updateID, chatID, messageID int64, title string) {
+		t.Helper()
+		in := Inbound{UpdateID: updateID, ChatID: chatID, FromID: 1, Kind: "command", Body: "/bookmark", CreatedAt: t0}
+		bookmark := Bookmark{ChatID: chatID, MessageID: messageID, SourceTopicName: "Main chat",
+			MessageDate: t0, SavedAt: t0, Title: title, FullText: title, ContentKind: "text", ContentLabel: "Text"}
+		if _, created, err := s.InsertBookmarkWithInbound(ctx, in, bookmark); err != nil || !created {
+			t.Fatalf("insert bookmark %q = created %v, err %v", title, created, err)
+		}
+	}
+	insert(1, 100, 501, "owner target")
+	insert(2, 100, 502, "owner keep")
+	insert(3, 200, 501, "other chat")
+
+	ownerRows := must(s.ListBookmarks(ctx, 100, nil, 0, 10))
+	otherRows := must(s.ListBookmarks(ctx, 200, nil, 0, 10))
+	var targetID int64
+	for _, row := range ownerRows {
+		if row.MessageID == 501 {
+			targetID = row.ID
+		}
+	}
+	if targetID == 0 || len(otherRows) != 1 {
+		t.Fatalf("setup bookmarks: owner=%+v other=%+v", ownerRows, otherRows)
+	}
+
+	// A caller with another chat's scope cannot remove this ID, and the
+	// unrelated row with the same Telegram message number remains untouched.
+	noErr(t, s.DeleteBookmark(ctx, 200, targetID))
+	if _, err := s.Bookmark(ctx, targetID); err != nil {
+		t.Fatalf("wrong chat deleted bookmark: %v", err)
+	}
+	if got := must(s.ListBookmarks(ctx, 200, nil, 0, 10)); len(got) != 1 || got[0].ID != otherRows[0].ID {
+		t.Fatalf("wrong-chat deletion changed other bookmarks: %+v", got)
+	}
+
+	noErr(t, s.DeleteBookmark(ctx, 100, targetID))
+	noErr(t, s.DeleteBookmark(ctx, 100, targetID))
+	if _, err := s.Bookmark(ctx, targetID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("deleted bookmark lookup = %v", err)
+	}
+	remaining := must(s.ListBookmarks(ctx, 100, nil, 0, 10))
+	if len(remaining) != 1 || remaining[0].MessageID != 502 {
+		t.Fatalf("deletion changed unrelated owner bookmarks: %+v", remaining)
+	}
+	if err := s.DeleteBookmark(ctx, 100, 0); err == nil {
+		t.Fatal("zero bookmark id accepted")
+	}
+}
+
 func TestOutboxRowBySentMessage(t *testing.T) {
 	s := newStore(t)
 	th, _ := topic(t, s, 55)

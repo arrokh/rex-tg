@@ -322,7 +322,7 @@ Directory enumeration keeps a bounded prefix and warns when incomplete. At most 
 | Daemon → pane | Current topic/session/pane/process, pause/readiness/prompt checks. Agent tools still have their own host permissions. |
 | Hook → registry | Runtime payload validation and pane/session reconciliation. Local hook/spool access is not isolation from a malicious process under the same Mac user. |
 | Phone → Mini App | Tailscale identity, signed owner data or current keyboard key, page kind and action validation. Loopback/proxy assumptions must hold. |
-| Mini App → files | Root containment, regular-file checks, ignored/credential-name filtering, redaction, bounded previews. The daemon can still read as the Mac user. |
+| Mini App → files | Root containment, regular-file checks, ignored/credential-name filtering, redaction, bounded previews; external HTML/video/PDF routes require the owner's Tailscale identity and carry no URL credentials. The daemon can still read as the Mac user. |
 | Project → Telegram | Best-effort redaction, not a guarantee. Do not connect projects whose data must never leave the Mac. |
 
 Token material stays in Keychain and is read into process memory, not a config file. Keyboard keys and user message text are stored locally. Preserve the distinction between authentication, process targeting, and at-most-once recovery; none replaces the others.
@@ -427,7 +427,7 @@ Requires `[miniapp] url` and HTTPS via Tailscale Serve. Keep the listener on loo
 | Control panel | Agents, Topics, and New agent tabs; search, state filters, grouping, open topics, rename, unlink, and clean up stopped topics. |
 | Folder explorer | Starts in your home folder; shows folders, optional hidden entries, pinned/recent folders, and repository badges. Forget one/all recent folders without deleting files. |
 | Live screen | Read-only terminal colors, refresh while visible, pause, fit width, and scroll-to-bottom controls. It sends no input. |
-| File browser | Read-only folder tree; redacted text/Markdown, supported image and video previews. HTML/video browser links require the owner's Tailscale identity. Path containment, ignored-file filtering, and credential-name filtering apply. |
+| File browser | Read-only folder tree; redacted text/Markdown and supported image/video previews. HTML/video/PDF browser links require the owner's Tailscale identity; PDFs open externally as `application/pdf` with byte-range support. Path containment, ignored-file filtering, and credential-name filtering apply. |
 | Changes | Uncommitted, branch, and last-turn views; file tree, diffs, wrapping, next/previous files, and supported image previews. |
 | Whole answer | Large answer page with formatted text, tables, and code. Older pages without a session binding may be copy-only. |
 | Bookmarks | Global saved-message list, source-topic filter, and full-detail view. Durable snapshots remain after source-topic or outbox cleanup. |

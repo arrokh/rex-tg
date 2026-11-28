@@ -5,6 +5,8 @@ import (
 	"html"
 	"io"
 	"net/http"
+	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -207,6 +209,17 @@ func (s *Server) annotateSend(w http.ResponseWriter, r *http.Request) {
 // RenderPlain renders plain text as HTML paragraphs: a blank line starts a
 // paragraph, and a line break stays one.
 func RenderPlain(text string) string {
+	return renderPlain(text, false)
+}
+
+// renderPlainLinks keeps plain text literal but makes absolute HTTP(S) URLs
+// clickable, as Goldmark does for answer pages. It is used for bookmark
+// snapshots, where the saved text is not Markdown.
+func renderPlainLinks(text string) string {
+	return renderPlain(text, true)
+}
+
+func renderPlain(text string, linkify bool) string {
 	var b strings.Builder
 	for _, para := range strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n\n") {
 		para = strings.Trim(para, "\n")
@@ -214,8 +227,71 @@ func RenderPlain(text string) string {
 			continue
 		}
 		b.WriteString("<p>")
-		b.WriteString(strings.ReplaceAll(html.EscapeString(para), "\n", "<br>"))
+		for i, line := range strings.Split(para, "\n") {
+			if i != 0 {
+				b.WriteString("<br>")
+			}
+			if linkify {
+				b.WriteString(renderPlainLineLinks(line))
+			} else {
+				b.WriteString(html.EscapeString(line))
+			}
+		}
 		b.WriteString("</p>\n")
 	}
 	return b.String()
+}
+
+var plainWebURL = regexp.MustCompile(`(?i)https?://[^\s<>"']+`)
+
+func renderPlainLineLinks(line string) string {
+	matches := plainWebURL.FindAllStringIndex(line, -1)
+	if len(matches) == 0 {
+		return html.EscapeString(line)
+	}
+	var b strings.Builder
+	at := 0
+	for _, match := range matches {
+		raw := line[match[0]:match[1]]
+		link := trimPlainURLPunctuation(raw)
+		if link == "" || !safePlainWebURL(link) {
+			continue
+		}
+		end := match[0] + len(link)
+		b.WriteString(html.EscapeString(line[at:match[0]]))
+		b.WriteString(`<a href="` + html.EscapeString(link) + `">` + html.EscapeString(link) + `</a>`)
+		at = end
+	}
+	b.WriteString(html.EscapeString(line[at:]))
+	return b.String()
+}
+
+func trimPlainURLPunctuation(raw string) string {
+	for len(raw) > 0 {
+		last := raw[len(raw)-1]
+		switch last {
+		case '.', ',', ';', ':', '!', '?':
+			raw = raw[:len(raw)-1]
+		case ')':
+			if strings.Count(raw, ")") > strings.Count(raw, "(") {
+				raw = raw[:len(raw)-1]
+			} else {
+				return raw
+			}
+		case ']':
+			if strings.Count(raw, "]") > strings.Count(raw, "[") {
+				raw = raw[:len(raw)-1]
+			} else {
+				return raw
+			}
+		default:
+			return raw
+		}
+	}
+	return raw
+}
+
+func safePlainWebURL(raw string) bool {
+	u, err := url.Parse(raw)
+	return err == nil && (strings.EqualFold(u.Scheme, "http") || strings.EqualFold(u.Scheme, "https")) && u.Hostname() != "" && u.User == nil
 }
