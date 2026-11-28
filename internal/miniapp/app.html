@@ -81,6 +81,12 @@
   .tools button.icon svg { width: 18px; height: 18px; }
   .tools button:active { opacity: 0.55; }
   a { color: var(--link); }
+  body.external-bookmarks .bookmark-detail a,
+  body.external-bookmarks .bookmark-detail .backlink { color: #175c94; }
+  body.external-bookmarks .bookmark-detail .btn.danger { color: #b42318; }
+  :root[data-theme="dark"] body.external-bookmarks .bookmark-detail a,
+  :root[data-theme="dark"] body.external-bookmarks .bookmark-detail .backlink { color: #62bcf9; }
+  :root[data-theme="dark"] body.external-bookmarks .bookmark-detail .btn.danger { color: #ff6b63; }
   code, pre { font-family: ui-monospace, Menlo, monospace; font-size: 0.8125rem; }
   code { background: var(--code); padding: 1px 4px; border-radius: 4px; }
   pre { background: var(--code); padding: 10px 12px; border-radius: 8px; overflow-x: auto; }

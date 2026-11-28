@@ -2,8 +2,8 @@
 // live screen of a topic's pane, the files of the agent's folder, the
 // changes of its repository, or the control panel (the agents in Rex panes:
 // open, rename, start, unlink; their screen, files and changes).
-// API requests carry Telegram's signed init data or the keyboard key; the
-// server checks it before returning page data or accepting an action.
+// Mini App requests carry Telegram's signed init data or the keyboard key.
+// External Bookmarks instead rely on the owner's verified Tailscale login.
 (function () {
   var tg = window.Telegram && window.Telegram.WebApp;
   if (tg) { tg.ready(); tg.expand(); }
@@ -85,19 +85,22 @@
   setTheme(load("rex-tg.theme"));
   var params = new URLSearchParams(location.search);
   var id = params.get("p") || "";
-  var canOpenExternalHTML = false, canOpenExternalVideo = false, canOpenExternalPDF = false;
+  var externalBookmarksMode = params.get("from") === "external-bookmarks";
+  if (externalBookmarksMode) { document.body.classList.add("external-bookmarks"); }
+  var canOpenExternalHTML = false, canOpenExternalVideo = false, canOpenExternalPDF = false, canOpenExternalBookmarks = false;
   var goView = params.get("go") || "";
-  var initData = tg ? tg.initData : "";
+  var initData = externalBookmarksMode ? "" : (tg ? tg.initData : "");
   // The keyboard's buttons open this page with a key (k): it authorizes reads
   // and validated control-panel actions, and is kept for pages that follow.
-  var key = params.get("k") || "";
+  // External Bookmarks use only the verified Tailscale identity instead.
+  var key = externalBookmarksMode ? "" : (params.get("k") || "");
   if (key) {
     try { sessionStorage.setItem("rex-tg.key", key); } catch (e) { /* the key stays in the links */ }
-  } else {
+  } else if (!externalBookmarksMode) {
     try { key = sessionStorage.getItem("rex-tg.key") || ""; } catch (e) { key = ""; }
   }
-  var keyMode = !initData && !!key;
-  if (!initData && !key) {
+  var keyMode = !externalBookmarksMode && !initData && !!key;
+  if (!initData && !key && !externalBookmarksMode) {
     page.textContent = "Open this page from its button in Telegram.";
     return;
   }
@@ -116,7 +119,8 @@
   // wait stops after wait ms; a post is never stopped, so an action does not
   // look failed while it runs.
   function api(path, body, wait) {
-    var opt = { headers: keyMode ? { "X-Rex-Key": key } : { "X-Telegram-Init-Data": initData } };
+    var headers = externalBookmarksMode ? { "X-Rex-External-Bookmarks": "1" } : keyMode ? { "X-Rex-Key": key } : { "X-Telegram-Init-Data": initData };
+    var opt = { headers: headers };
     var timer = null;
     if (body !== undefined) {
       opt.method = "POST";
@@ -583,6 +587,13 @@
   function externalFileURL(path) {
     return new URL("/external/file?id=" + encodeURIComponent(id) + "&path=" + encodeURIComponent(path), window.location.href).href;
   }
+  function openExternalBookmarksPage() {
+    var url = new URL("/external/bookmarks", window.location.href).href;
+    if (tg && typeof tg.openLink === "function") {
+      try { tg.openLink(url); return; } catch (e) { /* use the browser fallback */ }
+    }
+    window.open(url, "_blank", "noopener,noreferrer");
+  }
   function openExternalFile(path) {
     var url = externalFileURL(path);
     if (tg && typeof tg.openLink === "function") { tg.openLink(url); }
@@ -1035,6 +1046,10 @@
     }
     filter.appendChild(filterOption("All topics", ""));
     filterLabel.appendChild(filter);
+    var openBrowser = button("Open in browser", "btn wide");
+    openBrowser.hidden = !canOpenExternalBookmarks || externalBookmarksMode;
+    openBrowser.setAttribute("aria-label", "Open bookmarks in an external browser");
+    openBrowser.addEventListener("click", openExternalBookmarksPage);
     var status = el("p", "note bookmark-status", "Loading bookmarks…");
     status.setAttribute("role", "status");
     status.setAttribute("aria-live", "polite");
@@ -1046,6 +1061,7 @@
     var moreButton = button("Load older bookmarks", "btn wide");
     moreButton.hidden = true;
     v.list.appendChild(filterLabel);
+    v.list.appendChild(openBrowser);
     v.list.appendChild(status);
     v.list.appendChild(empty);
     v.list.appendChild(rows);
@@ -3916,6 +3932,7 @@
       canOpenExternalHTML = p.can_open_external_html === true;
       canOpenExternalVideo = p.can_open_external_video === true;
       canOpenExternalPDF = p.can_open_external_pdf === true;
+      canOpenExternalBookmarks = p.can_open_external_bookmarks === true;
       var from = params.get("from");
       if (p.kind !== "control" && from === "panel") {
         rootBack = backToPanel;
